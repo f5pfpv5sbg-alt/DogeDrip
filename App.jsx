@@ -97,42 +97,86 @@ export default function App() {
     }
   }, [activeTab, isDemoAdmin]);
 
-   // Listen to Firebase Auth state changes with graceful local fallback profile
+  // Firebase Auth + Cloudflare D1 synchronization
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setFirebaseUser(user);
-      if (user) {
-        let fallbackProfile = {
-          uid: user.uid,
-          email: user.email,
-          username: user.email ? user.email.split('@')[0] : 'User',
-          refCode: 'DOGE' + Math.abs(user.uid.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 9000 + 1000),
-          createdAt: Date.now()
-        };
+    let isMounted = true;
 
-        try {
-          const docRef = doc(dbStore, 'users', user.uid);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setUserProfile({
-              ...fallbackProfile,
-              ...data,
-              username: data.username || fallbackProfile.username,
-              refCode: data.refCode || fallbackProfile.refCode
-            });
-          } else {
-            setUserProfile(fallbackProfile);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!isMounted) return;
+
+      setFirebaseUser(user);
+
+      if (!user) {
+        setUserProfile(null);
+        return;
+      }
+
+      const fallbackProfile = {
+        uid: user.uid,
+        email: user.email,
+        username: user.email ? user.email.split('@')[0] : 'User',
+        refCode: 'DOGE' + Math.abs(
+          user.uid.split('').reduce(
+            (acc, char) => acc + char.charCodeAt(0), 0
+          ) % 9000 + 1000
+        ),
+        createdAt: Date.now()
+      };
+
+      try {
+        const idToken = await user.getIdToken();
+
+        const response = await fetch(
+          'https://dogedrip-api.f5pfpv5sbg.workers.dev/api/auth/sync',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${idToken}`
+            }
           }
-        } catch (e) {
-          console.warn("Firestore profile fetch skipped or restricted, using local auth session profile:", e.message);
+        );
+
+        if (!response.ok) {
+          throw new Error(`D1 sync failed: HTTP ${response.status}`);
+        }
+
+        console.log('User synced successfully with D1.');
+      } catch (error) {
+        console.error('D1 sync error:', error);
+      }
+
+      try {
+        const docRef = doc(dbStore, 'users', user.uid);
+        const docSnap = await getDoc(docRef);
+
+        if (!isMounted) return;
+
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+
+          setUserProfile({
+            ...fallbackProfile,
+            ...data,
+            username: data.username || fallbackProfile.username,
+            refCode: data.refCode || fallbackProfile.refCode
+          });
+        } else {
           setUserProfile(fallbackProfile);
         }
-      } else {
-        setUserProfile(null);
+      } catch (error) {
+        console.warn('Firestore unavailable:', error.message);
+
+        if (isMounted) {
+          setUserProfile(fallbackProfile);
+        }
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
   // Cooldown timer ticker
   useEffect(() => {
