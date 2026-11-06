@@ -1,7 +1,11 @@
 
+
 const PROJECT_ID = "dogedrip-3ebda";
 const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+
+const CLAIM_AMOUNT_KOINU = 100000;
+const COOLDOWN_SECONDS = 45;
 
 const headers = {
   "Content-Type": "application/json",
@@ -11,10 +15,7 @@ const headers = {
 };
 
 function response(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers
-  });
+  return new Response(JSON.stringify(data), { status, headers });
 }
 
 function decodeBase64Url(value) {
@@ -23,18 +24,12 @@ function decodeBase64Url(value) {
     .replace(/_/g, "/")
     .padEnd(Math.ceil(value.length / 4) * 4, "=");
 
-  return Uint8Array.from(
-    atob(base64),
-    character => character.charCodeAt(0)
-  );
+  return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
 
 async function verifyFirebaseToken(token) {
   const parts = token.split(".");
-
-  if (parts.length !== 3) {
-    throw new Error("Invalid token");
-  }
+  if (parts.length !== 3) throw new Error("Invalid token");
 
   const header = JSON.parse(
     new TextDecoder().decode(decodeBase64Url(parts[0]))
@@ -44,13 +39,11 @@ async function verifyFirebaseToken(token) {
     new TextDecoder().decode(decodeBase64Url(parts[1]))
   );
 
-  if (header.alg !== "RS256" || !header.kid) {
-    throw new Error("Invalid token algorithm");
-  }
-
   const now = Math.floor(Date.now() / 1000);
 
   if (
+    header.alg !== "RS256" ||
+    !header.kid ||
     claims.aud !== PROJECT_ID ||
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
     !claims.sub ||
@@ -62,29 +55,20 @@ async function verifyFirebaseToken(token) {
     claims.iat > now ||
     claims.auth_time > now
   ) {
-    throw new Error("Invalid or expired Firebase token");
+    throw new Error("Invalid Firebase token");
   }
 
   const keysResponse = await fetch(GOOGLE_KEYS_URL);
-
-  if (!keysResponse.ok) {
-    throw new Error("Could not retrieve Firebase public keys");
-  }
+  if (!keysResponse.ok) throw new Error("Could not retrieve keys");
 
   const keySet = await keysResponse.json();
   const jwk = keySet.keys.find(key => key.kid === header.kid);
-
-  if (!jwk) {
-    throw new Error("Signing key not found");
-  }
+  if (!jwk) throw new Error("Signing key not found");
 
   const publicKey = await crypto.subtle.importKey(
     "jwk",
     jwk,
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      hash: "SHA-256"
-    },
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
     false,
     ["verify"]
   );
@@ -96,11 +80,18 @@ async function verifyFirebaseToken(token) {
     new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
   );
 
-  if (!valid) {
-    throw new Error("Invalid token signature");
+  if (!valid) throw new Error("Invalid token signature");
+  return claims;
+}
+
+async function authenticate(request) {
+  const authorization = request.headers.get("Authorization");
+
+  if (!authorization?.startsWith("Bearer ")) {
+    throw new Error("Authentication required");
   }
 
-  return claims;
+  return verifyFirebaseToken(authorization.slice(7));
 }
 
 export default {
@@ -124,26 +115,13 @@ export default {
           tables: result.results.map(row => row.name)
         });
       } catch {
-        return response({
-          success: false,
-          error: "Database connection failed"
-        }, 500);
+        return response({ success: false, error: "Database connection failed" }, 500);
       }
     }
 
     if (url.pathname === "/api/auth/sync" && request.method === "POST") {
       try {
-        const authorization = request.headers.get("Authorization");
-
-        if (!authorization?.startsWith("Bearer ")) {
-          return response({
-            success: false,
-            error: "Authentication required"
-          }, 401);
-        }
-
-        const token = authorization.slice(7);
-        const user = await verifyFirebaseToken(token);
+        const user = await authenticate(request);
 
         await env.DB.prepare(`
           INSERT INTO users (uid, email)
@@ -156,12 +134,88 @@ export default {
           message: "User synchronized successfully",
           uid: user.sub
         });
+      } catch {
+        return response({ success: false, error: "Authentication or synchronization failed" }, 401);
+      }
+    }
 
-      } catch (error) {
+    if (url.pathname === "/api/claim" && request.method === "POST") {
+      try {
+        const user = await authenticate(request);
+
+        const result = await env.DB.prepare(`
+          UPDATE users
+          SET
+            balance_koinu = balance_koinu + ?,
+            last_claim_at = CURRENT_TIMESTAMP
+          WHERE uid = ?
+            AND (
+              last_claim_at IS NULL
+              OR last_claim_at <= datetime('now', ?)
+            )
+        `).bind(
+          CLAIM_AMOUNT_KOINU,
+          user.sub,
+          `-${COOLDOWN_SECONDS} seconds`
+        ).run();
+
+        if (result.meta.changes !== 1) {
+          const existing = await env.DB.prepare(
+            "SELECT uid FROM users WHERE uid = ?"
+          ).bind(user.sub).first();
+
+          if (!existing) {
+            return response({ success: false, error: "User not synchronized" }, 404);
+          }
+
+          return response({
+            success: false,
+            error: "Cooldown active. Please wait before claiming again."
+          }, 429);
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO claims (uid, amount_koinu)
+          VALUES (?, ?)
+        `).bind(user.sub, CLAIM_AMOUNT_KOINU).run();
+
+        const account = await env.DB.prepare(
+          "SELECT balance_koinu, last_claim_at FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
         return response({
-          success: false,
-          error: "Authentication or synchronization failed"
-        }, 401);
+          success: true,
+          message: "Claim successful",
+          amount_koinu: CLAIM_AMOUNT_KOINU,
+          balance_koinu: account.balance_koinu,
+          last_claim_at: account.last_claim_at
+        });
+      } catch {
+        return response({ success: false, error: "Claim failed or authentication invalid" }, 401);
+      }
+    }
+
+    if (url.pathname === "/api/balance" && request.method === "GET") {
+      try {
+        const user = await authenticate(request);
+
+        const account = await env.DB.prepare(`
+          SELECT balance_koinu, last_claim_at
+          FROM users
+          WHERE uid = ?
+        `).bind(user.sub).first();
+
+        if (!account) {
+          return response({ success: false, error: "User not found" }, 404);
+        }
+
+        return response({
+          success: true,
+          balance_koinu: account.balance_koinu,
+          last_claim_at: account.last_claim_at
+        });
+      } catch {
+        return response({ success: false, error: "Authentication failed" }, 401);
       }
     }
 
@@ -171,4 +225,3 @@ export default {
     }, 404);
   }
 };
-
