@@ -97,7 +97,7 @@ export default function App() {
     }
   }, [activeTab, isDemoAdmin]);
 
-  // Listen to Firebase Auth state changes with graceful local fallback profile
+   // Listen to Firebase Auth state changes with graceful local fallback profile
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
@@ -134,7 +134,6 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
-
   // Cooldown timer ticker
   useEffect(() => {
     const timer = setInterval(() => {
