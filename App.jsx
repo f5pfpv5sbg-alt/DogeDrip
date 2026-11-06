@@ -286,31 +286,61 @@ export default function App() {
   };
 
   // Demo Faucet Claim Handler (Local State Only)
-  const handleClaim = () => {
-    if (cooldownLeft > 0 || isClaiming) return;
-    setIsClaiming(true);
-    setClaimStatus('Simulating secure anti-bot validation...');
+  
+const handleClaim = async () => {
+  if (cooldownLeft > 0 || isClaiming) return;
 
-    setTimeout(() => {
-      const reward = 0.001;
-      const now = Date.now();
+  if (!firebaseUser) {
+    setClaimStatus("Please log in first.");
+    return;
+  }
 
-      setDemoBalance(prev => Number((prev + reward).toFixed(6)));
-      setCooldownLeft(45); // 45 seconds cooldown
+  setIsClaiming(true);
+  setClaimStatus("Processing claim...");
 
-      const newClaim = {
-        id: 'claim_' + Math.random().toString(36).substring(2, 9),
-        amount: reward,
-        timestamp: now,
-        isDemo: true
-      };
+  try {
+    const token = await firebaseUser.getIdToken();
 
-      setDemoClaims(prev => [newClaim, ...prev]);
-      setIsClaiming(false);
-      setClaimStatus('DEMO Success! +0.001 DOGE added to testnet balance.');
-      setTimeout(() => setClaimStatus(''), 4000);
-    }, 800);
-  };
+    const result = await fetch(
+      "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/claim",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    const data = await result.json();
+
+    if (!result.ok || !data.success) {
+      throw new Error(data.error || "Claim failed");
+    }
+
+    const balance = Number(data.balance_koinu) / 100000000;
+    const reward = Number(data.amount_koinu) / 100000000;
+
+    setDemoBalance(balance);
+    setCooldownLeft(45);
+
+    const newClaim = {
+      id: "claim_" + Math.random().toString(36).substring(2, 9),
+      amount: reward,
+      timestamp: Date.now(),
+      isDemo: false
+    };
+
+    setDemoClaims(prev => [newClaim, ...prev]);
+    setClaimStatus(`Claim successful! +${reward} DOGE`);
+  } catch (error) {
+    setClaimStatus(error.message || "Could not complete claim.");
+  } finally {
+    setIsClaiming(false);
+    setTimeout(() => setClaimStatus(""), 4000);
+  }
+};
+
 
   // Simulated Withdrawal Handler (Local State Only - No Real Payments)
   const handleWithdraw = (e) => {
