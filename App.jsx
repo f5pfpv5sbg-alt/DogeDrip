@@ -69,12 +69,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('faucet'); // 'faucet' | 'wallet' | 'referrals' | 'admin'
 
   // DEMO Local State (Simulated Testnet Ledger)
-  const [demoBalance, setDemoBalance] = useState(0.0000);
-  const [cooldownLeft, setCooldownLeft] = useState(0);
-  const [claimStatus, setClaimStatus] = useState('');
-  const [isClaiming, setIsClaiming] = useState(false);
-  const [demoClaims, setDemoClaims] = useState([]);
-  const [demoWithdrawals, setDemoWithdrawals] = useState([]);
+  // DEMO Local State (Simulated Testnet Ledger)
+const [demoBalance, setDemoBalance] = useState(0.0000);
+const [claimsLoading, setClaimsLoading] = useState(false);
+const [claimsError, setClaimsError] = useState('');
+const [cooldownLeft, setCooldownLeft] = useState(0);
+const [claimStatus, setClaimStatus] = useState('');
+const [isClaiming, setIsClaiming] = useState(false);
+const [demoClaims, setDemoClaims] = useState([]);
+const [demoWithdrawals, setDemoWithdrawals] = useState([]);
 
   // Withdrawal form state
   const [withdrawAmount, setWithdrawAmount] = useState('5.0');
