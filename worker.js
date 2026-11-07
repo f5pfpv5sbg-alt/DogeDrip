@@ -1,5 +1,4 @@
 
-
 const PROJECT_ID = "dogedrip-3ebda";
 const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -115,7 +114,10 @@ export default {
           tables: result.results.map(row => row.name)
         });
       } catch {
-        return response({ success: false, error: "Database connection failed" }, 500);
+        return response(
+          { success: false, error: "Database connection failed" },
+          500
+        );
       }
     }
 
@@ -135,7 +137,10 @@ export default {
           uid: user.sub
         });
       } catch {
-        return response({ success: false, error: "Authentication or synchronization failed" }, 401);
+        return response(
+          { success: false, error: "Authentication or synchronization failed" },
+          401
+        );
       }
     }
 
@@ -165,7 +170,10 @@ export default {
           ).bind(user.sub).first();
 
           if (!existing) {
-            return response({ success: false, error: "User not synchronized" }, 404);
+            return response(
+              { success: false, error: "User not synchronized" },
+              404
+            );
           }
 
           return response({
@@ -191,7 +199,35 @@ export default {
           last_claim_at: account.last_claim_at
         });
       } catch {
-        return response({ success: false, error: "Claim failed or authentication invalid" }, 401);
+        return response(
+          { success: false, error: "Claim failed or authentication invalid" },
+          401
+        );
+      }
+    }
+
+    // GET CLAIM HISTORY
+    if (url.pathname === "/api/claims" && request.method === "GET") {
+      try {
+        const user = await authenticate(request);
+
+        const result = await env.DB.prepare(`
+          SELECT id, amount_koinu, claimed_at
+          FROM claims
+          WHERE uid = ?
+          ORDER BY id DESC
+          LIMIT 50
+        `).bind(user.sub).all();
+
+        return response({
+          success: true,
+          claims: result.results
+        });
+      } catch {
+        return response(
+          { success: false, error: "Could not load claim history" },
+          401
+        );
       }
     }
 
@@ -206,7 +242,10 @@ export default {
         `).bind(user.sub).first();
 
         if (!account) {
-          return response({ success: false, error: "User not found" }, 404);
+          return response(
+            { success: false, error: "User not found" },
+            404
+          );
         }
 
         return response({
@@ -215,7 +254,10 @@ export default {
           last_claim_at: account.last_claim_at
         });
       } catch {
-        return response({ success: false, error: "Authentication failed" }, 401);
+        return response(
+          { success: false, error: "Authentication failed" },
+          401
+        );
       }
     }
 
