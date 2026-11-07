@@ -178,6 +178,56 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+    // Load real balance and last claim from Cloudflare D1
+  useEffect(() => {
+    if (!firebaseUser) return;
+
+    let cancelled = false;
+
+    const loadAccount = async () => {
+      try {
+        const token = await firebaseUser.getIdToken();
+
+        const result = await fetch(
+          "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/balance",
+          {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          }
+        );
+
+        const data = await result.json();
+
+        if (!result.ok || !data.success) {
+          throw new Error(data.error || "Could not load account");
+        }
+
+        if (cancelled) return;
+
+        setDemoBalance(Number(data.balance_koinu) / 100000000);
+
+        if (data.last_claim_at) {
+          const lastClaim = new Date(
+            data.last_claim_at.replace(" ", "T") + "Z"
+          ).getTime();
+
+          const elapsed = Math.floor((Date.now() - lastClaim) / 1000);
+          setCooldownLeft(Math.max(0, 45 - elapsed));
+        } else {
+          setCooldownLeft(0);
+        }
+      } catch (error) {
+        console.error("Account loading error:", error);
+      }
+    };
+
+    loadAccount();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser]);
   // Cooldown timer ticker
   useEffect(() => {
     const timer = setInterval(() => {
