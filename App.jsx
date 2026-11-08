@@ -231,6 +231,57 @@ const [demoWithdrawals, setDemoWithdrawals] = useState([]);
       cancelled = true;
     };
   }, [firebaseUser]);
+    // Load persistent claim history from Cloudflare D1
+  useEffect(() => {
+    if (!firebaseUser) {
+      setDemoClaims([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadClaims = async () => {
+      setClaimsLoading(true);
+      setClaimsError('');
+
+      try {
+        const token = await firebaseUser.getIdToken();
+
+        const result = await fetch(
+          "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/claims",
+          {
+            headers: {
+              Authorization: `Bearer ${token}`
+            }
+          }
+        );
+
+        const data = await result.json();
+
+        if (!result.ok || !data.success) {
+          throw new Error(data.error || "Could not load claim history");
+        }
+
+        if (!cancelled) {
+          setDemoClaims(data.claims || []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setClaimsError(error.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setClaimsLoading(false);
+        }
+      }
+    };
+
+    loadClaims();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser]);
   // Cooldown timer ticker
   useEffect(() => {
     const timer = setInterval(() => {
