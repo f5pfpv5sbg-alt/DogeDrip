@@ -84,7 +84,7 @@ export default function App() {
   const [demoWithdrawals, setDemoWithdrawals] = useState([]);
 
   // WITHDRAWAL FORM
-  const [withdrawAmount, setWithdrawAmount] = useState('5.0');
+const [withdrawAmount, setWithdrawAmount] = useState('1.0');
   const [withdrawAddress, setWithdrawAddress] = useState('');
   const [withdrawMsg, setWithdrawMsg] = useState('');
 
@@ -502,8 +502,8 @@ export default function App() {
 
     const amt = parseFloat(withdrawAmount);
 
-    if (isNaN(amt) || amt < 5.0) {
-      setWithdrawMsg('Minimum testnet withdrawal amount is 5.0 DOGE.');
+    if (isNaN(amt) || amt < 1.0) {
+      setWithdrawMsg('Minimum testnet withdrawal amount is 1.0 DOGE.');
       return;
     }
 
