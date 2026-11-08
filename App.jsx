@@ -111,9 +111,10 @@ const [demoWithdrawals, setDemoWithdrawals] = useState([]);
       setFirebaseUser(user);
 
       if (!user) {
-        setUserProfile(null);
-        return;
-      }
+  setUserProfile(null);
+  setAuthLoading(false);
+  return;
+}
 
       const fallbackProfile = {
         uid: user.uid,
@@ -165,14 +166,19 @@ const [demoWithdrawals, setDemoWithdrawals] = useState([]);
             username: data.username || fallbackProfile.username,
             refCode: data.refCode || fallbackProfile.refCode
           });
+          setAuthLoading(false);
         } else {
           setUserProfile(fallbackProfile);
+          setAuthLoading(false);
         }
       } catch (error) {
         console.warn('Firestore unavailable:', error.message);
 
         if (isMounted) {
           setUserProfile(fallbackProfile);
+          
+setAuthLoading(false);
+
         }
       }
     });
@@ -519,7 +525,17 @@ const handleClaim = async () => {
   };
 
   // --- RENDER UNAUTHENTICATED VIEW ---
-  if (!firebaseUser || !userProfile) {
+// --- AUTH LOADING ---
+if (authLoading) {
+  return (
+    <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      Loading account...
+    </div>
+  );
+}
+
+// --- RENDER UNAUTHENTICATED VIEW ---
+if (!firebaseUser || !userProfile) {
     return (
       <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-4 font-sans">
         <div className="w-full max-w-md bg-black border border-slate-800 rounded-2xl shadow-2xl p-8">
