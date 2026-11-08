@@ -1522,7 +1522,7 @@ export default function App() {
             </div>
           )}
 
-          {/* REFERRALS */}
+                {/* REFERRALS */}
           {activeTab === 'referrals' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
 
@@ -1796,5 +1796,3 @@ export default function App() {
       No cryptocurrency transaction is broadcast.
     </p>
 
-  </div>
-)}
