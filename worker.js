@@ -1,5 +1,6 @@
 
 const PROJECT_ID = "dogedrip-3ebda";
+
 const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
@@ -50,6 +51,9 @@ async function verifyFirebaseToken(token) {
     claims.sub.length > 128 ||
     !claims.email ||
     typeof claims.email !== "string" ||
+    !Number.isFinite(claims.exp) ||
+    !Number.isFinite(claims.iat) ||
+    !Number.isFinite(claims.auth_time) ||
     claims.exp <= now ||
     claims.iat > now ||
     claims.auth_time > now
@@ -62,6 +66,7 @@ async function verifyFirebaseToken(token) {
 
   const keySet = await keysResponse.json();
   const jwk = keySet.keys.find(key => key.kid === header.kid);
+
   if (!jwk) throw new Error("Signing key not found");
 
   const publicKey = await crypto.subtle.importKey(
@@ -80,6 +85,7 @@ async function verifyFirebaseToken(token) {
   );
 
   if (!valid) throw new Error("Invalid token signature");
+
   return claims;
 }
 
@@ -101,6 +107,7 @@ export default {
 
     const url = new URL(request.url);
 
+    // HEALTH CHECK
     if (url.pathname === "/api/health" && request.method === "GET") {
       try {
         const result = await env.DB.prepare(
@@ -121,6 +128,7 @@ export default {
       }
     }
 
+    // AUTH SYNC
     if (url.pathname === "/api/auth/sync" && request.method === "POST") {
       try {
         const user = await authenticate(request);
@@ -144,27 +152,39 @@ export default {
       }
     }
 
+    // CLAIM
     if (url.pathname === "/api/claim" && request.method === "POST") {
       try {
         const user = await authenticate(request);
 
-        const result = await env.DB.prepare(`
-          UPDATE users
-          SET
-            balance_koinu = balance_koinu + ?,
-            last_claim_at = CURRENT_TIMESTAMP
-          WHERE uid = ?
-            AND (
-              last_claim_at IS NULL
-              OR last_claim_at <= datetime('now', ?)
-            )
-        `).bind(
-          CLAIM_AMOUNT_KOINU,
-          user.sub,
-          `-${COOLDOWN_SECONDS} seconds`
-        ).run();
+        const results = await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE users
+            SET
+              balance_koinu = balance_koinu + ?,
+              last_claim_at = CURRENT_TIMESTAMP
+            WHERE uid = ?
+              AND (
+                last_claim_at IS NULL
+                OR last_claim_at <= datetime('now', ?)
+              )
+          `).bind(
+            CLAIM_AMOUNT_KOINU,
+            user.sub,
+            `-${COOLDOWN_SECONDS} seconds`
+          ),
 
-        if (result.meta.changes !== 1) {
+          env.DB.prepare(`
+            INSERT INTO claims (uid, amount_koinu)
+            SELECT ?, ?
+            WHERE changes() = 1
+          `).bind(
+            user.sub,
+            CLAIM_AMOUNT_KOINU
+          )
+        ]);
+
+        if (results[0].meta.changes !== 1) {
           const existing = await env.DB.prepare(
             "SELECT uid FROM users WHERE uid = ?"
           ).bind(user.sub).first();
@@ -182,14 +202,11 @@ export default {
           }, 429);
         }
 
-        await env.DB.prepare(`
-          INSERT INTO claims (uid, amount_koinu)
-          VALUES (?, ?)
-        `).bind(user.sub, CLAIM_AMOUNT_KOINU).run();
-
-        const account = await env.DB.prepare(
-          "SELECT balance_koinu, last_claim_at FROM users WHERE uid = ?"
-        ).bind(user.sub).first();
+        const account = await env.DB.prepare(`
+          SELECT balance_koinu, last_claim_at
+          FROM users
+          WHERE uid = ?
+        `).bind(user.sub).first();
 
         return response({
           success: true,
@@ -198,7 +215,8 @@ export default {
           balance_koinu: account.balance_koinu,
           last_claim_at: account.last_claim_at
         });
-      } catch {
+
+      } catch (error) {
         return response(
           { success: false, error: "Claim failed or authentication invalid" },
           401
@@ -206,7 +224,7 @@ export default {
       }
     }
 
-    // GET CLAIM HISTORY
+    // CLAIM HISTORY
     if (url.pathname === "/api/claims" && request.method === "GET") {
       try {
         const user = await authenticate(request);
@@ -223,6 +241,7 @@ export default {
           success: true,
           claims: result.results
         });
+
       } catch {
         return response(
           { success: false, error: "Could not load claim history" },
@@ -231,6 +250,7 @@ export default {
       }
     }
 
+    // BALANCE
     if (url.pathname === "/api/balance" && request.method === "GET") {
       try {
         const user = await authenticate(request);
@@ -253,6 +273,7 @@ export default {
           balance_koinu: account.balance_koinu,
           last_claim_at: account.last_claim_at
         });
+
       } catch {
         return response(
           { success: false, error: "Authentication failed" },
@@ -261,6 +282,7 @@ export default {
       }
     }
 
+    // UNKNOWN ENDPOINT
     return response({
       success: false,
       message: "Endpoint not found"
