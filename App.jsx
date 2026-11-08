@@ -79,6 +79,7 @@ export default function App() {
   const [claimsError, setClaimsError] = useState('');
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [claimStatus, setClaimStatus] = useState('');
+  const [showClaimEffect, setShowClaimEffect] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [demoClaims, setDemoClaims] = useState([]);
   const [demoWithdrawals, setDemoWithdrawals] = useState([]);
@@ -463,6 +464,8 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
       const reward = Number(data.amount_koinu) / 100000000;
 
       setDemoBalance(balance);
+      setShowClaimEffect(true);
+setTimeout(() => setShowClaimEffect(false), 2200);
       setCooldownLeft(45);
 
       // REFRESH CLAIM HISTORY
@@ -857,9 +860,90 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
     );
   }
 
+  
   // LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
+
+      <style>{`
+        .claim-celebration {
+          position: absolute;
+          inset: 0;
+          z-index: 20;
+          pointer-events: none;
+          overflow: hidden;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: celebrationFade 2.2s ease forwards;
+        }
+
+        .claim-glow {
+          position: absolute;
+          width: 220px;
+          height: 220px;
+          border-radius: 50%;
+          background: #F4A6C1;
+          filter: blur(75px);
+          opacity: 0.45;
+          animation: glowPulse 1s ease-in-out infinite alternate;
+        }
+
+        .claim-coin {
+          position: absolute;
+          color: #F4A6C1;
+          font-size: 30px;
+          font-weight: 900;
+          text-shadow: 0 0 18px #F4A6C1;
+          animation: coinFly 1.8s ease-out forwards;
+        }
+
+        .coin-1 { left: 15%; --x: -35px; }
+        .coin-2 { left: 32%; --x: 20px; animation-delay: .1s; }
+        .coin-3 { right: 25%; --x: -15px; animation-delay: .2s; }
+        .coin-4 { right: 12%; --x: 35px; animation-delay: .05s; }
+        .coin-5 { left: 50%; --x: 0px; animation-delay: .15s; }
+
+        .claim-message {
+          position: relative;
+          color: white;
+          font-size: 20px;
+          font-weight: 900;
+          letter-spacing: 2px;
+          text-shadow: 0 0 15px #F4A6C1;
+          animation: messagePop 1.5s ease forwards;
+        }
+
+        @keyframes coinFly {
+          0% {
+            transform: translate(var(--x), 100px) rotate(0deg) scale(.4);
+            opacity: 0;
+          }
+          30% { opacity: 1; }
+          100% {
+            transform: translate(var(--x), -130px) rotate(360deg) scale(1.2);
+            opacity: 0;
+          }
+        }
+
+        @keyframes messagePop {
+          0% { transform: scale(.5); opacity: 0; }
+          25% { transform: scale(1.15); opacity: 1; }
+          75% { transform: scale(1); opacity: 1; }
+          100% { opacity: 0; }
+        }
+
+        @keyframes glowPulse {
+          from { transform: scale(.7); opacity: .2; }
+          to { transform: scale(1.3); opacity: .55; }
+        }
+
+        @keyframes celebrationFade {
+          0%, 75% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+      `}</style>
+
       <header className="bg-black border-b border-slate-800 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -907,6 +991,7 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
       <div className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-64 space-y-2 shrink-0">
           <div className="bg-black border border-slate-800 rounded-2xl p-3 space-y-1">
+
             <button
               onClick={() => setActiveTab('faucet')}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
@@ -956,6 +1041,7 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
                 <span>Admin Dashboard</span>
               </button>
             )}
+
           </div>
 
           <div className="bg-black border border-slate-800 rounded-2xl p-4 text-xs space-y-2">
@@ -996,7 +1082,20 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
                 </p>
               </div>
 
-              <div className="bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
+              <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
+
+                {showClaimEffect && (
+                  <div className="claim-celebration" aria-hidden="true">
+                    <div className="claim-glow" />
+                    <span className="claim-coin coin-1">+$</span>
+                    <span className="claim-coin coin-2">Ð</span>
+                    <span className="claim-coin coin-3">+$</span>
+                    <span className="claim-coin coin-4">Ð</span>
+                    <span className="claim-coin coin-5">+$</span>
+                    <div className="claim-message">REWARD CLAIMED!</div>
+                  </div>
+                )}
+
                 <div className="bg-[#F4A6C1]/10 p-4 rounded-2xl border border-[#F4A6C1]/20 text-[#F4A6C1]">
                   <Award className="w-10 h-10" />
                 </div>
@@ -1053,6 +1152,8 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
                   </p>
                 )}
               </div>
+            </div>
+          )}
 
               {/* PERSISTENT CLAIM HISTORY */}
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
