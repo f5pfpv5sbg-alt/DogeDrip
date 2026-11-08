@@ -1585,6 +1585,7 @@ export default function App() {
               </div>
             </
               
+
 {/* ADMIN DASHBOARD */}
 {activeTab === 'admin' && isDemoAdmin && (
   <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
@@ -1594,7 +1595,7 @@ export default function App() {
         Admin Dashboard
       </h2>
 
-      {adminTheme === 'blue' && (
+      {firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com' && (
         <p className="text-blue-400 text-sm font-bold mt-2">
           I love you ❤️
         </p>
@@ -1606,9 +1607,9 @@ export default function App() {
     </div>
 
     <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
-      adminTheme === 'blue'
+      firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
         ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-        : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/20 text-[#F4A6C1]'
+        : 'bg-[#A78BFA]/10 border-[#A78BFA]/20 text-[#A78BFA]'
     }`}>
       <Lock className="w-4 h-4 shrink-0 mt-0.5" />
       <span>
@@ -1638,7 +1639,9 @@ export default function App() {
           Total Pending
         </span>
         <div className={`text-2xl font-black font-mono mt-1 ${
-          adminTheme === 'blue' ? 'text-blue-400' : 'text-[#F4A6C1]'
+          firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
+            ? 'text-blue-400'
+            : 'text-[#A78BFA]'
         }`}>
           {adminWithdrawals.filter(w => w.status === 'pending').length}
         </div>
@@ -1673,9 +1676,9 @@ export default function App() {
         disabled={adminLoading || !apiReady}
         onClick={refreshAdminWithdrawals}
         className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
-          adminTheme === 'blue'
+          firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
             ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
-            : 'border-[#F4A6C1]/30 text-[#F4A6C1] hover:bg-[#F4A6C1]/10'
+            : 'border-[#A78BFA]/30 text-[#A78BFA] hover:bg-[#A78BFA]/10'
         }`}
       >
         <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
@@ -1718,7 +1721,9 @@ export default function App() {
                   </td>
 
                   <td className={`p-4 font-black ${
-                    adminTheme === 'blue' ? 'text-blue-400' : 'text-[#F4A6C1]'
+                    firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
+                      ? 'text-blue-400'
+                      : 'text-[#A78BFA]'
                   }`}>
                     {w.amount.toFixed(6)} DOGE
                   </td>
@@ -1748,9 +1753,9 @@ export default function App() {
                           disabled={adminActionLoading !== null}
                           onClick={() => handleAdminApprove(w.id)}
                           className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
-                            adminTheme === 'blue'
+                            firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
                               ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
-                              : 'bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/30 text-[#F4A6C1]'
+                              : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]'
                           }`}
                         >
                           {adminActionLoading === w.id ? '...' : 'Approve'}
@@ -1761,9 +1766,9 @@ export default function App() {
                           disabled={adminActionLoading !== null}
                           onClick={() => handleAdminReject(w.id)}
                           className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
-                            adminTheme === 'blue'
+                            firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
                               ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
-                              : 'bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/30 text-[#F4A6C1]'
+                              : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]'
                           }`}
                         >
                           {adminActionLoading === w.id ? '...' : 'Reject'}
