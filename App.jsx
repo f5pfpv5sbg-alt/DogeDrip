@@ -53,6 +53,7 @@ const dbStore = getFirestore(firebaseApp);
 export default function App() {
   // Auth state
   const [firebaseUser, setFirebaseUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register' | 'forgot'
   
