@@ -6,6 +6,7 @@ const GOOGLE_KEYS_URL =
 
 const CLAIM_AMOUNT_KOINU = 100000;
 const COOLDOWN_SECONDS = 45;
+const MIN_WITHDRAWAL_KOINU = 100000000;
 
 const headers = {
   "Content-Type": "application/json",
@@ -15,7 +16,10 @@ const headers = {
 };
 
 function response(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers
+  });
 }
 
 function decodeBase64Url(value) {
@@ -31,7 +35,7 @@ async function verifyFirebaseToken(token) {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("Invalid token");
 
-  const header = JSON.parse(
+  const tokenHeader = JSON.parse(
     new TextDecoder().decode(decodeBase64Url(parts[0]))
   );
 
@@ -42,8 +46,8 @@ async function verifyFirebaseToken(token) {
   const now = Math.floor(Date.now() / 1000);
 
   if (
-    header.alg !== "RS256" ||
-    !header.kid ||
+    tokenHeader.alg !== "RS256" ||
+    !tokenHeader.kid ||
     claims.aud !== PROJECT_ID ||
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
     !claims.sub ||
@@ -62,17 +66,23 @@ async function verifyFirebaseToken(token) {
   }
 
   const keysResponse = await fetch(GOOGLE_KEYS_URL);
-  if (!keysResponse.ok) throw new Error("Could not retrieve keys");
+
+  if (!keysResponse.ok) {
+    throw new Error("Could not retrieve Firebase keys");
+  }
 
   const keySet = await keysResponse.json();
-  const jwk = keySet.keys.find(key => key.kid === header.kid);
+  const jwk = keySet.keys.find(key => key.kid === tokenHeader.kid);
 
   if (!jwk) throw new Error("Signing key not found");
 
   const publicKey = await crypto.subtle.importKey(
     "jwk",
     jwk,
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256"
+    },
     false,
     ["verify"]
   );
@@ -99,6 +109,24 @@ async function authenticate(request) {
   return verifyFirebaseToken(authorization.slice(7));
 }
 
+async function requireAdmin(user, env) {
+  const account = await env.DB.prepare(`
+    SELECT uid, email, role
+    FROM users
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  if (
+    !account ||
+    account.role !== "admin" ||
+    account.email.toLowerCase() !== user.email.toLowerCase()
+  ) {
+    throw new Error("Admin access denied");
+  }
+
+  return account;
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -106,9 +134,10 @@ export default {
     }
 
     const url = new URL(request.url);
+    const path = url.pathname;
 
     // HEALTH CHECK
-    if (url.pathname === "/api/health" && request.method === "GET") {
+    if (path === "/api/health" && request.method === "GET") {
       try {
         const result = await env.DB.prepare(
           "SELECT name FROM sqlite_master WHERE type = 'table'"
@@ -121,22 +150,23 @@ export default {
           tables: result.results.map(row => row.name)
         });
       } catch {
-        return response(
-          { success: false, error: "Database connection failed" },
-          500
-        );
+        return response({
+          success: false,
+          error: "Database connection failed"
+        }, 500);
       }
     }
 
     // AUTH SYNC
-    if (url.pathname === "/api/auth/sync" && request.method === "POST") {
+    if (path === "/api/auth/sync" && request.method === "POST") {
       try {
         const user = await authenticate(request);
 
         await env.DB.prepare(`
           INSERT INTO users (uid, email)
           VALUES (?, ?)
-          ON CONFLICT(uid) DO UPDATE SET email = excluded.email
+          ON CONFLICT(uid)
+          DO UPDATE SET email = excluded.email
         `).bind(user.sub, user.email).run();
 
         return response({
@@ -145,15 +175,15 @@ export default {
           uid: user.sub
         });
       } catch {
-        return response(
-          { success: false, error: "Authentication or synchronization failed" },
-          401
-        );
+        return response({
+          success: false,
+          error: "Authentication or synchronization failed"
+        }, 401);
       }
     }
 
     // CLAIM
-    if (url.pathname === "/api/claim" && request.method === "POST") {
+    if (path === "/api/claim" && request.method === "POST") {
       try {
         const user = await authenticate(request);
 
@@ -178,10 +208,7 @@ export default {
             INSERT INTO claims (uid, amount_koinu)
             SELECT ?, ?
             WHERE changes() = 1
-          `).bind(
-            user.sub,
-            CLAIM_AMOUNT_KOINU
-          )
+          `).bind(user.sub, CLAIM_AMOUNT_KOINU)
         ]);
 
         if (results[0].meta.changes !== 1) {
@@ -190,10 +217,10 @@ export default {
           ).bind(user.sub).first();
 
           if (!existing) {
-            return response(
-              { success: false, error: "User not synchronized" },
-              404
-            );
+            return response({
+              success: false,
+              error: "User not synchronized"
+            }, 404);
           }
 
           return response({
@@ -216,16 +243,16 @@ export default {
           last_claim_at: account.last_claim_at
         });
 
-      } catch (error) {
-        return response(
-          { success: false, error: "Claim failed or authentication invalid" },
-          401
-        );
+      } catch {
+        return response({
+          success: false,
+          error: "Claim failed or authentication invalid"
+        }, 401);
       }
     }
 
     // CLAIM HISTORY
-    if (url.pathname === "/api/claims" && request.method === "GET") {
+    if (path === "/api/claims" && request.method === "GET") {
       try {
         const user = await authenticate(request);
 
@@ -243,15 +270,15 @@ export default {
         });
 
       } catch {
-        return response(
-          { success: false, error: "Could not load claim history" },
-          401
-        );
+        return response({
+          success: false,
+          error: "Could not load claim history"
+        }, 401);
       }
     }
 
     // BALANCE
-    if (url.pathname === "/api/balance" && request.method === "GET") {
+    if (path === "/api/balance" && request.method === "GET") {
       try {
         const user = await authenticate(request);
 
@@ -262,10 +289,10 @@ export default {
         `).bind(user.sub).first();
 
         if (!account) {
-          return response(
-            { success: false, error: "User not found" },
-            404
-          );
+          return response({
+            success: false,
+            error: "User not found"
+          }, 404);
         }
 
         return response({
@@ -275,10 +302,274 @@ export default {
         });
 
       } catch {
-        return response(
-          { success: false, error: "Authentication failed" },
-          401
-        );
+        return response({
+          success: false,
+          error: "Authentication failed"
+        }, 401);
+      }
+    }
+
+    // CREATE WITHDRAWAL
+    if (path === "/api/withdrawals" && request.method === "POST") {
+      try {
+        const user = await authenticate(request);
+        const body = await request.json();
+
+        const amount = body.amount_koinu;
+        const wallet = body.wallet_address;
+
+        if (
+          !Number.isSafeInteger(amount) ||
+          amount < MIN_WITHDRAWAL_KOINU
+        ) {
+          return response({
+            success: false,
+            error: "Minimum withdrawal is 1 DOGE"
+          }, 400);
+        }
+
+        if (
+          typeof wallet !== "string" ||
+          wallet.trim().length < 26 ||
+          wallet.trim().length > 50 ||
+          !/^[1-9A-HJ-NP-Za-km-z]+$/.test(wallet.trim())
+        ) {
+          return response({
+            success: false,
+            error: "Invalid DOGE wallet address"
+          }, 400);
+        }
+
+        const results = await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE users
+            SET balance_koinu = balance_koinu - ?
+            WHERE uid = ?
+              AND balance_koinu >= ?
+          `).bind(amount, user.sub, amount),
+
+          env.DB.prepare(`
+            INSERT INTO withdrawals (
+              uid,
+              amount_koinu,
+              wallet_address,
+              status
+            )
+            SELECT ?, ?, ?, 'pending'
+            WHERE changes() = 1
+          `).bind(user.sub, amount, wallet.trim())
+        ]);
+
+        if (results[0].meta.changes !== 1) {
+          const account = await env.DB.prepare(`
+            SELECT uid, balance_koinu
+            FROM users
+            WHERE uid = ?
+          `).bind(user.sub).first();
+
+          if (!account) {
+            return response({
+              success: false,
+              error: "User not found"
+            }, 404);
+          }
+
+          return response({
+            success: false,
+            error: "Insufficient balance"
+          }, 400);
+        }
+
+        const withdrawal = await env.DB.prepare(`
+          SELECT id, amount_koinu, wallet_address, status, created_at
+          FROM withdrawals
+          WHERE uid = ?
+          ORDER BY id DESC
+          LIMIT 1
+        `).bind(user.sub).first();
+
+        return response({
+          success: true,
+          message: "Withdrawal request submitted",
+          withdrawal
+        });
+
+      } catch {
+        return response({
+          success: false,
+          error: "Could not create withdrawal"
+        }, 401);
+      }
+    }
+
+    // USER WITHDRAWAL HISTORY
+    if (path === "/api/withdrawals" && request.method === "GET") {
+      try {
+        const user = await authenticate(request);
+
+        const result = await env.DB.prepare(`
+          SELECT id, amount_koinu, wallet_address, status, created_at
+          FROM withdrawals
+          WHERE uid = ?
+          ORDER BY id DESC
+          LIMIT 100
+        `).bind(user.sub).all();
+
+        return response({
+          success: true,
+          withdrawals: result.results
+        });
+
+      } catch {
+        return response({
+          success: false,
+          error: "Could not load withdrawals"
+        }, 401);
+      }
+    }
+
+    // ADMIN: LIST ALL WITHDRAWALS
+    if (
+      path === "/api/admin/withdrawals" &&
+      request.method === "GET"
+    ) {
+      try {
+        const user = await authenticate(request);
+        await requireAdmin(user, env);
+
+        const result = await env.DB.prepare(`
+          SELECT
+            w.id,
+            w.uid,
+            u.email,
+            w.amount_koinu,
+            w.wallet_address,
+            w.status,
+            w.created_at
+          FROM withdrawals w
+          LEFT JOIN users u ON u.uid = w.uid
+          ORDER BY
+            CASE WHEN w.status = 'pending' THEN 0 ELSE 1 END,
+            w.id DESC
+          LIMIT 500
+        `).all();
+
+        return response({
+          success: true,
+          withdrawals: result.results
+        });
+
+      } catch {
+        return response({
+          success: false,
+          error: "Admin authentication failed"
+        }, 403);
+      }
+    }
+
+    // ADMIN: APPROVE WITHDRAWAL
+    const approveMatch = path.match(
+      /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
+    );
+
+    if (approveMatch && request.method === "POST") {
+      try {
+        const user = await authenticate(request);
+        await requireAdmin(user, env);
+
+        const id = Number(approveMatch[1]);
+
+        const result = await env.DB.prepare(`
+          UPDATE withdrawals
+          SET status = 'approved'
+          WHERE id = ?
+            AND status = 'pending'
+        `).bind(id).run();
+
+        if (result.meta.changes !== 1) {
+          return response({
+            success: false,
+            error: "Withdrawal not found or already processed"
+          }, 409);
+        }
+
+        return response({
+          success: true,
+          message: "Withdrawal approved",
+          id
+        });
+
+      } catch {
+        return response({
+          success: false,
+          error: "Admin authentication failed"
+        }, 403);
+      }
+    }
+
+    // ADMIN: REJECT WITHDRAWAL AND REFUND
+    const rejectMatch = path.match(
+      /^\/api\/admin\/withdrawals\/(\d+)\/reject$/
+    );
+
+    if (rejectMatch && request.method === "POST") {
+      try {
+        const user = await authenticate(request);
+        await requireAdmin(user, env);
+
+        const id = Number(rejectMatch[1]);
+
+        const results = await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE withdrawals
+            SET status = 'rejected'
+            WHERE id = ?
+              AND status = 'pending'
+          `).bind(id),
+
+          env.DB.prepare(`
+            UPDATE users
+            SET balance_koinu = balance_koinu + (
+              SELECT amount_koinu
+              FROM withdrawals
+              WHERE id = ?
+                AND status = 'rejected'
+            )
+            WHERE uid = (
+              SELECT uid
+              FROM withdrawals
+              WHERE id = ?
+                AND status = 'rejected'
+            )
+            AND changes() = 1
+          `).bind(id, id)
+        ]);
+
+        if (results[0].meta.changes !== 1) {
+          return response({
+            success: false,
+            error: "Withdrawal not found or already processed"
+          }, 409);
+        }
+
+        if (results[1].meta.changes !== 1) {
+          return response({
+            success: false,
+            error: "Withdrawal rejected but refund needs investigation"
+          }, 500);
+        }
+
+        return response({
+          success: true,
+          message: "Withdrawal rejected and balance refunded",
+          id
+        });
+
+      } catch {
+        return response({
+          success: false,
+          error: "Admin authentication failed"
+        }, 403);
       }
     }
 
