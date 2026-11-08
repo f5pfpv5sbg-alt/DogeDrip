@@ -428,12 +428,24 @@ const handleClaim = async () => {
     setDemoBalance(balance);
     setCooldownLeft(45);
 
-    const newClaim = {
-      id: "claim_" + Math.random().toString(36).substring(2, 9),
-      amount: reward,
-      timestamp: Date.now(),
-      isDemo: false
-    };
+        try {
+      const historyResult = await fetch(
+        "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/claims",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+
+      const historyData = await historyResult.json();
+
+      if (historyResult.ok && historyData.success) {
+        setDemoClaims(historyData.claims || []);
+      }
+    } catch (historyError) {
+      console.error("Claim history refresh error:", historyError);
+    }
 
     setDemoClaims(prev => [newClaim, ...prev]);
     setClaimStatus(`Claim successful! +${reward} DOGE`);
