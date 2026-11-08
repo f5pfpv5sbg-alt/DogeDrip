@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
   Shield,
@@ -43,7 +42,11 @@ const firebaseConfig = {
   appId: "1:839487252990:web:760ad35b5b66d611bab8af"
 };
 
-const DEMO_ADMIN_EMAIL = "admin@faucet.com";
+// ADMIN ACCOUNTS
+const ADMIN_EMAILS = {
+  lilac: "giselapeposhi29@icloud.com", // Admin 1: Gisela
+  blue: "celamielidon26@gmail.com"    // Admin 2: Elidon
+};
 
 const firebaseApp = !getApps().length
   ? initializeApp(firebaseConfig)
@@ -85,7 +88,7 @@ export default function App() {
   const [demoWithdrawals, setDemoWithdrawals] = useState([]);
 
   // WITHDRAWAL FORM
-const [withdrawAmount, setWithdrawAmount] = useState('1.0');
+  const [withdrawAmount, setWithdrawAmount] = useState('1.0');
   const [withdrawAddress, setWithdrawAddress] = useState('');
   const [withdrawMsg, setWithdrawMsg] = useState('');
 
@@ -103,9 +106,17 @@ const [withdrawAmount, setWithdrawAmount] = useState('1.0');
     }
   ]);
 
-  const isDemoAdmin = firebaseUser &&
-    firebaseUser.email &&
-    firebaseUser.email.trim().toLowerCase() === DEMO_ADMIN_EMAIL.toLowerCase();
+  // ADMIN IDENTIFICATION
+  const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
+
+  const adminTheme =
+    adminEmail === ADMIN_EMAILS.lilac
+      ? 'lilac'
+      : adminEmail === ADMIN_EMAILS.blue
+        ? 'blue'
+        : null;
+
+  const isDemoAdmin = Boolean(adminTheme);
 
   // ADMIN REDIRECT
   useEffect(() => {
@@ -859,9 +870,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
       </div>
     );
   }
-
-  
-  // LOGGED-IN DASHBOARD
+// LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
 
@@ -1542,3 +1551,6 @@ setTimeout(() => setShowClaimEffect(false), 2200);
     </div>
   );
 }
+
+  
+  
