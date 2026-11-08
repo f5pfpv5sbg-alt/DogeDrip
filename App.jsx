@@ -1583,223 +1583,213 @@ export default function App() {
                   </li>
                 </ul>
               </div>
-            </div>
-          )}
-                    {/* ADMIN DASHBOARD */}
-          {activeTab === 'admin' && isDemoAdmin && (
-            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+            </
+              
+{/* ADMIN DASHBOARD */}
+{activeTab === 'admin' && isDemoAdmin && (
+  <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
 
-              <div>
-                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Admin Dashboard
-                </h2>
+    <div>
+      <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
+        Admin Dashboard
+      </h2>
 
-                <p className="text-sm text-slate-400">
-                  Manage and review withdrawal requests stored in the D1 database.
-                </p>
+      {adminTheme === 'blue' && (
+        <p className="text-blue-400 text-sm font-bold mt-2">
+          I love you ❤️
+        </p>
+      )}
 
-                <p className={`text-xs font-bold mt-2 ${
-                  adminTheme === 'blue'
-                    ? 'text-blue-400'
-                    : 'text-[#F4A6C1]'
-                }`}>
-                  {adminTheme === 'blue'
-                    ? 'ADMIN 2 | BLUE ACCESS'
-                    : 'ADMIN 1 | LILAC ACCESS'}
-                </p>
-              </div>
+      <p className="text-sm text-slate-400 mt-2">
+        Manage and review withdrawal requests stored in the D1 database.
+      </p>
+    </div>
 
-              <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
-                adminTheme === 'blue'
-                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-                  : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/20 text-[#F4A6C1]'
-              }`}>
-                <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>
-                  Admin actions are verified by the Worker using the
-                  authenticated Firebase account and the admin role stored
-                  in D1. Frontend email checks only control dashboard visibility.
-                </span>
-              </div>
+    <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
+      adminTheme === 'blue'
+        ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+        : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/20 text-[#F4A6C1]'
+    }`}>
+      <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+      <span>
+        Admin actions are verified by the Worker using the
+        authenticated Firebase account and the admin role stored
+        in D1. Frontend email checks only control dashboard visibility.
+      </span>
+    </div>
 
-              {!apiReady && (
-                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
-                  Database connection is not ready.
-                </div>
-              )}
+    {!apiReady && (
+      <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+        Database connection is not ready.
+      </div>
+    )}
 
-              {adminError && (
-                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{adminError}</span>
-                </div>
-              )}
+    {adminError && (
+      <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+        <span>{adminError}</span>
+      </div>
+    )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-                <div className="bg-black border border-slate-800 rounded-2xl p-5">
-                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Total Pending
-                  </span>
-                  <div className={`text-2xl font-black font-mono mt-1 ${
-                    adminTheme === 'blue'
-                      ? 'text-blue-400'
-                      : 'text-[#F4A6C1]'
-                  }`}>
-                    {adminWithdrawals.filter(
-                      w => w.status === 'pending'
-                    ).length}
-                  </div>
-                </div>
+      <div className="bg-black border border-slate-800 rounded-2xl p-5">
+        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+          Total Pending
+        </span>
+        <div className={`text-2xl font-black font-mono mt-1 ${
+          adminTheme === 'blue' ? 'text-blue-400' : 'text-[#F4A6C1]'
+        }`}>
+          {adminWithdrawals.filter(w => w.status === 'pending').length}
+        </div>
+      </div>
 
-                <div className="bg-black border border-slate-800 rounded-2xl p-5">
-                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Total Requests
-                  </span>
-                  <div className="text-2xl font-black font-mono text-white mt-1">
-                    {adminWithdrawals.length}
-                  </div>
-                </div>
+      <div className="bg-black border border-slate-800 rounded-2xl p-5">
+        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+          Total Requests
+        </span>
+        <div className="text-2xl font-black font-mono text-white mt-1">
+          {adminWithdrawals.length}
+        </div>
+      </div>
 
-                <div className="bg-black border border-slate-800 rounded-2xl p-5">
-                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Environment
-                  </span>
-                  <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                    D1 DEMO
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
-                  Withdrawal Requests
-                </h3>
-
-                <button
-                  type="button"
-                  disabled={adminLoading || !apiReady}
-                  onClick={refreshAdminWithdrawals}
-                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
-                    adminTheme === 'blue'
-                      ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
-                      : 'border-[#F4A6C1]/30 text-[#F4A6C1] hover:bg-[#F4A6C1]/10'
-                  }`}
-                >
-                  <RefreshCw className={`w-3 h-3 ${
-                    adminLoading ? 'animate-spin' : ''
-                  }`} />
-                  Refresh
-                </button>
-              </div>
-
-              <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
-                      <tr>
-                        <th className="p-4">User</th>
-                        <th className="p-4">Amount</th>
-                        <th className="p-4">Address</th>
-                        <th className="p-4">Status</th>
-                        <th className="p-4">Actions</th>
-                      </tr>
-                    </thead>
-
-                    <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
-
-                      {adminLoading ? (
-                        <tr>
-                          <td colSpan="5" className="p-6 text-center text-slate-400">
-                            Loading withdrawals...
-                          </td>
-                        </tr>
-                      ) : adminWithdrawals.length === 0 ? (
-                        <tr>
-                          <td colSpan="5" className="p-6 text-center text-slate-500">
-                            No withdrawal requests found.
-                          </td>
-                        </tr>
-                      ) : (
-                        adminWithdrawals.map(w => (
-                          <tr key={w.id}>
-                            <td className="p-4 text-white">
-                              {w.email || w.userId || 'Unknown User'}
-                            </td>
-
-                            <td className={`p-4 font-black ${
-                              adminTheme === 'blue'
-                                ? 'text-blue-400'
-                                : 'text-[#F4A6C1]'
-                            }`}>
-                              {w.amount.toFixed(6)} DOGE
-                            </td>
-
-                            <td className="p-4 text-slate-400 truncate max-w-[140px]">
-                              {w.address}
-                            </td>
-
-                            <td className="p-4">
-                              <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
-                                w.status === 'approved'
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                  : w.status === 'rejected'
-                                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                                    : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                              }`}>
-                                {w.status}
-                              </span>
-                            </td>
-
-                            <td className="p-4">
-                              {w.status === 'pending' ? (
-                                <div className="flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    disabled={adminActionLoading !== null}
-                                    onClick={() => handleAdminApprove(w.id)}
-                                    className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg font-black transition-colors disabled:opacity-40"
-                                  >
-                                    {adminActionLoading === w.id
-                                      ? '...'
-                                      : 'Approve'}
-                                  </button>
-
-                                  <button
-                                    type="button"
-                                    disabled={adminActionLoading !== null}
-                                    onClick={() => handleAdminReject(w.id)}
-                                    className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg font-black transition-colors disabled:opacity-40"
-                                  >
-                                    {adminActionLoading === w.id
-                                      ? '...'
-                                      : 'Reject'}
-                                  </button>
-                                </div>
-                              ) : (
-                                <span className="text-slate-500">
-                                  Completed
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-500">
-                Approving or rejecting updates the D1 demo ledger.
-                Rejected requests are refunded by the Worker.
-                No cryptocurrency transaction is broadcast.
-              </p>
-            </div>
-          )}
-
-        </main>
+      <div className="bg-black border border-slate-800 rounded-2xl p-5">
+        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+          Environment
+        </span>
+        <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
+          D1 DEMO
+        </div>
       </div>
     </div>
-  );
-}
+
+    <div className="flex items-center justify-between">
+      <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+        Withdrawal Requests
+      </h3>
+
+      <button
+        type="button"
+        disabled={adminLoading || !apiReady}
+        onClick={refreshAdminWithdrawals}
+        className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
+          adminTheme === 'blue'
+            ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
+            : 'border-[#F4A6C1]/30 text-[#F4A6C1] hover:bg-[#F4A6C1]/10'
+        }`}
+      >
+        <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
+        Refresh
+      </button>
+    </div>
+
+    <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
+            <tr>
+              <th className="p-4">User</th>
+              <th className="p-4">Amount</th>
+              <th className="p-4">Address</th>
+              <th className="p-4">Status</th>
+              <th className="p-4">Actions</th>
+            </tr>
+          </thead>
+
+          <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
+
+            {adminLoading ? (
+              <tr>
+                <td colSpan="5" className="p-6 text-center text-slate-400">
+                  Loading withdrawals...
+                </td>
+              </tr>
+            ) : adminWithdrawals.length === 0 ? (
+              <tr>
+                <td colSpan="5" className="p-6 text-center text-slate-500">
+                  No withdrawal requests found.
+                </td>
+              </tr>
+            ) : (
+              adminWithdrawals.map(w => (
+                <tr key={w.id}>
+                  <td className="p-4 text-white">
+                    {w.email || w.userId || 'Unknown User'}
+                  </td>
+
+                  <td className={`p-4 font-black ${
+                    adminTheme === 'blue' ? 'text-blue-400' : 'text-[#F4A6C1]'
+                  }`}>
+                    {w.amount.toFixed(6)} DOGE
+                  </td>
+
+                  <td className="p-4 text-slate-400 truncate max-w-[140px]">
+                    {w.address}
+                  </td>
+
+                  <td className="p-4">
+                    <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
+                      w.status === 'approved'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : w.status === 'rejected'
+                          ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                          : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                    }`}>
+                      {w.status}
+                    </span>
+                  </td>
+
+                  <td className="p-4">
+                    {w.status === 'pending' ? (
+                      <div className="flex flex-wrap gap-2">
+
+                        <button
+                          type="button"
+                          disabled={adminActionLoading !== null}
+                          onClick={() => handleAdminApprove(w.id)}
+                          className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
+                            adminTheme === 'blue'
+                              ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
+                              : 'bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/30 text-[#F4A6C1]'
+                          }`}
+                        >
+                          {adminActionLoading === w.id ? '...' : 'Approve'}
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={adminActionLoading !== null}
+                          onClick={() => handleAdminReject(w.id)}
+                          className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
+                            adminTheme === 'blue'
+                              ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
+                              : 'bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/30 text-[#F4A6C1]'
+                          }`}
+                        >
+                          {adminActionLoading === w.id ? '...' : 'Reject'}
+                        </button>
+
+                      </div>
+                    ) : (
+                      <span className="text-slate-500">
+                        Completed
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p className="text-xs text-slate-500">
+      Approving or rejecting updates the D1 demo ledger.
+      Rejected requests are refunded by the Worker.
+      No cryptocurrency transaction is broadcast.
+    </p>
+
+  </div>
+)}
