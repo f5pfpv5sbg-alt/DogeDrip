@@ -447,7 +447,7 @@ const handleClaim = async () => {
       console.error("Claim history refresh error:", historyError);
     }
 
-    setDemoClaims(prev => [newClaim, ...prev]);
+    
     setClaimStatus(`Claim successful! +${reward} DOGE`);
   } catch (error) {
     setClaimStatus(error.message || "Could not complete claim.");
