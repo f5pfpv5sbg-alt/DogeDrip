@@ -1161,8 +1161,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                   </p>
                 )}
               </div>
-            </div>
-          )}
+           )}
 
               {/* PERSISTENT CLAIM HISTORY */}
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
