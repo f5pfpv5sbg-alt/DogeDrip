@@ -44,8 +44,8 @@ const firebaseConfig = {
 
 // ADMIN ACCOUNTS
 const ADMIN_EMAILS = {
-  lilac: "giselapeposhi29@icloud.com", // Admin 1: Gisela
-  blue: "celamielidon26@gmail.com"    // Admin 2: Elidon
+  lilac: "giselapeposhi29@icloud.com",
+  blue: "celamielidon26@gmail.com"
 };
 
 const firebaseApp = !getApps().length
@@ -57,12 +57,42 @@ const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 
+const formatDate = (value) => {
+  if (!value) return 'N/A';
+
+  const date = typeof value === 'number'
+    ? new Date(value)
+    : new Date(
+        String(value).includes('T')
+          ? value
+          : String(value).replace(' ', 'T') + 'Z'
+      );
+
+  return Number.isNaN(date.getTime())
+    ? 'N/A'
+    : date.toLocaleString();
+};
+
+const mapWithdrawal = (w) => ({
+  id: w.id,
+  userId: w.uid || w.userId || '',
+  email: w.email || '',
+  amount: Number(w.amount_koinu) / 100000000,
+  address: w.wallet_address || w.address || '',
+  status: w.status || 'pending',
+  timestamp: w.created_at
+    ? new Date(String(w.created_at).replace(' ', 'T') + 'Z').getTime()
+    : Date.now()
+});
+
 export default function App() {
   // AUTH STATE
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
   const [authMode, setAuthMode] = useState('login');
+  const [apiReady, setApiReady] = useState(false);
+  const [apiError, setApiError] = useState('');
 
   // AUTH FORM
   const [usernameInput, setUsernameInput] = useState('');
@@ -76,7 +106,7 @@ export default function App() {
   // DASHBOARD
   const [activeTab, setActiveTab] = useState('faucet');
 
-  // FAUCET STATE
+  // FAUCET
   const [demoBalance, setDemoBalance] = useState(0);
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimsError, setClaimsError] = useState('');
@@ -85,26 +115,19 @@ export default function App() {
   const [showClaimEffect, setShowClaimEffect] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [demoClaims, setDemoClaims] = useState([]);
-  const [demoWithdrawals, setDemoWithdrawals] = useState([]);
 
-  // WITHDRAWAL FORM
+  // WITHDRAWALS
+  const [demoWithdrawals, setDemoWithdrawals] = useState([]);
   const [withdrawAmount, setWithdrawAmount] = useState('1.0');
   const [withdrawAddress, setWithdrawAddress] = useState('');
   const [withdrawMsg, setWithdrawMsg] = useState('');
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
-  // ADMIN STATE
-  const [adminWithdrawals, setAdminWithdrawals] = useState([
-    {
-      id: 'w_demo_1',
-      userId: 'user_sample_1',
-      email: 'user@example.com',
-      amount: 6.0,
-      address: 'D7xyzABC123...',
-      status: 'pending',
-      timestamp: Date.now() - 3600000,
-      isDemo: true
-    }
-  ]);
+  // ADMIN
+  const [adminWithdrawals, setAdminWithdrawals] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState('');
+  const [adminActionLoading, setAdminActionLoading] = useState(null);
 
   // ADMIN IDENTIFICATION
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
@@ -117,6 +140,32 @@ export default function App() {
         : null;
 
   const isDemoAdmin = Boolean(adminTheme);
+
+  // API HELPER
+  const apiRequest = async (path, options = {}) => {
+    if (!firebaseUser) {
+      throw new Error('Please log in first.');
+    }
+
+    const token = await firebaseUser.getIdToken();
+
+    const response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || data.success === false) {
+      throw new Error(data.error || `Request failed (${response.status})`);
+    }
+
+    return data;
+  };
 
   // ADMIN REDIRECT
   useEffect(() => {
@@ -133,48 +182,66 @@ export default function App() {
       if (!isMounted) return;
 
       setFirebaseUser(user);
+      setApiReady(false);
+      setApiError('');
 
       if (!user) {
         setUserProfile(null);
         setAuthLoading(false);
-        setDemoClaims([]);
         setDemoBalance(0);
+        setDemoClaims([]);
+        setDemoWithdrawals([]);
+        setAdminWithdrawals([]);
+        setCooldownLeft(0);
         return;
       }
+
+      setAuthLoading(true);
 
       const fallbackProfile = {
         uid: user.uid,
         email: user.email,
         username: user.email ? user.email.split('@')[0] : 'User',
-        refCode: 'DOGE' + Math.abs(
-          user.uid.split('').reduce(
-            (acc, char) => acc + char.charCodeAt(0), 0
-          ) % 9000 + 1000
+        refCode: 'DOGE' + (
+          Math.abs(
+            user.uid.split('').reduce(
+              (acc, char) => acc + char.charCodeAt(0), 0
+            ) % 9000
+          ) + 1000
         ),
         createdAt: Date.now()
       };
 
       try {
-        const idToken = await user.getIdToken();
+        const token = await user.getIdToken();
 
-        const syncResponse = await fetch(
-          `${API_URL}/api/auth/sync`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`
-            }
+        const syncResponse = await fetch(`${API_URL}/api/auth/sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           }
-        );
+        });
 
-        if (!syncResponse.ok) {
-          throw new Error(`D1 sync failed: HTTP ${syncResponse.status}`);
+        const syncData = await syncResponse.json().catch(() => ({}));
+
+        if (!syncResponse.ok || syncData.success === false) {
+          throw new Error(
+            syncData.error || `D1 sync failed (${syncResponse.status})`
+          );
         }
 
-        console.log('User synced successfully with D1.');
+        if (!isMounted) return;
+
+        setApiReady(true);
       } catch (error) {
         console.error('D1 sync error:', error);
+
+        if (isMounted) {
+          setApiError(
+            `Database connection failed: ${error.message}`
+          );
+        }
       }
 
       try {
@@ -195,15 +262,16 @@ export default function App() {
         } else {
           setUserProfile(fallbackProfile);
         }
-
-        setAuthLoading(false);
       } catch (error) {
         console.warn('Firestore unavailable:', error.message);
 
         if (isMounted) {
           setUserProfile(fallbackProfile);
-          setAuthLoading(false);
         }
+      }
+
+      if (isMounted) {
+        setAuthLoading(false);
       }
     });
 
@@ -215,36 +283,21 @@ export default function App() {
 
   // LOAD BALANCE FROM D1
   useEffect(() => {
-    if (!firebaseUser) return;
+    if (!firebaseUser || !apiReady) return;
 
     let cancelled = false;
 
-    const loadAccount = async () => {
+    const loadBalance = async () => {
       try {
-        const token = await firebaseUser.getIdToken();
-
-        const result = await fetch(
-          `${API_URL}/api/balance`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          }
-        );
-
-        const data = await result.json();
-
-        if (!result.ok || !data.success) {
-          throw new Error(data.error || "Could not load account");
-        }
+        const data = await apiRequest('/api/balance');
 
         if (cancelled) return;
 
-        setDemoBalance(Number(data.balance_koinu) / 100000000);
+        setDemoBalance(Number(data.balance_koinu || 0) / 100000000);
 
         if (data.last_claim_at) {
           const lastClaim = new Date(
-            data.last_claim_at.replace(" ", "T") + "Z"
+            String(data.last_claim_at).replace(' ', 'T') + 'Z'
           ).getTime();
 
           const elapsed = Math.floor((Date.now() - lastClaim) / 1000);
@@ -253,20 +306,20 @@ export default function App() {
           setCooldownLeft(0);
         }
       } catch (error) {
-        console.error("Account loading error:", error);
+        console.error('Balance loading error:', error);
       }
     };
 
-    loadAccount();
+    loadBalance();
 
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser]);
+  }, [firebaseUser, apiReady]);
 
   // LOAD CLAIM HISTORY FROM D1
   useEffect(() => {
-    if (!firebaseUser) {
+    if (!firebaseUser || !apiReady) {
       setDemoClaims([]);
       return;
     }
@@ -278,22 +331,7 @@ export default function App() {
       setClaimsError('');
 
       try {
-        const token = await firebaseUser.getIdToken();
-
-        const result = await fetch(
-          `${API_URL}/api/claims`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`
-            }
-          }
-        );
-
-        const data = await result.json();
-
-        if (!result.ok || !data.success) {
-          throw new Error(data.error || "Could not load claim history");
-        }
+        const data = await apiRequest('/api/claims');
 
         if (!cancelled) {
           setDemoClaims(data.claims || []);
@@ -314,7 +352,77 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser]);
+  }, [firebaseUser, apiReady]);
+
+  // LOAD USER WITHDRAWALS FROM D1
+  useEffect(() => {
+    if (!firebaseUser || !apiReady) {
+      setDemoWithdrawals([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadWithdrawals = async () => {
+      try {
+        const data = await apiRequest('/api/withdrawals');
+
+        if (!cancelled) {
+          setDemoWithdrawals(
+            (data.withdrawals || []).map(mapWithdrawal)
+          );
+        }
+      } catch (error) {
+        console.error('Withdrawal history error:', error);
+      }
+    };
+
+    loadWithdrawals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady]);
+
+  // LOAD ADMIN WITHDRAWALS FROM D1
+  useEffect(() => {
+    if (!firebaseUser || !apiReady || !isDemoAdmin) {
+      setAdminWithdrawals([]);
+      setAdminError('');
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadAdminWithdrawals = async () => {
+      setAdminLoading(true);
+      setAdminError('');
+
+      try {
+        const data = await apiRequest('/api/admin/withdrawals');
+
+        if (!cancelled) {
+          setAdminWithdrawals(
+            (data.withdrawals || []).map(mapWithdrawal)
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAdminError(error.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setAdminLoading(false);
+        }
+      }
+    };
+
+    loadAdminWithdrawals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady, isDemoAdmin]);
 
   // COOLDOWN TIMER
   useEffect(() => {
@@ -329,14 +437,20 @@ export default function App() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
+    setAuthSuccess('');
     setIsLoadingAuth(true);
 
     try {
-      await signInWithEmailAndPassword(auth, emailInput, passwordInput);
+      await signInWithEmailAndPassword(
+        auth,
+        emailInput.trim().toLowerCase(),
+        passwordInput
+      );
+
       setEmailInput('');
       setPasswordInput('');
-    } catch (err) {
-      setAuthError(err.message.replace('Firebase: ', ''));
+    } catch (error) {
+      setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
     }
@@ -356,16 +470,21 @@ export default function App() {
       return;
     }
 
+    if (passwordInput.length < 6) {
+      setAuthError('Password must contain at least 6 characters.');
+      return;
+    }
+
     setIsLoadingAuth(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
+      const credential = await createUserWithEmailAndPassword(
         auth,
         trimmedEmail,
         passwordInput
       );
 
-      const uid = userCredential.user.uid;
+      const uid = credential.user.uid;
       const newRefCode = 'DOGE' + Math.floor(1000 + Math.random() * 9000);
 
       const localProfile = {
@@ -379,22 +498,19 @@ export default function App() {
 
       try {
         await setDoc(doc(dbStore, 'users', uid), localProfile);
-      } catch (firestoreErr) {
-        console.warn(
-          "Firestore profile write restricted or unavailable:",
-          firestoreErr.message
-        );
+      } catch (error) {
+        console.warn('Firestore profile write unavailable:', error.message);
       }
 
       setUserProfile(localProfile);
-      setAuthSuccess('Account created successfully via Firebase Auth!');
+      setAuthSuccess('Account created successfully!');
       setActiveTab('faucet');
       setUsernameInput('');
       setEmailInput('');
       setPasswordInput('');
       setRegRefCode('');
-    } catch (err) {
-      setAuthError(err.message.replace('Firebase: ', ''));
+    } catch (error) {
+      setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
     }
@@ -409,7 +525,7 @@ export default function App() {
     const trimmedEmail = emailInput.trim().toLowerCase();
 
     if (!trimmedEmail) {
-      setAuthError('Please enter your email address to reset your password.');
+      setAuthError('Please enter your email address.');
       return;
     }
 
@@ -417,11 +533,9 @@ export default function App() {
 
     try {
       await sendPasswordResetEmail(auth, trimmedEmail);
-      setAuthSuccess(
-        'Password reset email sent! Check your inbox for further instructions.'
-      );
-    } catch (err) {
-      setAuthError(err.message.replace('Firebase: ', ''));
+      setAuthSuccess('Password reset email sent. Check your inbox.');
+    } catch (error) {
+      setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
     }
@@ -431,11 +545,9 @@ export default function App() {
   const handleSignOut = async () => {
     try {
       await signOut(auth);
-      setFirebaseUser(null);
-      setUserProfile(null);
       setActiveTab('faucet');
-    } catch (e) {
-      console.error("Sign out error:", e);
+    } catch (error) {
+      console.error('Sign out error:', error);
     }
   };
 
@@ -443,151 +555,169 @@ export default function App() {
   const handleClaim = async () => {
     if (cooldownLeft > 0 || isClaiming) return;
 
-    if (!firebaseUser) {
-      setClaimStatus("Please log in first.");
+    if (!firebaseUser || !apiReady) {
+      setClaimStatus('Database is not ready. Please try again.');
       return;
     }
 
     setIsClaiming(true);
-    setClaimStatus("Processing claim...");
+    setClaimStatus('Processing claim...');
 
     try {
-      const token = await firebaseUser.getIdToken();
+      const data = await apiRequest('/api/claim', {
+        method: 'POST'
+      });
 
-      const result = await fetch(
-        `${API_URL}/api/claim`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`
-          }
-        }
-      );
-
-      const data = await result.json();
-
-      if (!result.ok || !data.success) {
-        throw new Error(data.error || "Claim failed");
-      }
-
-      const balance = Number(data.balance_koinu) / 100000000;
-      const reward = Number(data.amount_koinu) / 100000000;
-
-      setDemoBalance(balance);
-      setShowClaimEffect(true);
-setTimeout(() => setShowClaimEffect(false), 2200);
+      setDemoBalance(Number(data.balance_koinu) / 100000000);
       setCooldownLeft(45);
+      setShowClaimEffect(true);
 
-      // REFRESH CLAIM HISTORY
-      const historyResult = await fetch(
-        `${API_URL}/api/claims`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`
-          }
-        }
-      );
+      window.setTimeout(() => {
+        setShowClaimEffect(false);
+      }, 2200);
 
-      const historyData = await historyResult.json();
+      const historyData = await apiRequest('/api/claims');
+      setDemoClaims(historyData.claims || []);
+      setClaimsError('');
 
-      if (historyResult.ok && historyData.success) {
-        setDemoClaims(historyData.claims || []);
-        setClaimsError('');
-      } else {
-        setClaimsError(
-          historyData.error || "Could not refresh claim history"
-        );
-      }
-
-      setClaimStatus(`Claim successful! +${reward} DOGE`);
+      const reward = Number(data.amount_koinu) / 100000000;
+      setClaimStatus(`Claim successful! +${reward.toFixed(6)} DOGE`);
     } catch (error) {
-      setClaimStatus(error.message || "Could not complete claim.");
+      setClaimStatus(error.message || 'Could not complete claim.');
     } finally {
       setIsClaiming(false);
-      setTimeout(() => setClaimStatus(""), 4000);
+
+      window.setTimeout(() => {
+        setClaimStatus('');
+      }, 5000);
     }
   };
 
-  // SIMULATED WITHDRAWAL
-  const handleWithdraw = (e) => {
+  // USER WITHDRAWAL
+  const handleWithdraw = async (e) => {
     e.preventDefault();
     setWithdrawMsg('');
 
-    const amt = parseFloat(withdrawAmount);
-
-    if (isNaN(amt) || amt < 1.0) {
-      setWithdrawMsg('Minimum testnet withdrawal amount is 1.0 DOGE.');
+    if (!firebaseUser || !apiReady) {
+      setWithdrawMsg('Database is not ready. Please try again.');
       return;
     }
 
-    if (demoBalance < amt) {
-      setWithdrawMsg('Insufficient DEMO balance for this withdrawal.');
+    const amount = Number(withdrawAmount);
+
+    if (!Number.isFinite(amount) || amount < 1) {
+      setWithdrawMsg('Minimum withdrawal is 1.0 DEMO DOGE.');
       return;
     }
 
     if (!withdrawAddress.trim()) {
-      setWithdrawMsg('Please enter a valid Dogecoin testnet wallet address.');
+      setWithdrawMsg('Please enter a wallet address.');
       return;
     }
 
-    setDemoBalance(prev => Number((prev - amt).toFixed(6)));
+    const amountKoinu = Math.round(amount * 100000000);
 
-    const newWithdrawal = {
-      id: 'w_demo_' + Math.random().toString(36).substring(2, 9),
-      userId: firebaseUser.uid,
-      email: firebaseUser.email,
-      amount: amt,
-      address: withdrawAddress.trim(),
-      status: 'pending',
-      timestamp: Date.now(),
-      isDemo: true
-    };
+    if (!Number.isSafeInteger(amountKoinu)) {
+      setWithdrawMsg('Invalid withdrawal amount.');
+      return;
+    }
 
-    setDemoWithdrawals(prev => [newWithdrawal, ...prev]);
-    setAdminWithdrawals(prev => [newWithdrawal, ...prev]);
+    setIsWithdrawing(true);
 
-    setWithdrawMsg(
-      'SIMULATED Withdrawal request submitted successfully! (Testnet demo only)'
+    try {
+      await apiRequest('/api/withdrawals', {
+        method: 'POST',
+        body: JSON.stringify({
+          amount_koinu: amountKoinu,
+          wallet_address: withdrawAddress.trim()
+        })
+      });
+
+      const [balanceData, historyData] = await Promise.all([
+        apiRequest('/api/balance'),
+        apiRequest('/api/withdrawals')
+      ]);
+
+      setDemoBalance(Number(balanceData.balance_koinu) / 100000000);
+      setDemoWithdrawals(
+        (historyData.withdrawals || []).map(mapWithdrawal)
+      );
+
+      setWithdrawAddress('');
+      setWithdrawMsg(
+        'Withdrawal request submitted successfully. DEMO ledger only.'
+      );
+    } catch (error) {
+      setWithdrawMsg(error.message || 'Withdrawal request failed.');
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
+  // REFRESH ADMIN WITHDRAWALS
+  const refreshAdminWithdrawals = async () => {
+    const data = await apiRequest('/api/admin/withdrawals');
+
+    setAdminWithdrawals(
+      (data.withdrawals || []).map(mapWithdrawal)
     );
-
-    setWithdrawAddress('');
   };
 
   // ADMIN APPROVE
-  const handleAdminApprove = (wId) => {
-    if (!isDemoAdmin) return;
+  const handleAdminApprove = async (wId) => {
+    if (!isDemoAdmin || adminActionLoading !== null) return;
 
-    setAdminWithdrawals(prev =>
-      prev.map(w => w.id === wId ? { ...w, status: 'approved' } : w)
-    );
+    setAdminActionLoading(wId);
+    setAdminError('');
 
-    setDemoWithdrawals(prev =>
-      prev.map(w => w.id === wId ? { ...w, status: 'approved' } : w)
-    );
+    try {
+      await apiRequest(
+        `/api/admin/withdrawals/${encodeURIComponent(wId)}/approve`,
+        {
+          method: 'POST'
+        }
+      );
+
+      await refreshAdminWithdrawals();
+    } catch (error) {
+      setAdminError(error.message || 'Could not approve withdrawal.');
+    } finally {
+      setAdminActionLoading(null);
+    }
   };
 
   // ADMIN REJECT
-  const handleAdminReject = (wId) => {
-    if (!isDemoAdmin) return;
+  const handleAdminReject = async (wId) => {
+    if (!isDemoAdmin || adminActionLoading !== null) return;
 
-    const target = adminWithdrawals.find(w => w.id === wId);
+    setAdminActionLoading(wId);
+    setAdminError('');
 
-    if (target && target.status === 'pending') {
-      if (target.userId === firebaseUser?.uid) {
-        setDemoBalance(prev =>
-          Number((prev + target.amount).toFixed(6))
-        );
-      }
+    try {
+      await apiRequest(
+        `/api/admin/withdrawals/${encodeURIComponent(wId)}/reject`,
+        {
+          method: 'POST'
+        }
+      );
+
+      await refreshAdminWithdrawals();
+
+      // Refresh balance and withdrawal history if admin rejected own request.
+      const [balanceData, historyData] = await Promise.all([
+        apiRequest('/api/balance'),
+        apiRequest('/api/withdrawals')
+      ]);
+
+      setDemoBalance(Number(balanceData.balance_koinu) / 100000000);
+      setDemoWithdrawals(
+        (historyData.withdrawals || []).map(mapWithdrawal)
+      );
+    } catch (error) {
+      setAdminError(error.message || 'Could not reject withdrawal.');
+    } finally {
+      setAdminActionLoading(null);
     }
-
-    setAdminWithdrawals(prev =>
-      prev.map(w => w.id === wId ? { ...w, status: 'rejected' } : w)
-    );
-
-    setDemoWithdrawals(prev =>
-      prev.map(w => w.id === wId ? { ...w, status: 'rejected' } : w)
-    );
   };
 
   // AUTH LOADING
@@ -597,8 +727,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
         Loading account...
       </div>
     );
-  }
-
+  } 
   // UNAUTHENTICATED VIEW
   if (!firebaseUser || !userProfile) {
     return (
@@ -612,9 +741,9 @@ setTimeout(() => setShowClaimEffect(false), 2200);
 
             <div>
               <div className="font-black leading-none tracking-tight text-white font-['Space_Grotesk',sans-serif] text-xl flex flex-col">
-                <span className="text-white">CLAIM</span>
+                <span>CLAIM</span>
                 <span>
-                  <span className="text-white">DO</span>
+                  <span>DO</span>
                   <span className="text-[#F4A6C1]">GE</span>
                 </span>
               </div>
@@ -627,15 +756,16 @@ setTimeout(() => setShowClaimEffect(false), 2200);
           <div className="mb-4 p-3 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
             <Info className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
-              Notice: Authentication is powered by Firebase, while faucet claims
-              and balances operate as a simulated DEMO testnet ledger. No real
-              DOGE payments.
+              Authentication is powered by Firebase. Faucet claims,
+              balances and withdrawals use a simulated DEMO ledger.
+              No real DOGE payments are sent.
             </span>
           </div>
 
           {authMode !== 'forgot' && (
             <div className="flex bg-black p-1 rounded-xl mb-6 border border-slate-800">
               <button
+                type="button"
                 onClick={() => {
                   setAuthMode('login');
                   setAuthError('');
@@ -651,6 +781,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               </button>
 
               <button
+                type="button"
                 onClick={() => {
                   setAuthMode('register');
                   setAuthError('');
@@ -729,10 +860,12 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               <button
                 type="submit"
                 disabled={isLoadingAuth}
-                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
               >
                 <span>
-                  {isLoadingAuth ? 'Signing In...' : 'Sign In with Firebase'}
+                  {isLoadingAuth
+                    ? 'Signing In...'
+                    : 'Sign In with Firebase'}
                 </span>
               </button>
             </form>
@@ -777,7 +910,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                   required
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="At least 6 characters"
                   className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
                 />
               </div>
@@ -802,11 +935,13 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               <button
                 type="submit"
                 disabled={isLoadingAuth}
-                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>
-                  {isLoadingAuth ? 'Creating Account...' : 'Create Firebase Account'}
+                  {isLoadingAuth
+                    ? 'Creating Account...'
+                    : 'Create Firebase Account'}
                 </span>
               </button>
             </form>
@@ -822,8 +957,8 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               </div>
 
               <p className="text-xs text-slate-400">
-                Enter your account email address and we will send you a secure
-                link to reset your password via Firebase Authentication.
+                Enter your account email address and we will send you
+                a secure password reset link via Firebase.
               </p>
 
               <form onSubmit={handleForgotPassword} className="space-y-4">
@@ -844,7 +979,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                 <button
                   type="submit"
                   disabled={isLoadingAuth}
-                  className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                  className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   <span>
                     {isLoadingAuth ? 'Sending Link...' : 'Send Reset Link'}
@@ -953,6 +1088,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
         }
       `}</style>
 
+      {/* HEADER */}
       <header className="bg-black border-b border-slate-800 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -962,9 +1098,9 @@ setTimeout(() => setShowClaimEffect(false), 2200);
 
             <div className="flex items-center space-x-3">
               <div className="font-black leading-none tracking-tight text-white font-['Space_Grotesk',sans-serif] text-base flex flex-col">
-                <span className="text-white">CLAIM</span>
+                <span>CLAIM</span>
                 <span>
-                  <span className="text-white">DO</span>
+                  <span>DO</span>
                   <span className="text-[#F4A6C1]">GE</span>
                 </span>
               </div>
@@ -987,6 +1123,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
             </div>
 
             <button
+              type="button"
               onClick={handleSignOut}
               className="p-2 bg-black hover:bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors"
               title="Sign Out"
@@ -998,10 +1135,13 @@ setTimeout(() => setShowClaimEffect(false), 2200);
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full flex flex-col md:flex-row gap-8">
+
+        {/* SIDEBAR */}
         <aside className="w-full md:w-64 space-y-2 shrink-0">
           <div className="bg-black border border-slate-800 rounded-2xl p-3 space-y-1">
 
             <button
+              type="button"
               onClick={() => setActiveTab('faucet')}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
                 activeTab === 'faucet'
@@ -1014,6 +1154,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('wallet')}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
                 activeTab === 'wallet'
@@ -1026,6 +1167,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('referrals')}
               className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
                 activeTab === 'referrals'
@@ -1039,6 +1181,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
 
             {isDemoAdmin && (
               <button
+                type="button"
                 onClick={() => setActiveTab('admin')}
                 className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
                   activeTab === 'admin'
@@ -1050,7 +1193,6 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                 <span>Admin Dashboard</span>
               </button>
             )}
-
           </div>
 
           <div className="bg-black border border-slate-800 rounded-2xl p-4 text-xs space-y-2">
@@ -1077,11 +1219,20 @@ setTimeout(() => setShowClaimEffect(false), 2200);
           </div>
         </aside>
 
+        {/* MAIN CONTENT */}
         <main className="flex-1">
+
+          {apiError && (
+            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm flex items-start gap-2">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <span>{apiError}</span>
+            </div>
+          )}
 
           {/* FAUCET */}
           {activeTab === 'faucet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Crypto Faucet Claim (DEMO)
@@ -1125,21 +1276,26 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                   <div className="w-full max-w-sm bg-black border border-slate-800 p-4 rounded-xl space-y-2">
                     <div className="flex items-center justify-center space-x-2 text-[#F4A6C1] text-sm font-bold">
                       <Clock className="w-4 h-4 animate-spin" />
-                      <span>Cooldown Active: {cooldownLeft}s remaining</span>
+                      <span>
+                        Cooldown Active: {cooldownLeft}s remaining
+                      </span>
                     </div>
 
                     <div className="w-full bg-black h-2 rounded-full overflow-hidden border border-slate-800">
                       <div
                         className="bg-[#F4A6C1] h-full transition-all duration-1000"
-                        style={{ width: `${(cooldownLeft / 45) * 100}%` }}
+                        style={{
+                          width: `${(cooldownLeft / 45) * 100}%`
+                        }}
                       />
                     </div>
                   </div>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleClaim}
-                    disabled={isClaiming}
-                    className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
+                    disabled={isClaiming || !apiReady}
+                    className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                   >
                     {isClaiming
                       ? <RefreshCw className="w-5 h-5 animate-spin" />
@@ -1149,8 +1305,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                     <span>
                       {isClaiming
                         ? 'Processing Claim...'
-                        : 'Claim 0.001 DOGE (Demo)'
-                      }
+                        : 'Claim 0.001 DOGE (Demo)'}
                     </span>
                   </button>
                 )}
@@ -1161,15 +1316,13 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                   </p>
                 )}
               </div>
-           )}
 
-              {/* PERSISTENT CLAIM HISTORY */}
+              {/* CLAIM HISTORY */}
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">
                     Claim History
                   </h3>
-
                   <span className="text-xs text-[#F4A6C1] font-mono">
                     Last 50 claims
                   </span>
@@ -1204,17 +1357,13 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                             <td className="py-3 pr-4 text-slate-500">
                               #{claim.id}
                             </td>
-
                             <td className="py-3 pr-4 text-emerald-400 font-bold">
                               +{(
                                 Number(claim.amount_koinu) / 100000000
                               ).toFixed(6)} DOGE
                             </td>
-
                             <td className="py-3 text-slate-400">
-                              {new Date(
-                                claim.claimed_at.replace(" ", "T") + "Z"
-                              ).toLocaleString()}
+                              {formatDate(claim.claimed_at)}
                             </td>
                           </tr>
                         ))}
@@ -1226,19 +1375,21 @@ setTimeout(() => setShowClaimEffect(false), 2200);
             </div>
           )}
 
-                   {/* WALLET */}
+          {/* WALLET */}
           {activeTab === 'wallet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Wallet & Withdrawals (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Simulate cryptocurrency withdrawals. Minimum withdrawal is 1.0 DEMO DOGE. No real payments.
+                  Minimum withdrawal is 1.0 DEMO DOGE. No real payments are sent.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
                 <div className="bg-black border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
                   <div>
                     <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
@@ -1272,7 +1423,8 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                     <input
                       type="number"
                       step="0.001"
-                      min="1.0"
+                      min="1"
+                      required
                       value={withdrawAmount}
                       onChange={(e) => setWithdrawAmount(e.target.value)}
                       className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] font-mono font-bold"
@@ -1295,9 +1447,12 @@ setTimeout(() => setShowClaimEffect(false), 2200);
 
                   <button
                     type="submit"
-                    className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 text-sm font-['Space_Grotesk',sans-serif] tracking-wide"
+                    disabled={isWithdrawing || !apiReady}
+                    className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 text-sm font-['Space_Grotesk',sans-serif] tracking-wide"
                   >
-                    Submit Simulated Withdrawal
+                    {isWithdrawing
+                      ? 'Submitting...'
+                      : 'Submit Simulated Withdrawal'}
                   </button>
 
                   {withdrawMsg && (
@@ -1308,9 +1463,10 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                 </form>
               </div>
 
+              {/* USER WITHDRAWAL HISTORY */}
               <div className="mt-8">
                 <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 mb-4 font-['Space_Grotesk',sans-serif]">
-                  Simulated Withdrawal History
+                  Withdrawal History
                 </h3>
 
                 <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
@@ -1329,14 +1485,14 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                         {demoWithdrawals.length === 0 ? (
                           <tr>
                             <td colSpan="4" className="p-6 text-center text-slate-500">
-                              No simulated withdrawals found.
+                              No withdrawals found.
                             </td>
                           </tr>
                         ) : (
                           demoWithdrawals.map(w => (
                             <tr key={w.id}>
                               <td className="p-4 text-white font-black">
-                                {w.amount} DOGE
+                                {w.amount.toFixed(6)} DOGE
                               </td>
                               <td className="p-4 text-slate-400 truncate max-w-[150px]">
                                 {w.address}
@@ -1353,7 +1509,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                                 </span>
                               </td>
                               <td className="p-4 text-slate-500">
-                                {new Date(w.timestamp).toLocaleDateString()}
+                                {formatDate(w.timestamp)}
                               </td>
                             </tr>
                           ))
@@ -1365,11 +1521,11 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               </div>
             </div>
           )}
-      
 
           {/* REFERRALS */}
           {activeTab === 'referrals' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Referral Program (DEMO)
@@ -1380,6 +1536,7 @@ setTimeout(() => setShowClaimEffect(false), 2200);
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Your Referral Code
@@ -1415,44 +1572,83 @@ setTimeout(() => setShowClaimEffect(false), 2200);
 
                 <ul className="text-sm text-slate-400 space-y-2 list-disc list-inside font-medium">
                   <li>
-                    Share your code <strong className="text-[#F4A6C1] font-mono font-black">
+                    Share your code{' '}
+                    <strong className="text-[#F4A6C1] font-mono font-black">
                       {userProfile.refCode}
-                    </strong> with others.
+                    </strong>{' '}
+                    with others.
                   </li>
                   <li>
-                    In this secure demo environment, referral tracking operates locally as a testnet simulation.
+                    Referral tracking is currently a demo feature.
                   </li>
                 </ul>
               </div>
             </div>
           )}
-
-          {/* ADMIN */}
+                    {/* ADMIN DASHBOARD */}
           {activeTab === 'admin' && isDemoAdmin && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Admin Dashboard (UI DEMO REVIEW)
+                  Admin Dashboard
                 </h2>
+
                 <p className="text-sm text-slate-400">
-                  Review simulated withdrawal requests on the testnet demo ledger.
+                  Manage and review withdrawal requests stored in the D1 database.
+                </p>
+
+                <p className={`text-xs font-bold mt-2 ${
+                  adminTheme === 'blue'
+                    ? 'text-blue-400'
+                    : 'text-[#F4A6C1]'
+                }`}>
+                  {adminTheme === 'blue'
+                    ? 'ADMIN 2 | BLUE ACCESS'
+                    : 'ADMIN 1 | LILAC ACCESS'}
                 </p>
               </div>
 
-              <div className="mb-4 p-3 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-center space-x-2 font-bold">
-                <Lock className="w-4 h-4 shrink-0" />
+              <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
+                adminTheme === 'blue'
+                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                  : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/20 text-[#F4A6C1]'
+              }`}>
+                <Lock className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  UI-Only Protection Notice: This admin view is restricted in the UI for demonstration purposes only using email comparison. It does not enforce real cryptographic server-side authorization.
+                  Admin actions are verified by the Worker using the
+                  authenticated Firebase account and the admin role stored
+                  in D1. Frontend email checks only control dashboard visibility.
                 </span>
               </div>
 
+              {!apiReady && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                  Database connection is not ready.
+                </div>
+              )}
+
+              {adminError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{adminError}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Total Pending
                   </span>
-                  <div className="text-2xl font-black font-mono text-[#F4A6C1] mt-1">
-                    {adminWithdrawals.filter(w => w.status === 'pending').length}
+                  <div className={`text-2xl font-black font-mono mt-1 ${
+                    adminTheme === 'blue'
+                      ? 'text-blue-400'
+                      : 'text-[#F4A6C1]'
+                  }`}>
+                    {adminWithdrawals.filter(
+                      w => w.status === 'pending'
+                    ).length}
                   </div>
                 </div>
 
@@ -1470,78 +1666,135 @@ setTimeout(() => setShowClaimEffect(false), 2200);
                     Environment
                   </span>
                   <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                    Spark Demo
+                    D1 DEMO
                   </div>
                 </div>
               </div>
 
-              <div>
-                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 mb-4 font-['Space_Grotesk',sans-serif]">
-                  Pending Withdrawals Review
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                  Withdrawal Requests
                 </h3>
 
-                <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
-                        <tr>
-                          <th className="p-4">User</th>
-                          <th className="p-4">Amount</th>
-                          <th className="p-4">Address</th>
-                          <th className="p-4">Status</th>
-                          <th className="p-4">Actions</th>
-                        </tr>
-                      </thead>
+                <button
+                  type="button"
+                  disabled={adminLoading || !apiReady}
+                  onClick={refreshAdminWithdrawals}
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
+                    adminTheme === 'blue'
+                      ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
+                      : 'border-[#F4A6C1]/30 text-[#F4A6C1] hover:bg-[#F4A6C1]/10'
+                  }`}
+                >
+                  <RefreshCw className={`w-3 h-3 ${
+                    adminLoading ? 'animate-spin' : ''
+                  }`} />
+                  Refresh
+                </button>
+              </div>
 
-                      <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
-                        {adminWithdrawals.filter(w => w.status === 'pending').length === 0 ? (
-                          <tr>
-                            <td colSpan="5" className="p-6 text-center text-slate-500">
-                              No pending simulated withdrawals.
+              <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
+                      <tr>
+                        <th className="p-4">User</th>
+                        <th className="p-4">Amount</th>
+                        <th className="p-4">Address</th>
+                        <th className="p-4">Status</th>
+                        <th className="p-4">Actions</th>
+                      </tr>
+                    </thead>
+
+                    <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
+
+                      {adminLoading ? (
+                        <tr>
+                          <td colSpan="5" className="p-6 text-center text-slate-400">
+                            Loading withdrawals...
+                          </td>
+                        </tr>
+                      ) : adminWithdrawals.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="p-6 text-center text-slate-500">
+                            No withdrawal requests found.
+                          </td>
+                        </tr>
+                      ) : (
+                        adminWithdrawals.map(w => (
+                          <tr key={w.id}>
+                            <td className="p-4 text-white">
+                              {w.email || w.userId || 'Unknown User'}
+                            </td>
+
+                            <td className={`p-4 font-black ${
+                              adminTheme === 'blue'
+                                ? 'text-blue-400'
+                                : 'text-[#F4A6C1]'
+                            }`}>
+                              {w.amount.toFixed(6)} DOGE
+                            </td>
+
+                            <td className="p-4 text-slate-400 truncate max-w-[140px]">
+                              {w.address}
+                            </td>
+
+                            <td className="p-4">
+                              <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
+                                w.status === 'approved'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                  : w.status === 'rejected'
+                                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                    : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                              }`}>
+                                {w.status}
+                              </span>
+                            </td>
+
+                            <td className="p-4">
+                              {w.status === 'pending' ? (
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={adminActionLoading !== null}
+                                    onClick={() => handleAdminApprove(w.id)}
+                                    className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg font-black transition-colors disabled:opacity-40"
+                                  >
+                                    {adminActionLoading === w.id
+                                      ? '...'
+                                      : 'Approve'}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    disabled={adminActionLoading !== null}
+                                    onClick={() => handleAdminReject(w.id)}
+                                    className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg font-black transition-colors disabled:opacity-40"
+                                  >
+                                    {adminActionLoading === w.id
+                                      ? '...'
+                                      : 'Reject'}
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-slate-500">
+                                  Completed
+                                </span>
+                              )}
                             </td>
                           </tr>
-                        ) : (
-                          adminWithdrawals
-                            .filter(w => w.status === 'pending')
-                            .map(w => (
-                              <tr key={w.id}>
-                                <td className="p-4 text-white">
-                                  {w.email || 'Test User'}
-                                </td>
-                                <td className="p-4 text-[#F4A6C1] font-black">
-                                  {w.amount} DOGE
-                                </td>
-                                <td className="p-4 text-slate-400 truncate max-w-[120px]">
-                                  {w.address}
-                                </td>
-                                <td className="p-4">
-                                  <span className="px-2 py-1 rounded-md text-[10px] uppercase font-black bg-[#F4A6C1]/10 text-[#F4A6C1] border border-[#F4A6C1]/20">
-                                    {w.status}
-                                  </span>
-                                </td>
-                                <td className="p-4 flex space-x-2">
-                                  <button
-                                    onClick={() => handleAdminApprove(w.id)}
-                                    className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-lg font-black transition-colors"
-                                  >
-                                    Approve
-                                  </button>
-
-                                  <button
-                                    onClick={() => handleAdminReject(w.id)}
-                                    className="px-3 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 rounded-lg font-black transition-colors"
-                                  >
-                                    Reject
-                                  </button>
-                                </td>
-                              </tr>
-                            ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
+
+              <p className="text-xs text-slate-500">
+                Approving or rejecting updates the D1 demo ledger.
+                Rejected requests are refunded by the Worker.
+                No cryptocurrency transaction is broadcast.
+              </p>
             </div>
           )}
 
@@ -1550,6 +1803,3 @@ setTimeout(() => setShowClaimEffect(false), 2200);
     </div>
   );
 }
-
-  
-  
