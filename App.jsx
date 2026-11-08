@@ -1117,7 +1117,7 @@ export default function App() {
             </div>
           )}
 
-          {/* WALLET */}
+                   {/* WALLET */}
           {activeTab === 'wallet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
@@ -1125,7 +1125,7 @@ export default function App() {
                   Wallet & Withdrawals (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Simulate cryptocurrency withdrawals. Minimum withdrawal is 5.0 DEMO DOGE. No real payments.
+                  Simulate cryptocurrency withdrawals. Minimum withdrawal is 1.0 DEMO DOGE. No real payments.
                 </p>
               </div>
 
@@ -1143,7 +1143,7 @@ export default function App() {
                   <div className="mt-6 pt-6 border-t border-slate-800 text-xs text-slate-400 flex justify-between font-bold">
                     <span>Minimum Testnet Payout:</span>
                     <span className="text-white font-mono font-black">
-                      5.0 DOGE
+                      1.0 DOGE
                     </span>
                   </div>
                 </div>
@@ -1163,7 +1163,7 @@ export default function App() {
                     <input
                       type="number"
                       step="0.001"
-                      min="5.0"
+                      min="1.0"
                       value={withdrawAmount}
                       onChange={(e) => setWithdrawAmount(e.target.value)}
                       className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] font-mono font-bold"
@@ -1256,6 +1256,7 @@ export default function App() {
               </div>
             </div>
           )}
+      
 
           {/* REFERRALS */}
           {activeTab === 'referrals' && (
