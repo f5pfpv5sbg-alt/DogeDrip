@@ -1795,4 +1795,10 @@ export default function App() {
       Rejected requests are refunded by the Worker.
       No cryptocurrency transaction is broadcast.
     </p>
-
+  </div>
+)}
+        </main>
+      </div>
+    </div>
+  );
+}
