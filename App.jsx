@@ -63,11 +63,8 @@ const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
 
+
 // PLAN CATALOG (DISPLAY ONLY)
-// The Worker has no endpoint that lists all plans, so this list only lets the
-// Plans page describe every tier (prices exist only here). It is NEVER used to
-// grant rewards or enforce limits. For the ACTIVE plan the UI always shows the
-// values returned by the Worker.
 const PLAN_CATALOG = [
   {
     key: 'FREE',
@@ -75,8 +72,17 @@ const PLAN_CATALOG = [
     price: 'Free',
     priceNote: 'No payment required',
     amountKoinu: 50000,
-    cooldownSeconds: 120,
+    cooldownSeconds: 50,
     dailyLimit: 50,
+    features: [
+      '0.0005 DOGE per claim',
+      '50-second claim cooldown',
+      'Free Lucky Wheel',
+      'Daily Check-in',
+      'Return Bonuses',
+      'Missions & Challenges',
+      'Advertisements'
+    ],
     icon: Gift,
     cardCls: 'border-slate-800',
     activeCardCls: 'border-slate-300 shadow-lg shadow-white/5',
@@ -92,6 +98,16 @@ const PLAN_CATALOG = [
     amountKoinu: 100000,
     cooldownSeconds: 45,
     dailyLimit: 50,
+    features: [
+      '0.001 DOGE per claim',
+      '45-second claim cooldown',
+      'Ad-free experience',
+      'Premium Daily Bonus',
+      'Weekly Bonus',
+      'Premium Badge',
+      'Extended Earnings History',
+      '50 claims per day'
+    ],
     icon: Zap,
     cardCls: 'border-[#F4A6C1]/30',
     activeCardCls: 'border-[#F4A6C1] shadow-lg shadow-[#F4A6C1]/20',
@@ -107,6 +123,18 @@ const PLAN_CATALOG = [
     amountKoinu: 150000,
     cooldownSeconds: 0,
     dailyLimit: 100,
+    features: [
+      '0.0015 DOGE per claim',
+      'No claim cooldown',
+      'Ad-free experience',
+      'VIP Daily Chest',
+      'VIP Daily & Weekly Bonuses',
+      'VIP Badge',
+      'Advanced Statistics',
+      '100 claims per day',
+      'Priority Support',
+      'Exclusive Lucky Wheel Rewards'
+    ],
     icon: Crown,
     cardCls: 'border-yellow-500/30',
     activeCardCls: 'border-yellow-400 shadow-lg shadow-yellow-400/20',
@@ -115,15 +143,6 @@ const PLAN_CATALOG = [
     iconWrapCls: 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400'
   }
 ];
-
-const INPUT_CLS =
-  "w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors";
-
-const PRIMARY_BTN =
-  "w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide";
-
-const LABEL_CLS =
-  "block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1";
 
 // True for real numbers (including 0). Never use plain truthiness for Worker values:
 // VIP has cooldown_seconds: 0 and daily_claims_remaining can be 0.
