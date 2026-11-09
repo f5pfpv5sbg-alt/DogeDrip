@@ -1947,6 +1947,7 @@ export default function App() {
             </div>
           )}
 
+        
           {/* PLANS */}
           {activeTab === 'plans' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
@@ -2029,16 +2030,30 @@ export default function App() {
                           <Icon className="w-6 h-6" />
                         </div>
 
-                        {isActive ? (
-                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-black uppercase font-mono ${p.badgeCls}`}>
-                            <CheckCircle className="w-3 h-3" />
-                            Current Plan
-                          </span>
-                        ) : !accountLoaded ? (
-                          <span className="px-2 py-1 rounded-md text-[10px] font-mono uppercase text-slate-500 border border-slate-800">
-                            Checking...
-                          </span>
-                        ) : null}
+                        <div className="flex flex-col items-end gap-2">
+                          {p.key === 'PREMIUM' && (
+                            <span className="px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-[#F4A6C1]/10 text-[#F4A6C1] border border-[#F4A6C1]/30">
+                              Most Popular
+                            </span>
+                          )}
+
+                          {p.key === 'VIP' && (
+                            <span className="px-2 py-1 rounded-md text-[10px] font-black uppercase tracking-wider bg-yellow-500/10 text-yellow-400 border border-yellow-500/30">
+                              Maximum Rewards
+                            </span>
+                          )}
+
+                          {isActive ? (
+                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-black uppercase font-mono ${p.badgeCls}`}>
+                              <CheckCircle className="w-3 h-3" />
+                              Current Plan
+                            </span>
+                          ) : !accountLoaded ? (
+                            <span className="px-2 py-1 rounded-md text-[10px] font-mono uppercase text-slate-500 border border-slate-800">
+                              Checking...
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
 
                       <h3 className={`text-lg font-black uppercase tracking-wider font-['Space_Grotesk',sans-serif] ${p.accentText}`}>
@@ -2086,6 +2101,27 @@ export default function App() {
                           </span>
                         </li>
                       </ul>
+
+                      {/* PLAN BENEFITS */}
+                      {Array.isArray(p.features) && p.features.length > 0 && (
+                        <div className="mt-6 pt-5 border-t border-slate-800/70">
+                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-4">
+                            What's Included
+                          </h4>
+
+                          <ul className="space-y-3">
+                            {p.features.map((feature, index) => (
+                              <li
+                                key={`${p.key}-${index}`}
+                                className="flex items-start gap-2 text-sm text-slate-300"
+                              >
+                                <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                                <span>{feature}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
 
                       <div className="mt-6">
                         {p.key === 'FREE' ? (
