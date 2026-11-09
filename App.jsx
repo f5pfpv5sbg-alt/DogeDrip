@@ -1787,17 +1787,7 @@ export default function App() {
                   value={dailyLimit !== null ? dailyLimit : (accountLoaded ? 'N/A' : '...')}
                   sub={accountLoaded && dailyLimit === null ? 'Not reported by server' : undefined}
                 />
-                <StatTile
-                  label="Claims Remaining"
-                  value={dailyRemaining !== null ? dailyRemaining : (accountLoaded ? 'N/A' : '...')}
-                  valueCls={
-                    dailyRemaining === null
-                      ? 'text-white'
-                      : dailyLimitReached
-                        ? 'text-red-400'
-                        : 'text-emerald-400'
-                  }
-                />
+               
                 <StatTile
                   label="Daily Reset (UTC)"
                   value={formatDuration(resetSeconds)}
