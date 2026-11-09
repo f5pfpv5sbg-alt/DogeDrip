@@ -1,13 +1,29 @@
+
 const PROJECT_ID = "dogedrip-3ebda";
 
 const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
-const CLAIM_AMOUNT_KOINU = 100000;
-const COOLDOWN_SECONDS = 45;
 const MIN_WITHDRAWAL_KOINU = 100000000;
 
-// Add more origins here if needed (e.g. a custom domain or local dev).
+const PLAN_CONFIG = {
+  FREE: {
+    amount_koinu: 50000,
+    cooldown_seconds: 120,
+    daily_limit: 50
+  },
+  PREMIUM: {
+    amount_koinu: 100000,
+    cooldown_seconds: 45,
+    daily_limit: 50
+  },
+  VIP: {
+    amount_koinu: 150000,
+    cooldown_seconds: 0,
+    daily_limit: 100
+  }
+};
+
 const ALLOWED_ORIGINS = ["https://dogedrip.pages.dev"];
 
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -51,7 +67,7 @@ function decodeBase64Url(value) {
   return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
 
-// GOOGLE KEYS (cached)
+// GOOGLE KEYS
 let cachedKeys = null;
 let cachedKeysAt = 0;
 
@@ -78,6 +94,7 @@ async function getGoogleKeys(force = false) {
 
   cachedKeys = keySet.keys;
   cachedKeysAt = now;
+
   return cachedKeys;
 }
 
@@ -88,11 +105,13 @@ async function verifyFirebaseToken(token) {
 
   try {
     parts = token.split(".");
+
     if (parts.length !== 3) throw new Error("bad token");
 
     tokenHeader = JSON.parse(
       new TextDecoder().decode(decodeBase64Url(parts[0]))
     );
+
     claims = JSON.parse(
       new TextDecoder().decode(decodeBase64Url(parts[1]))
     );
@@ -113,7 +132,6 @@ async function verifyFirebaseToken(token) {
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
     typeof claims.sub !== "string" ||
     !claims.sub ||
-    claims.sub !== claims.user_id ||
     claims.sub.length > 128 ||
     typeof claims.email !== "string" ||
     !claims.email ||
@@ -127,14 +145,19 @@ async function verifyFirebaseToken(token) {
     throw new HttpError(401, "Invalid Firebase token");
   }
 
-  let jwk = (await getGoogleKeys()).find(k => k.kid === tokenHeader.kid);
+  let jwk = (await getGoogleKeys()).find(
+    key => key.kid === tokenHeader.kid
+  );
 
-  // Key rotation: refresh at most once per minute when the kid is unknown.
   if (!jwk && Date.now() - cachedKeysAt > 60000) {
-    jwk = (await getGoogleKeys(true)).find(k => k.kid === tokenHeader.kid);
+    jwk = (await getGoogleKeys(true)).find(
+      key => key.kid === tokenHeader.kid
+    );
   }
 
-  if (!jwk) throw new HttpError(401, "Signing key not found");
+  if (!jwk) {
+    throw new HttpError(401, "Signing key not found");
+  }
 
   let valid = false;
 
@@ -157,7 +180,9 @@ async function verifyFirebaseToken(token) {
     valid = false;
   }
 
-  if (!valid) throw new HttpError(401, "Invalid token signature");
+  if (!valid) {
+    throw new HttpError(401, "Invalid token signature");
+  }
 
   return claims;
 }
@@ -198,7 +223,7 @@ async function readJson(request) {
       return data;
     }
   } catch {
-    // fall through
+    // Invalid JSON
   }
 
   throw new HttpError(400, "Invalid request body");
@@ -209,11 +234,15 @@ function generateRefCode() {
   crypto.getRandomValues(bytes);
 
   let code = "DOGE";
-  for (const b of bytes) code += REF_ALPHABET[b % 32];
+
+  for (const b of bytes) {
+    code += REF_ALPHABET[b % 32];
+  }
+
   return code;
 }
 
-// Dogecoin address: base58check, version 0x1e (P2PKH) or 0x16 (P2SH)
+// DOGE ADDRESS VALIDATION
 async function isValidDogeAddress(address) {
   if (
     typeof address !== "string" ||
@@ -227,19 +256,24 @@ async function isValidDogeAddress(address) {
 
   for (const ch of address) {
     const idx = BASE58.indexOf(ch);
+
     if (idx === -1) return false;
+
     num = num * 58n + BigInt(idx);
   }
 
   let hex = num.toString(16);
+
   if (hex.length % 2) hex = "0" + hex;
 
   const bytes = [];
+
   for (let i = 0; i < hex.length; i += 2) {
     bytes.push(parseInt(hex.slice(i, i + 2), 16));
   }
 
   let leadingZeros = 0;
+
   for (const ch of address) {
     if (ch === "1") leadingZeros++;
     else break;
@@ -254,7 +288,9 @@ async function isValidDogeAddress(address) {
   const checksum = decoded.slice(21);
 
   const hash1 = await crypto.subtle.digest("SHA-256", payload);
-  const hash2 = new Uint8Array(await crypto.subtle.digest("SHA-256", hash1));
+  const hash2 = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", hash1)
+  );
 
   for (let i = 0; i < 4; i++) {
     if (hash2[i] !== checksum[i]) return false;
@@ -263,11 +299,51 @@ async function isValidDogeAddress(address) {
   return payload[0] === 0x1e || payload[0] === 0x16;
 }
 
-async function getAccount(env, uid) {
-  const account = await env.DB.prepare(`
+// USER PLAN
+async function getUserPlan(env, uid) {
+  const subscription = await env.DB.prepare(`
+    SELECT plan
+    FROM subscriptions
+    WHERE firebase_uid = ?
+      AND status = 'active'
+      AND datetime(expiration_date) > datetime('now')
+    ORDER BY
+      CASE plan
+        WHEN 'VIP' THEN 0
+        WHEN 'PREMIUM' THEN 1
+        ELSE 2
+      END,
+      datetime(expiration_date) DESC
+    LIMIT 1
+  `).bind(uid).first();
+
+  if (!subscription) {
+    return {
+      name: "FREE",
+      ...PLAN_CONFIG.FREE
+    };
+  }
+
+  const planName = String(subscription.plan).toUpperCase();
+  const config = PLAN_CONFIG[planName];
+
+  if (!config) {
+    throw new HttpError(500, "Invalid subscription plan configuration");
+  }
+
+  return {
+    name: planName,
+    ...config
+  };
+}
+
+// ACCOUNT INFORMATION
+async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
+  return env.DB.prepare(`
     SELECT
       balance_koinu,
       last_claim_at,
+
       CASE
         WHEN last_claim_at IS NULL THEN 0
         ELSE MAX(
@@ -277,14 +353,21 @@ async function getAccount(env, uid) {
             CAST(strftime('%s', last_claim_at) AS INTEGER)
           )
         )
-      END AS cooldown_remaining
+      END AS cooldown_remaining,
+
+      (
+        SELECT COUNT(*)
+        FROM claims
+        WHERE claims.uid = users.uid
+          AND date(claims.claimed_at) = date('now')
+      ) AS daily_claims_used
+
     FROM users
     WHERE uid = ?
-  `).bind(COOLDOWN_SECONDS, uid).first();
-
-  return account || null;
+  `).bind(plan.cooldown_seconds, uid).first();
 }
 
+// USER SYNCHRONIZATION
 async function syncUser(env, user, referredByCode) {
   let referrerCode = null;
 
@@ -298,10 +381,10 @@ async function syncUser(env, user, referredByCode) {
     referrerCode = referrer ? referrer.ref_code : null;
   }
 
+  let synchronized = false;
+
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
-      // referred_by is only written when the row is first created,
-      // and ref_code is only generated once.
       await env.DB.prepare(`
         INSERT INTO users (uid, email, ref_code, referred_by)
         VALUES (?, ?, ?, ?)
@@ -315,12 +398,17 @@ async function syncUser(env, user, referredByCode) {
         referrerCode
       ).run();
 
+      synchronized = true;
       break;
     } catch (error) {
-      if (!String(error.message).includes("UNIQUE") || attempt === 4) {
+      if (!String(error.message).includes("UNIQUE")) {
         throw error;
       }
     }
+  }
+
+  if (!synchronized) {
+    throw new HttpError(500, "Could not generate a unique referral code");
   }
 
   return env.DB.prepare(`
@@ -335,10 +423,11 @@ async function handleRequest(request, env, json) {
   const path = url.pathname;
   const method = request.method;
 
-  // HEALTH CHECK (public, no internal details)
+  // HEALTH CHECK
   if (path === "/api/health" && method === "GET") {
     try {
       await env.DB.prepare("SELECT 1").first();
+
       return json({
         success: true,
         message: "DogeDrip API is connected",
@@ -352,19 +441,24 @@ async function handleRequest(request, env, json) {
     }
   }
 
-  // REFERRAL CODE VALIDATION (public, returns only valid true/false)
+  // REFERRAL VALIDATION
   if (path === "/api/referral/validate" && method === "GET") {
-    const code = (url.searchParams.get("code") || "").trim().toUpperCase();
+    const code = (url.searchParams.get("code") || "").trim();
 
     if (!REF_CODE_REGEX.test(code)) {
       return json({ success: true, valid: false });
     }
 
-    const row = await env.DB.prepare(
-      "SELECT 1 AS ok FROM users WHERE ref_code = ?"
-    ).bind(code).first();
+    const row = await env.DB.prepare(`
+      SELECT 1 AS ok
+      FROM users
+      WHERE ref_code = ?
+    `).bind(code).first();
 
-    return json({ success: true, valid: Boolean(row) });
+    return json({
+      success: true,
+      valid: Boolean(row)
+    });
   }
 
   // AUTH SYNC
@@ -372,6 +466,7 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
 
     let body = {};
+
     try {
       body = await request.json();
     } catch {
@@ -398,7 +493,7 @@ async function handleRequest(request, env, json) {
     });
   }
 
-  // REFERRAL STATS (real data only)
+  // REFERRAL STATS
   if (path === "/api/referrals" && method === "GET") {
     const user = await authenticate(request);
 
@@ -408,7 +503,9 @@ async function handleRequest(request, env, json) {
       WHERE uid = ?
     `).bind(user.sub).first();
 
-    if (!account) throw new HttpError(404, "User not found");
+    if (!account) {
+      throw new HttpError(404, "User not found");
+    }
 
     let invitedCount = 0;
 
@@ -433,55 +530,116 @@ async function handleRequest(request, env, json) {
   // CLAIM
   if (path === "/api/claim" && method === "POST") {
     const user = await authenticate(request);
+    const plan = await getUserPlan(env, user.sub);
 
-    const results = await env.DB.batch([
-      env.DB.prepare(`
-        UPDATE users
-        SET
-          balance_koinu = balance_koinu + ?,
-          last_claim_at = CURRENT_TIMESTAMP
-        WHERE uid = ?
-          AND (
-            last_claim_at IS NULL
-            OR last_claim_at <= datetime('now', ?)
-          )
-      `).bind(
-        CLAIM_AMOUNT_KOINU,
-        user.sub,
-        `-${COOLDOWN_SECONDS} seconds`
-      ),
+    let results;
 
-      env.DB.prepare(`
-        INSERT INTO claims (uid, amount_koinu)
-        SELECT ?, ?
-        WHERE changes() = 1
-      `).bind(user.sub, CLAIM_AMOUNT_KOINU)
-    ]);
+    try {
+      results = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE users
+          SET
+            balance_koinu = balance_koinu + ?,
+            last_claim_at = CURRENT_TIMESTAMP
+          WHERE uid = ?
+
+            AND (
+              last_claim_at IS NULL
+              OR last_claim_at <= datetime('now', ?)
+            )
+
+            AND (
+              SELECT COUNT(*)
+              FROM claims
+              WHERE claims.uid = users.uid
+                AND date(claims.claimed_at) = date('now')
+            ) < ?
+        `).bind(
+          plan.amount_koinu,
+          user.sub,
+          `-${plan.cooldown_seconds} seconds`,
+          plan.daily_limit
+        ),
+
+        env.DB.prepare(`
+          INSERT INTO claims (uid, amount_koinu)
+          SELECT ?, ?
+          WHERE changes() = 1
+        `).bind(
+          user.sub,
+          plan.amount_koinu
+        )
+      ]);
+    } catch (error) {
+      if (
+        String(error.message).includes("INSUFFICIENT_FAUCET_RESERVE")
+      ) {
+        throw new HttpError(
+          503,
+          "Faucet temporarily unavailable. Please try again later."
+        );
+      }
+
+      throw error;
+    }
 
     if (results[0].meta.changes !== 1) {
-      const existing = await getAccount(env, user.sub);
+      const account = await getAccount(env, user.sub, plan);
 
-      if (!existing) {
+      if (!account) {
         throw new HttpError(404, "User not synchronized");
+      }
+
+      const dailyUsed = Number(account.daily_claims_used || 0);
+
+      if (dailyUsed >= plan.daily_limit) {
+        throw new HttpError(
+          429,
+          "Daily claim limit reached",
+          {
+            reason: "daily_limit",
+            plan: plan.name,
+            daily_claims_used: dailyUsed,
+            daily_limit: plan.daily_limit,
+            daily_claims_remaining: 0
+          }
+        );
       }
 
       throw new HttpError(
         429,
         "Cooldown active. Please wait before claiming again.",
-        { cooldown_remaining: existing.cooldown_remaining }
+        {
+          reason: "cooldown",
+          plan: plan.name,
+          cooldown_remaining: account.cooldown_remaining
+        }
       );
     }
 
-    const account = await getAccount(env, user.sub);
+    const account = await getAccount(env, user.sub, plan);
+
+    if (!account) {
+      throw new HttpError(404, "User not found");
+    }
+
+    const dailyUsed = Number(account.daily_claims_used || 0);
 
     return json({
       success: true,
       message: "Claim successful",
-      amount_koinu: CLAIM_AMOUNT_KOINU,
+      plan: plan.name,
+      amount_koinu: plan.amount_koinu,
       balance_koinu: account.balance_koinu,
       last_claim_at: account.last_claim_at,
-      cooldown_seconds: COOLDOWN_SECONDS,
-      cooldown_remaining: account.cooldown_remaining
+      cooldown_seconds: plan.cooldown_seconds,
+      cooldown_remaining: account.cooldown_remaining,
+      daily_claims_used: dailyUsed,
+      daily_limit: plan.daily_limit,
+      daily_claims_remaining: Math.max(
+        0,
+        plan.daily_limit - dailyUsed
+      )
     });
   }
 
@@ -497,24 +655,40 @@ async function handleRequest(request, env, json) {
       LIMIT 50
     `).bind(user.sub).all();
 
-    return json({ success: true, claims: result.results });
+    return json({
+      success: true,
+      claims: result.results
+    });
   }
 
   // BALANCE
   if (path === "/api/balance" && method === "GET") {
     const user = await authenticate(request);
-    const account = await getAccount(env, user.sub);
+    const plan = await getUserPlan(env, user.sub);
+    const account = await getAccount(env, user.sub, plan);
 
-    if (!account) throw new HttpError(404, "User not found");
+    if (!account) {
+      throw new HttpError(404, "User not found");
+    }
+
+    const dailyUsed = Number(account.daily_claims_used || 0);
 
     return json({
       success: true,
       balance_koinu: account.balance_koinu,
       last_claim_at: account.last_claim_at,
       cooldown_remaining: account.cooldown_remaining,
-      cooldown_seconds: COOLDOWN_SECONDS,
-      claim_amount_koinu: CLAIM_AMOUNT_KOINU,
-      min_withdrawal_koinu: MIN_WITHDRAWAL_KOINU
+      cooldown_seconds: plan.cooldown_seconds,
+      claim_amount_koinu: plan.amount_koinu,
+      min_withdrawal_koinu: MIN_WITHDRAWAL_KOINU,
+
+      plan: plan.name,
+      daily_claims_used: dailyUsed,
+      daily_limit: plan.daily_limit,
+      daily_claims_remaining: Math.max(
+        0,
+        plan.daily_limit - dailyUsed
+      )
     });
   }
 
@@ -524,12 +698,16 @@ async function handleRequest(request, env, json) {
     const body = await readJson(request);
 
     const amount = body.amount_koinu;
+
     const wallet =
       typeof body.wallet_address === "string"
         ? body.wallet_address.trim()
         : "";
 
-    if (!Number.isSafeInteger(amount) || amount < MIN_WITHDRAWAL_KOINU) {
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount < MIN_WITHDRAWAL_KOINU
+    ) {
       throw new HttpError(400, "Minimum withdrawal is 1 DOGE");
     }
 
@@ -540,7 +718,8 @@ async function handleRequest(request, env, json) {
     const pending = await env.DB.prepare(`
       SELECT id
       FROM withdrawals
-      WHERE uid = ? AND status = 'pending'
+      WHERE uid = ?
+        AND status = 'pending'
       LIMIT 1
     `).bind(user.sub).first();
 
@@ -554,8 +733,6 @@ async function handleRequest(request, env, json) {
     let results;
 
     try {
-      // One batch = one transaction. If the insert fails (for example the
-      // unique pending index), the balance deduction is rolled back too.
       results = await env.DB.batch([
         env.DB.prepare(`
           UPDATE users
@@ -582,22 +759,33 @@ async function handleRequest(request, env, json) {
           "You already have a pending withdrawal request."
         );
       }
+
       throw error;
     }
 
     if (results[0].meta.changes !== 1) {
       const account = await getAccount(env, user.sub);
 
-      if (!account) throw new HttpError(404, "User not found");
+      if (!account) {
+        throw new HttpError(404, "User not found");
+      }
 
       throw new HttpError(400, "Insufficient balance");
     }
 
     const withdrawal = await env.DB.prepare(`
-      SELECT id, amount_koinu, wallet_address, status, created_at
+      SELECT
+        id,
+        amount_koinu,
+        wallet_address,
+        status,
+        created_at
       FROM withdrawals
       WHERE id = ? AND uid = ?
-    `).bind(results[1].meta.last_row_id, user.sub).first();
+    `).bind(
+      results[1].meta.last_row_id,
+      user.sub
+    ).first();
 
     return json({
       success: true,
@@ -611,17 +799,25 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
 
     const result = await env.DB.prepare(`
-      SELECT id, amount_koinu, wallet_address, status, created_at
+      SELECT
+        id,
+        amount_koinu,
+        wallet_address,
+        status,
+        created_at
       FROM withdrawals
       WHERE uid = ?
       ORDER BY id DESC
       LIMIT 100
     `).bind(user.sub).all();
 
-    return json({ success: true, withdrawals: result.results });
+    return json({
+      success: true,
+      withdrawals: result.results
+    });
   }
 
-  // ADMIN: LIST ALL WITHDRAWALS
+  // ADMIN: LIST WITHDRAWALS
   if (path === "/api/admin/withdrawals" && method === "GET") {
     const user = await authenticate(request);
     await requireAdmin(user, env);
@@ -643,7 +839,10 @@ async function handleRequest(request, env, json) {
       LIMIT 500
     `).all();
 
-    return json({ success: true, withdrawals: result.results });
+    return json({
+      success: true,
+      withdrawals: result.results
+    });
   }
 
   // ADMIN: APPROVE WITHDRAWAL
@@ -672,13 +871,20 @@ async function handleRequest(request, env, json) {
     `).bind(admin.uid, id).run();
 
     if (result.meta.changes !== 1) {
-      throw new HttpError(409, "Withdrawal not found or already processed");
+      throw new HttpError(
+        409,
+        "Withdrawal not found or already processed"
+      );
     }
 
-    return json({ success: true, message: "Withdrawal approved", id });
+    return json({
+      success: true,
+      message: "Withdrawal approved",
+      id
+    });
   }
 
-  // ADMIN: REJECT WITHDRAWAL AND REFUND (once)
+  // ADMIN: REJECT WITHDRAWAL AND REFUND
   const rejectMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/reject$/
   );
@@ -723,7 +929,10 @@ async function handleRequest(request, env, json) {
     ]);
 
     if (results[0].meta.changes !== 1) {
-      throw new HttpError(409, "Withdrawal not found or already processed");
+      throw new HttpError(
+        409,
+        "Withdrawal not found or already processed"
+      );
     }
 
     if (results[1].meta.changes !== 1) {
@@ -740,8 +949,10 @@ async function handleRequest(request, env, json) {
     });
   }
 
-  // UNKNOWN ENDPOINT
-  return json({ success: false, message: "Endpoint not found" }, 404);
+  return json({
+    success: false,
+    message: "Endpoint not found"
+  }, 404);
 }
 
 export default {
@@ -755,7 +966,10 @@ export default {
       });
 
     if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: cors });
+      return new Response(null, {
+        status: 204,
+        headers: cors
+      });
     }
 
     try {
@@ -763,7 +977,11 @@ export default {
     } catch (error) {
       if (error instanceof HttpError) {
         return json(
-          { success: false, error: error.message, ...error.extra },
+          {
+            success: false,
+            error: error.message,
+            ...error.extra
+          },
           error.status
         );
       }
@@ -771,7 +989,10 @@ export default {
       console.error("Unhandled error:", error);
 
       return json(
-        { success: false, error: "Internal server error" },
+        {
+          success: false,
+          error: "Internal server error"
+        },
         500
       );
     }
