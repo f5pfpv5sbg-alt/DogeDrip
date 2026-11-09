@@ -105,7 +105,22 @@ export default function App() {
 
   // DASHBOARD
   const [activeTab, setActiveTab] = useState('faucet');
+          {/* TOP ADVERTISEMENT */}
+          <div className="mb-6 w-full">
+            <div className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden">
+              <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">
+                Advertisement
+              </span>
 
+              <p className="text-sm md:text-base font-bold text-white">
+                Advertise Your Brand on DogeDrip
+              </p>
+
+              <p className="text-xs text-slate-500 mt-1">
+                Reach crypto users and promote your project here.
+              </p>
+            </div>
+          </div>
   // FAUCET
   const [demoBalance, setDemoBalance] = useState(0);
   const [claimsLoading, setClaimsLoading] = useState(false);
@@ -1583,7 +1598,7 @@ export default function App() {
                   </li>
                 </ul>
               </div>
-            </
+            )}
               
 
 {/* ADMIN DASHBOARD */}
@@ -1597,7 +1612,7 @@ export default function App() {
 
       {firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com' && (
         <p className="text-blue-400 text-sm font-bold mt-2">
-          I love you ❤️
+          I love you
         </p>
       )}
 
