@@ -1243,8 +1243,6 @@ export default function App() {
   </div>
 </div>
 
-{/* FAUCET */}
-{activeTab === 'faucet' && (
           {/* FAUCET */}
           {activeTab === 'faucet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
@@ -1599,7 +1597,8 @@ export default function App() {
                   </li>
                 </ul>
               </div>
-            )}
+            </div>
+           )}
               
 
 {/* ADMIN DASHBOARD */}
