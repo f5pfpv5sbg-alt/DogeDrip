@@ -13,7 +13,10 @@ import {
   Info,
   Lock,
   KeyRound,
-  ArrowLeft
+  ArrowLeft,
+  Crown,
+  Zap,
+  Gift
 } from 'lucide-react';
 
 // FIREBASE
@@ -60,6 +63,59 @@ const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
 
+// PLAN CATALOG (DISPLAY ONLY)
+// The Worker has no endpoint that lists all plans, so this list only lets the
+// Plans page describe every tier (prices exist only here). It is NEVER used to
+// grant rewards or enforce limits. For the ACTIVE plan the UI always shows the
+// values returned by the Worker.
+const PLAN_CATALOG = [
+  {
+    key: 'FREE',
+    label: 'Free',
+    price: 'Free',
+    priceNote: 'No payment required',
+    amountKoinu: 50000,
+    cooldownSeconds: 120,
+    dailyLimit: 50,
+    icon: Gift,
+    cardCls: 'border-slate-800',
+    activeCardCls: 'border-slate-300 shadow-lg shadow-white/5',
+    accentText: 'text-slate-300',
+    badgeCls: 'bg-slate-500/10 text-slate-300 border border-slate-500/30',
+    iconWrapCls: 'bg-slate-500/10 border border-slate-500/20 text-slate-300'
+  },
+  {
+    key: 'PREMIUM',
+    label: 'Premium',
+    price: '€2.99',
+    priceNote: 'per month',
+    amountKoinu: 100000,
+    cooldownSeconds: 45,
+    dailyLimit: 50,
+    icon: Zap,
+    cardCls: 'border-[#F4A6C1]/30',
+    activeCardCls: 'border-[#F4A6C1] shadow-lg shadow-[#F4A6C1]/20',
+    accentText: 'text-[#F4A6C1]',
+    badgeCls: 'bg-[#F4A6C1]/10 text-[#F4A6C1] border border-[#F4A6C1]/30',
+    iconWrapCls: 'bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1]'
+  },
+  {
+    key: 'VIP',
+    label: 'VIP',
+    price: '€4.99',
+    priceNote: 'per month',
+    amountKoinu: 150000,
+    cooldownSeconds: 0,
+    dailyLimit: 100,
+    icon: Crown,
+    cardCls: 'border-yellow-500/30',
+    activeCardCls: 'border-yellow-400 shadow-lg shadow-yellow-400/20',
+    accentText: 'text-yellow-400',
+    badgeCls: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/30',
+    iconWrapCls: 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400'
+  }
+];
+
 const INPUT_CLS =
   "w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors";
 
@@ -68,6 +124,37 @@ const PRIMARY_BTN =
 
 const LABEL_CLS =
   "block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1";
+
+// True for real numbers (including 0). Never use plain truthiness for Worker values:
+// VIP has cooldown_seconds: 0 and daily_claims_remaining can be 0.
+const isNum = (v) =>
+  v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+
+const formatCooldown = (seconds) => {
+  if (!isNum(seconds)) return '...';
+  return Number(seconds) === 0 ? 'No cooldown' : `${Number(seconds)} seconds`;
+};
+
+// Seconds until the next 00:00 UTC (daily claims reset on the UTC date)
+const secondsUntilUtcReset = () => {
+  const now = new Date();
+  const nextReset = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1
+  );
+  return Math.max(0, Math.ceil((nextReset - now.getTime()) / 1000));
+};
+
+const utcDayKey = () => new Date().toISOString().slice(0, 10);
+
+const formatDuration = (totalSeconds) => {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}h ${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}s`;
+};
 
 // Parses numbers, "YYYY-MM-DD HH:MM:SS" (UTC from D1) and ISO strings safely.
 const parseServerDate = (value) => {
@@ -101,6 +188,21 @@ const mapWithdrawal = (w) => ({
   timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
+// Small presentational tile used on the Faucet page
+const StatTile = ({ label, value, sub, valueCls = 'text-white' }) => (
+  <div className="bg-black border border-slate-800 rounded-xl p-4 text-left">
+    <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-mono font-bold">
+      {label}
+    </span>
+    <div className={`text-base md:text-lg font-black font-mono mt-1 break-words ${valueCls}`}>
+      {value}
+    </div>
+    {sub && (
+      <span className="block text-[10px] text-slate-500 mt-0.5">{sub}</span>
+    )}
+  </div>
+);
+
 export default function App() {
   // NAVIGATION
   const [activeTab, setActiveTab] = useState('faucet');
@@ -115,6 +217,13 @@ export default function App() {
 
   // Referral code of the pending registration (read by the auth sync)
   const pendingReferralRef = useRef(null);
+  const authEventRef = useRef(0);
+  const [authSyncRetry, setAuthSyncRetry] = useState(0);
+
+  // Guards against simultaneous claims (state updates are asynchronous)
+  const claimInFlightRef = useRef(false);
+  const claimStatusTimerRef = useRef(null);
+  const lastUtcDayRef = useRef(utcDayKey());
 
   // AUTH FORM
   const [usernameInput, setUsernameInput] = useState('');
@@ -125,10 +234,16 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
-  // SETTINGS FROM WORKER (with safe defaults)
-  const [cooldownSeconds, setCooldownSeconds] = useState(45);
-  const [claimAmount, setClaimAmount] = useState(0.001);
+  // SETTINGS FROM WORKER
   const [minWithdrawal, setMinWithdrawal] = useState(1);
+
+  // CLAIM RULES + PLAN (always taken from the Worker; null until loaded)
+  // { name?, cooldownSeconds, claimAmount (DOGE), dailyUsed?, dailyLimit?, dailyRemaining? }
+  // name / daily* only exist when the deployed Worker reports them.
+  const [planInfo, setPlanInfo] = useState(null);
+  const [accountError, setAccountError] = useState('');
+  const [resetSeconds, setResetSeconds] = useState(secondsUntilUtcReset());
+  const [accountSyncTick, setAccountSyncTick] = useState(0);
 
   // FAUCET
   const [demoBalance, setDemoBalance] = useState(0);
@@ -173,6 +288,22 @@ export default function App() {
   const isDemoAdmin = Boolean(adminTheme);
   const isBlueAdmin = adminTheme === 'blue';
 
+  // DERIVED VALUES (read-only views of the Worker responses)
+  const planName =
+    typeof planInfo?.name === 'string' && planInfo.name ? planInfo.name : null;
+  const claimAmount = isNum(planInfo?.claimAmount) ? planInfo.claimAmount : null;
+  const cooldownSeconds = isNum(planInfo?.cooldownSeconds)
+    ? planInfo.cooldownSeconds
+    : null;
+  const dailyUsed = isNum(planInfo?.dailyUsed) ? planInfo.dailyUsed : null;
+  const dailyLimit = isNum(planInfo?.dailyLimit) ? planInfo.dailyLimit : null;
+  const dailyRemaining = isNum(planInfo?.dailyRemaining)
+    ? planInfo.dailyRemaining
+    : null;
+  const dailyLimitReached = dailyRemaining !== null && dailyRemaining <= 0;
+  const rulesReady = claimAmount !== null && cooldownSeconds !== null;
+  const accountLoaded = planInfo !== null;
+
   // API HELPER
   const apiRequest = async (path, options = {}) => {
     if (!firebaseUser) {
@@ -210,6 +341,67 @@ export default function App() {
     return data;
   };
 
+  // Applies any Worker account/claim response (balance, claim, 429 bodies).
+  // Zero is a valid value everywhere (VIP cooldown_seconds: 0, remaining: 0).
+  // Fields the Worker does not send are simply left untouched.
+  const applyAccountData = (data) => {
+    if (!data || typeof data !== 'object') return;
+
+    if (isNum(data.balance_koinu)) {
+      setDemoBalance(Number(data.balance_koinu) / KOINU);
+    }
+
+    if (isNum(data.min_withdrawal_koinu) && Number(data.min_withdrawal_koinu) > 0) {
+      setMinWithdrawal(Number(data.min_withdrawal_koinu) / KOINU);
+    }
+
+    if (isNum(data.cooldown_remaining)) {
+      setCooldownLeft(Math.max(0, Number(data.cooldown_remaining)));
+    } else if (data.last_claim_at && isNum(data.cooldown_seconds)) {
+      // Fallback for a Worker response without cooldown_remaining
+      const lastClaim = parseServerDate(data.last_claim_at);
+
+      if (lastClaim) {
+        const elapsed = Math.floor((Date.now() - lastClaim.getTime()) / 1000);
+        setCooldownLeft(Math.max(0, Number(data.cooldown_seconds) - elapsed));
+      }
+    }
+
+    const patch = {};
+
+    if (typeof data.plan === 'string' && data.plan) {
+      patch.name = data.plan.toUpperCase();
+    }
+
+    if (isNum(data.cooldown_seconds)) {
+      patch.cooldownSeconds = Number(data.cooldown_seconds);
+    }
+
+    const rewardKoinu = isNum(data.claim_amount_koinu)
+      ? data.claim_amount_koinu
+      : data.amount_koinu;
+
+    if (isNum(rewardKoinu)) {
+      patch.claimAmount = Number(rewardKoinu) / KOINU;
+    }
+
+    if (isNum(data.daily_claims_used)) {
+      patch.dailyUsed = Number(data.daily_claims_used);
+    }
+
+    if (isNum(data.daily_limit)) {
+      patch.dailyLimit = Number(data.daily_limit);
+    }
+
+    if (isNum(data.daily_claims_remaining)) {
+      patch.dailyRemaining = Number(data.daily_claims_remaining);
+    }
+
+    if (Object.keys(patch).length > 0) {
+      setPlanInfo(prev => ({ ...(prev || {}), ...patch }));
+    }
+  };
+
   // ADMIN REDIRECT
   useEffect(() => {
     if (activeTab === 'admin' && !isDemoAdmin) {
@@ -222,28 +414,38 @@ export default function App() {
     let isMounted = true;
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      const eventId = ++authEventRef.current;
+
       if (!isMounted) return;
 
+      // Clear previous account data immediately when identity changes.
       setFirebaseUser(user);
+      setUserProfile(null);
       setApiReady(false);
       setApiError('');
+      setDemoBalance(0);
+      setDemoClaims([]);
+      setDemoWithdrawals([]);
+      setAdminWithdrawals([]);
+      setCooldownLeft(0);
+      setPlanInfo(null);
+      setAccountError('');
+      setRefCode('');
+      setReferralStats(null);
+      setReferralError('');
+      setClaimsError('');
+      setAdminError('');
+      setReferralLoading(false);
+      setClaimsLoading(false);
+      setAdminLoading(false);
 
       if (!user) {
-        setUserProfile(null);
         setAuthLoading(false);
-        setDemoBalance(0);
-        setDemoClaims([]);
-        setDemoWithdrawals([]);
-        setAdminWithdrawals([]);
-        setCooldownLeft(0);
-        setRefCode('');
-        setReferralStats(null);
         return;
       }
 
       setAuthLoading(true);
 
-      // Read synchronously: handleRegister sets this before creating the account.
       const referredBy = pendingReferralRef.current;
 
       const fallbackProfile = {
@@ -262,7 +464,9 @@ export default function App() {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({ referred_by: referredBy || null })
+          body: JSON.stringify({
+            referred_by: referredBy || null
+          })
         });
 
         const syncData = await syncResponse.json().catch(() => ({}));
@@ -273,26 +477,25 @@ export default function App() {
           );
         }
 
-        if (!isMounted) return;
+        if (!isMounted || eventId !== authEventRef.current) return;
 
         pendingReferralRef.current = null;
         setRefCode(syncData.ref_code || '');
         setApiReady(true);
+        setApiError('');
       } catch (error) {
         console.error('D1 sync error:', error);
 
-        if (isMounted) {
-          setApiError(
-            `Database connection failed: ${error.message}`
-          );
-        }
+        if (!isMounted || eventId !== authEventRef.current) return;
+
+        setApiError(`Database connection failed: ${error.message}`);
       }
 
       try {
         const docRef = doc(dbStore, 'users', user.uid);
         const docSnap = await getDoc(docRef);
 
-        if (!isMounted) return;
+        if (!isMounted || eventId !== authEventRef.current) return;
 
         if (docSnap.exists()) {
           const data = docSnap.data();
@@ -308,72 +511,57 @@ export default function App() {
       } catch (error) {
         console.warn('Firestore unavailable:', error.message);
 
-        if (isMounted) {
-          setUserProfile(fallbackProfile);
-        }
+        if (!isMounted || eventId !== authEventRef.current) return;
+
+        setUserProfile(fallbackProfile);
       }
 
-      if (isMounted) {
+      if (isMounted && eventId === authEventRef.current) {
         setAuthLoading(false);
       }
     });
 
     return () => {
       isMounted = false;
+      authEventRef.current++;
       unsubscribe();
     };
-  }, []);
+  }, [authSyncRetry]);
 
-  // LOAD BALANCE + SETTINGS FROM D1
+  // LOAD BALANCE + CLAIM RULES (+ PLAN / DAILY INFO WHEN REPORTED) FROM THE WORKER
+  // Runs on login, when switching tabs (so a backend plan change shows up)
+  // and when the UTC day rolls over (daily counter reset).
   useEffect(() => {
     if (!firebaseUser || !apiReady) return;
 
     let cancelled = false;
 
-    const loadBalance = async () => {
+    const loadAccount = async () => {
       try {
         const data = await apiRequest('/api/balance');
 
-        if (cancelled) return;
+        // Do not overwrite fresher claim data while a claim is in flight
+        if (cancelled || claimInFlightRef.current) return;
 
-        setDemoBalance(Number(data.balance_koinu || 0) / KOINU);
-
-        if (Number(data.cooldown_seconds) > 0) {
-          setCooldownSeconds(Number(data.cooldown_seconds));
-        }
-
-        if (Number(data.claim_amount_koinu) > 0) {
-          setClaimAmount(Number(data.claim_amount_koinu) / KOINU);
-        }
-
-        if (Number(data.min_withdrawal_koinu) > 0) {
-          setMinWithdrawal(Number(data.min_withdrawal_koinu) / KOINU);
-        }
-
-        if (typeof data.cooldown_remaining === 'number') {
-          setCooldownLeft(Math.max(0, data.cooldown_remaining));
-        } else if (data.last_claim_at) {
-          // Fallback for an older Worker without cooldown_remaining
-          const lastClaim = parseServerDate(data.last_claim_at);
-
-          if (lastClaim) {
-            const elapsed = Math.floor((Date.now() - lastClaim.getTime()) / 1000);
-            setCooldownLeft(Math.max(0, 45 - elapsed));
-          }
-        } else {
-          setCooldownLeft(0);
-        }
+        applyAccountData(data);
+        setAccountError('');
       } catch (error) {
         console.error('Balance loading error:', error);
+
+        if (!cancelled) {
+          setAccountError(
+            error.message || 'Could not load your claim information.'
+          );
+        }
       }
     };
 
-    loadBalance();
+    loadAccount();
 
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady]);
+  }, [firebaseUser, apiReady, activeTab, accountSyncTick]);
 
   // LOAD CLAIM HISTORY FROM D1
   useEffect(() => {
@@ -525,13 +713,31 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, isDemoAdmin]);
 
-  // COOLDOWN TIMER
+  // ONE-SECOND TIMER: claim cooldown, UTC reset countdown, UTC day rollover
   useEffect(() => {
     const timer = setInterval(() => {
       setCooldownLeft(prev => (prev > 0 ? prev - 1 : 0));
+      setResetSeconds(secondsUntilUtcReset());
+
+      const today = utcDayKey();
+
+      if (today !== lastUtcDayRef.current) {
+        lastUtcDayRef.current = today;
+        // New UTC day: re-sync so the daily counter shown matches the backend
+        setAccountSyncTick(t => t + 1);
+      }
     }, 1000);
 
     return () => clearInterval(timer);
+  }, []);
+
+  // CLEAR STATUS TIMER ON UNMOUNT
+  useEffect(() => {
+    return () => {
+      if (claimStatusTimerRef.current) {
+        clearTimeout(claimStatusTimerRef.current);
+      }
+    };
   }, []);
 
   // LOGIN
@@ -687,18 +893,47 @@ export default function App() {
     }
   };
 
-  // CLAIM
+  // Shows a claim message and clears it after 5 seconds (latest message wins)
+  const showClaimMessage = (message, isError) => {
+    if (claimStatusTimerRef.current) {
+      clearTimeout(claimStatusTimerRef.current);
+    }
+
+    setClaimIsError(isError);
+    setClaimStatus(message);
+
+    claimStatusTimerRef.current = window.setTimeout(() => {
+      setClaimStatus('');
+    }, 5000);
+  };
+
+  // CLAIM (the Worker decides the reward, cooldown and daily limit)
   const handleClaim = async () => {
-    if (cooldownLeft > 0 || isClaiming) return;
+    if (claimInFlightRef.current || isClaiming) return;
 
     if (!firebaseUser || !apiReady) {
-      setClaimIsError(true);
-      setClaimStatus('Database is not ready. Please try again.');
+      showClaimMessage('Database is not ready. Please try again.', true);
       return;
     }
 
+    if (!rulesReady) {
+      showClaimMessage(
+        'Claim information has not loaded yet. Please try again in a moment.',
+        true
+      );
+      return;
+    }
+
+    if (cooldownLeft > 0 || dailyLimitReached) return;
+
+    claimInFlightRef.current = true;
     setIsClaiming(true);
     setClaimIsError(false);
+
+    if (claimStatusTimerRef.current) {
+      clearTimeout(claimStatusTimerRef.current);
+    }
+
     setClaimStatus('Processing claim...');
 
     try {
@@ -706,16 +941,9 @@ export default function App() {
         method: 'POST'
       });
 
-      if (Number(data.cooldown_seconds) > 0) {
-        setCooldownSeconds(Number(data.cooldown_seconds));
-      }
+      // Balance, cooldown (and plan / daily counters when reported) come from the Worker
+      applyAccountData(data);
 
-      setDemoBalance(Number(data.balance_koinu) / KOINU);
-      setCooldownLeft(
-        typeof data.cooldown_remaining === 'number'
-          ? data.cooldown_remaining
-          : cooldownSeconds
-      );
       setShowClaimEffect(true);
 
       window.setTimeout(() => {
@@ -723,35 +951,60 @@ export default function App() {
       }, 2200);
 
       const reward = Number(data.amount_koinu) / KOINU;
-      setClaimIsError(false);
-      setClaimStatus(`Claim successful! +${reward.toFixed(6)} DOGE`);
+      showClaimMessage(
+        `Claim successful! +${reward.toFixed(6)} DOGE`,
+        false
+      );
 
-      // A history refresh failure must not turn a successful claim into an error
-      try {
-        const historyData = await apiRequest('/api/claims');
-        setDemoClaims(historyData.claims || []);
+      // Re-sync balance/limits and history. A refresh failure must not turn
+      // a successful claim into an error.
+      const [historyResult, accountResult] = await Promise.allSettled([
+        apiRequest('/api/claims'),
+        apiRequest('/api/balance')
+      ]);
+
+      if (historyResult.status === 'fulfilled') {
+        setDemoClaims(historyResult.value.claims || []);
         setClaimsError('');
-      } catch (historyError) {
+      } else {
         setClaimsError(
-          historyError.message || 'Could not refresh claim history.'
+          historyResult.reason?.message || 'Could not refresh claim history.'
         );
       }
-    } catch (error) {
-      if (
-        error.status === 429 &&
-        typeof error.data?.cooldown_remaining === 'number'
-      ) {
-        setCooldownLeft(error.data.cooldown_remaining);
+
+      if (accountResult.status === 'fulfilled') {
+        applyAccountData(accountResult.value);
       }
+    } catch (error) {
+      const reason = error.data?.reason;
 
-      setClaimIsError(true);
-      setClaimStatus(error.message || 'Could not complete claim.');
+      if (error.status === 429 && reason === 'daily_limit') {
+        // Updates plan, daily_claims_used, daily_limit and remaining (0)
+        applyAccountData(error.data);
+        showClaimMessage(
+          'Daily claim limit reached. Your limit resets at 00:00 UTC.',
+          true
+        );
+      } else if (error.status === 429) {
+        // Cooldown (or any other 429): show the remaining time from the Worker
+        applyAccountData(error.data);
+        showClaimMessage(
+          isNum(error.data?.cooldown_remaining)
+            ? `Cooldown active. Please wait ${Math.max(0, Number(error.data.cooldown_remaining))}s before claiming again.`
+            : error.message || 'Please wait before claiming again.',
+          true
+        );
+      } else if (error.status === 503) {
+        showClaimMessage(
+          'The faucet reserve is currently unavailable. No reward was credited. Please try again later.',
+          true
+        );
+      } else {
+        showClaimMessage(error.message || 'Could not complete claim.', true);
+      }
     } finally {
+      claimInFlightRef.current = false;
       setIsClaiming(false);
-
-      window.setTimeout(() => {
-        setClaimStatus('');
-      }, 5000);
     }
   };
 
@@ -1180,6 +1433,30 @@ export default function App() {
     ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
     : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]';
 
+  // Plan helpers for the UI
+  const activeCatalogEntry = planName
+    ? PLAN_CATALOG.find(p => p.key === planName)
+    : null;
+
+  const canClaim =
+    apiReady &&
+    rulesReady &&
+    !isClaiming &&
+    cooldownLeft <= 0 &&
+    !dailyLimitReached;
+
+  const claimButtonLabel = isClaiming
+    ? 'Processing Claim...'
+    : !apiReady
+      ? 'Connecting...'
+      : !rulesReady
+        ? 'Loading claim rules...'
+        : dailyLimitReached
+          ? 'Daily Limit Reached'
+          : cooldownLeft > 0
+            ? `Available in ${cooldownLeft}s`
+            : `Claim ${claimAmount.toFixed(6)} DOGE (Demo)`;
+
   // LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
@@ -1280,17 +1557,17 @@ export default function App() {
                 </span>
               </div>
 
-              <span className="px-2 py-0.5 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-[10px] font-mono rounded-md uppercase">
+              <span className="hidden sm:inline-block px-2 py-0.5 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-[10px] font-mono rounded-md uppercase">
                 SECURE DEMO TESTNET
               </span>
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
-            <div className="bg-black border border-slate-800 px-4 py-2 rounded-xl flex items-center space-x-2">
+          <div className="flex items-center space-x-2 sm:space-x-4">
+            <div className="bg-black border border-slate-800 px-3 sm:px-4 py-2 rounded-xl flex items-center space-x-2">
               <Wallet className="w-4 h-4 text-[#F4A6C1]" />
               <span className="text-sm font-black font-mono text-white">
-                {demoBalance.toFixed(4)} DOGE
+                {demoBalance.toFixed(6)} DOGE
               </span>
               <span className="text-[10px] font-mono bg-[#F4A6C1]/10 text-[#F4A6C1] px-1.5 py-0.5 rounded border border-[#F4A6C1]/20">
                 DEMO
@@ -1322,6 +1599,15 @@ export default function App() {
             >
               <RefreshCw className="w-4 h-4" />
               <span>Doge Faucet</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('plans')}
+              className={tabBtnCls('plans')}
+            >
+              <Crown className="w-4 h-4" />
+              <span>Plans</span>
             </button>
 
             <button
@@ -1370,6 +1656,13 @@ export default function App() {
             </div>
 
             <div className="flex justify-between text-slate-400">
+              <span>Plan:</span>
+              <span className={`font-mono font-bold ${activeCatalogEntry ? activeCatalogEntry.accentText : 'text-slate-500'}`}>
+                {planName || (accountLoaded ? 'N/A' : '...')}
+              </span>
+            </div>
+
+            <div className="flex justify-between text-slate-400">
               <span>Ref Code:</span>
               <span className="text-[#F4A6C1] font-mono font-bold">
                 {refCode || '...'}
@@ -1379,12 +1672,21 @@ export default function App() {
         </aside>
 
         {/* MAIN CONTENT */}
-        <main className="flex-1">
+        <main className="flex-1 min-w-0">
 
           {apiError && (
             <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm flex items-start gap-2">
               <AlertTriangle className="w-5 h-5 shrink-0" />
-              <span>{apiError}</span>
+              <div>
+                <span>{apiError}</span>
+                <button
+                  type="button"
+                  onClick={() => setAuthSyncRetry(value => value + 1)}
+                  className="mt-3 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 font-bold text-xs block"
+                >
+                  Retry Database Connection
+                </button>
+              </div>
             </div>
           )}
 
@@ -1414,8 +1716,74 @@ export default function App() {
                   Crypto Faucet Claim (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Claim your simulated testnet reward of {claimAmount.toFixed(3)} DOGE every {cooldownSeconds} seconds.
+                  {rulesReady
+                    ? `${planName ? `Your ${planName} plan earns` : 'You earn'} a simulated testnet reward of ${claimAmount.toFixed(6)} DOGE per claim${
+                        cooldownSeconds === 0
+                          ? ' with no cooldown.'
+                          : ` every ${cooldownSeconds} seconds.`
+                      }`
+                    : 'Loading claim rules...'}
                 </p>
+              </div>
+
+              {accountError && !rulesReady && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Could not load your claim information: {accountError}.
+                    Claiming is disabled until it loads. Switch tabs or reload to retry.
+                  </span>
+                </div>
+              )}
+
+              {/* PLAN + LIMIT OVERVIEW (all values come from the Worker) */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatTile
+                  label="Active Plan"
+                  value={planName || (accountLoaded ? 'Not reported' : '...')}
+                  sub={accountLoaded && !planName ? 'Server did not send a plan' : undefined}
+                  valueCls={activeCatalogEntry ? activeCatalogEntry.accentText : 'text-white'}
+                />
+                <StatTile
+                  label="Reward / Claim"
+                  value={claimAmount !== null ? `${claimAmount.toFixed(6)}` : '...'}
+                  sub="DOGE (demo)"
+                />
+                <StatTile
+                  label="Cooldown"
+                  value={formatCooldown(cooldownSeconds)}
+                />
+                <StatTile
+                  label="Balance"
+                  value={`${demoBalance.toFixed(6)}`}
+                  sub="DOGE (demo)"
+                />
+                <StatTile
+                  label="Claims Used Today"
+                  value={dailyUsed !== null ? dailyUsed : (accountLoaded ? 'N/A' : '...')}
+                  sub={accountLoaded && dailyUsed === null ? 'Not reported by server' : undefined}
+                />
+                <StatTile
+                  label="Daily Limit"
+                  value={dailyLimit !== null ? dailyLimit : (accountLoaded ? 'N/A' : '...')}
+                  sub={accountLoaded && dailyLimit === null ? 'Not reported by server' : undefined}
+                />
+                <StatTile
+                  label="Claims Remaining"
+                  value={dailyRemaining !== null ? dailyRemaining : (accountLoaded ? 'N/A' : '...')}
+                  valueCls={
+                    dailyRemaining === null
+                      ? 'text-white'
+                      : dailyLimitReached
+                        ? 'text-red-400'
+                        : 'text-emerald-400'
+                  }
+                />
+                <StatTile
+                  label="Daily Reset (UTC)"
+                  value={formatDuration(resetSeconds)}
+                  sub="Resets at 00:00 UTC"
+                />
               </div>
 
               <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
@@ -1441,14 +1809,31 @@ export default function App() {
                     Simulated Testnet Reward
                   </span>
                   <div className="text-3xl font-black font-mono text-white mt-1">
-                    {claimAmount.toFixed(6)} DOGE
+                    {claimAmount !== null ? `${claimAmount.toFixed(6)} DOGE` : '...'}
                   </div>
                   <span className="inline-block mt-2 px-2 py-0.5 bg-[#F4A6C1]/10 text-[#F4A6C1] text-[10px] font-mono rounded border border-[#F4A6C1]/20 uppercase font-bold">
                     DEMO BALANCES ONLY
                   </span>
                 </div>
 
-                {cooldownLeft > 0 ? (
+                {/* DAILY LIMIT REACHED */}
+                {dailyLimitReached && (
+                  <div className="w-full max-w-sm bg-red-500/10 border border-red-500/20 p-4 rounded-xl space-y-1">
+                    <div className="flex items-center justify-center space-x-2 text-red-400 text-sm font-bold">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Daily claim limit reached</span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      {dailyUsed !== null && dailyLimit !== null
+                        ? `You used ${dailyUsed} of ${dailyLimit} claims today. `
+                        : ''}
+                      Claiming is available again in {formatDuration(resetSeconds)} (00:00 UTC).
+                    </p>
+                  </div>
+                )}
+
+                {/* COOLDOWN (only shown when the Worker reports remaining time) */}
+                {!dailyLimitReached && cooldownLeft > 0 && (
                   <div className="w-full max-w-sm bg-black border border-slate-800 p-4 rounded-xl space-y-2">
                     <div className="flex items-center justify-center space-x-2 text-[#F4A6C1] text-sm font-bold">
                       <Clock className="w-4 h-4 animate-spin" />
@@ -1461,30 +1846,30 @@ export default function App() {
                       <div
                         className="bg-[#F4A6C1] h-full transition-all duration-1000"
                         style={{
-                          width: `${Math.min(100, (cooldownLeft / cooldownSeconds) * 100)}%`
+                          width: `${
+                            cooldownSeconds && cooldownSeconds > 0
+                              ? Math.min(100, (cooldownLeft / cooldownSeconds) * 100)
+                              : 0
+                          }%`
                         }}
                       />
                     </div>
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleClaim}
-                    disabled={isClaiming || !apiReady}
-                    className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
-                  >
-                    {isClaiming
-                      ? <RefreshCw className="w-5 h-5 animate-spin" />
-                      : <CheckCircle className="w-5 h-5" />
-                    }
-
-                    <span>
-                      {isClaiming
-                        ? 'Processing Claim...'
-                        : `Claim ${claimAmount.toFixed(3)} DOGE (Demo)`}
-                    </span>
-                  </button>
                 )}
+
+                <button
+                  type="button"
+                  onClick={handleClaim}
+                  disabled={!canClaim}
+                  className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
+                >
+                  {isClaiming
+                    ? <RefreshCw className="w-5 h-5 animate-spin" />
+                    : <CheckCircle className="w-5 h-5" />
+                  }
+
+                  <span>{claimButtonLabel}</span>
+                </button>
 
                 {claimStatus && (
                   <p className={`text-sm font-bold font-['Space_Grotesk',sans-serif] ${
@@ -1553,6 +1938,183 @@ export default function App() {
             </div>
           )}
 
+          {/* PLANS */}
+          {activeTab === 'plans' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+
+              <div>
+                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
+                  Plans
+                </h2>
+                <p className="text-sm text-slate-400">
+                  Compare the three DogeDrip plans. Your active plan is determined by the server.
+                </p>
+              </div>
+
+              {accountError && !accountLoaded && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Could not load your current plan: {accountError}
+                  </span>
+                </div>
+              )}
+
+              {accountLoaded && !planName && (
+                <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    The server did not report an active plan, so no plan is marked as current.
+                    Your claims still use the reward and cooldown returned by the server.
+                  </span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {PLAN_CATALOG.map(p => {
+                  const isActive = planName !== null && planName === p.key;
+                  const Icon = p.icon;
+
+                  // Active plan: show what the Worker reported. Other plans: catalog (display only).
+                  const reward =
+                    isActive && claimAmount !== null
+                      ? claimAmount
+                      : p.amountKoinu / KOINU;
+                  const cooldown =
+                    isActive && cooldownSeconds !== null
+                      ? cooldownSeconds
+                      : p.cooldownSeconds;
+                  const limit =
+                    isActive && dailyLimit !== null
+                      ? dailyLimit
+                      : p.dailyLimit;
+
+                  let claimsTodayText = '—';
+
+                  if (isActive) {
+                    claimsTodayText =
+                      dailyUsed !== null && dailyRemaining !== null
+                        ? `${dailyUsed} used · ${dailyRemaining} left`
+                        : 'Not reported';
+                  }
+
+                  let statusText = 'Not active';
+
+                  if (isActive) {
+                    statusText = 'Active';
+                  } else if (accountLoaded && !planName) {
+                    statusText = 'Unknown';
+                  } else if (p.key === 'FREE') {
+                    statusText = 'Included';
+                  }
+
+                  return (
+                    <div
+                      key={p.key}
+                      className={`relative flex flex-col bg-black rounded-2xl p-6 border-2 transition-all ${
+                        isActive ? p.activeCardCls : p.cardCls
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className={`p-3 rounded-xl ${p.iconWrapCls}`}>
+                          <Icon className="w-6 h-6" />
+                        </div>
+
+                        {isActive ? (
+                          <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-black uppercase font-mono ${p.badgeCls}`}>
+                            <CheckCircle className="w-3 h-3" />
+                            Current Plan
+                          </span>
+                        ) : !accountLoaded ? (
+                          <span className="px-2 py-1 rounded-md text-[10px] font-mono uppercase text-slate-500 border border-slate-800">
+                            Checking...
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <h3 className={`text-lg font-black uppercase tracking-wider font-['Space_Grotesk',sans-serif] ${p.accentText}`}>
+                        {p.label}
+                      </h3>
+
+                      <div className="mt-2 mb-5">
+                        <span className="text-3xl font-black font-mono text-white">
+                          {p.price}
+                        </span>
+                        <span className="text-xs text-slate-500 ml-2">
+                          {p.priceNote}
+                        </span>
+                      </div>
+
+                      <ul className="space-y-3 text-sm flex-1">
+                        <li className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                          <span className="text-slate-400">Reward per claim</span>
+                          <span className="font-mono font-black text-white">
+                            {reward.toFixed(6)} DOGE
+                          </span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                          <span className="text-slate-400">Cooldown</span>
+                          <span className="font-mono font-black text-white">
+                            {cooldown === 0 ? 'None' : `${cooldown}s`}
+                          </span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                          <span className="text-slate-400">Daily claim limit</span>
+                          <span className="font-mono font-black text-white">
+                            {limit}
+                          </span>
+                        </li>
+                        <li className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                          <span className="text-slate-400">Claims today</span>
+                          <span className="font-mono font-black text-white">
+                            {claimsTodayText}
+                          </span>
+                        </li>
+                        <li className="flex items-center justify-between pb-1">
+                          <span className="text-slate-400">Status</span>
+                          <span className={`font-mono font-black ${isActive ? p.accentText : 'text-slate-500'}`}>
+                            {statusText}
+                          </span>
+                        </li>
+                      </ul>
+
+                      <div className="mt-6">
+                        {p.key === 'FREE' ? (
+                          <div className="w-full text-center py-3 rounded-xl border border-slate-800 text-xs font-bold text-slate-400 font-['Space_Grotesk',sans-serif]">
+                            {isActive ? 'Your current plan' : 'Free for everyone'}
+                          </div>
+                        ) : isActive ? (
+                          <div className={`w-full text-center py-3 rounded-xl text-xs font-black font-['Space_Grotesk',sans-serif] ${p.badgeCls}`}>
+                            Your current plan
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled
+                            aria-disabled="true"
+                            className="w-full bg-slate-900 border border-slate-800 text-slate-500 font-black py-3 rounded-xl cursor-not-allowed flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide"
+                          >
+                            <Lock className="w-4 h-4" />
+                            <span>Coming Soon</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="p-4 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
+                <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  Payment processing is not available yet, so Premium and VIP cannot be
+                  purchased right now. Your plan is set and verified by the server; it
+                  cannot be changed from this page. Daily claim limits reset at 00:00 UTC.
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* WALLET */}
           {activeTab === 'wallet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
@@ -1562,7 +2124,9 @@ export default function App() {
                   Wallet & Withdrawals (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Minimum withdrawal is {minWithdrawal.toFixed(1)} DEMO DOGE. No real payments are sent.
+                  Minimum withdrawal is {minWithdrawal.toFixed(1)} DEMO DOGE. Withdrawals are
+                  recorded as requests in the internal DEMO ledger. No real payments or blockchain
+                  transactions are sent.
                 </p>
               </div>
 
@@ -1574,7 +2138,7 @@ export default function App() {
                       Available Demo Balance
                     </span>
                     <div className="text-3xl font-black font-mono text-white mt-2">
-                      {demoBalance.toFixed(4)} DOGE
+                      {demoBalance.toFixed(6)} DOGE
                     </div>
                   </div>
 
