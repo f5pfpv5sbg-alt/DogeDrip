@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Shield,
   Wallet,
@@ -42,7 +42,7 @@ const firebaseConfig = {
   appId: "1:839487252990:web:760ad35b5b66d611bab8af"
 };
 
-// ADMIN ACCOUNTS
+// ADMIN ACCOUNTS (only controls dashboard visibility; the Worker enforces access)
 const ADMIN_EMAILS = {
   lilac: "giselapeposhi29@icloud.com",
   blue: "celamielidon26@gmail.com"
@@ -57,35 +57,54 @@ const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 
+const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
+const KOINU = 100000000;
+
+const INPUT_CLS =
+  "w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors";
+
+const PRIMARY_BTN =
+  "w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide";
+
+const LABEL_CLS =
+  "block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1";
+
+// Parses numbers, "YYYY-MM-DD HH:MM:SS" (UTC from D1) and ISO strings safely.
+const parseServerDate = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+
+  if (typeof value === 'number') {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const s = String(value).trim();
+  const iso = s.includes('T') ? s : s.replace(' ', 'T');
+  const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
+  const date = new Date(hasTimezone ? iso : iso + 'Z');
+
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 const formatDate = (value) => {
-  if (!value) return 'N/A';
-
-  const date = typeof value === 'number'
-    ? new Date(value)
-    : new Date(
-        String(value).includes('T')
-          ? value
-          : String(value).replace(' ', 'T') + 'Z'
-      );
-
-  return Number.isNaN(date.getTime())
-    ? 'N/A'
-    : date.toLocaleString();
+  const date = parseServerDate(value);
+  return date ? date.toLocaleString() : 'N/A';
 };
 
 const mapWithdrawal = (w) => ({
   id: w.id,
   userId: w.uid || w.userId || '',
   email: w.email || '',
-  amount: Number(w.amount_koinu) / 100000000,
+  amount: Number(w.amount_koinu) / KOINU,
   address: w.wallet_address || w.address || '',
   status: w.status || 'pending',
-  timestamp: w.created_at
-    ? new Date(String(w.created_at).replace(' ', 'T') + 'Z').getTime()
-    : Date.now()
+  timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
 export default function App() {
+  // NAVIGATION
+  const [activeTab, setActiveTab] = useState('faucet');
+
   // AUTH STATE
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -93,6 +112,9 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login');
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
+
+  // Referral code of the pending registration (read by the auth sync)
+  const pendingReferralRef = useRef(null);
 
   // AUTH FORM
   const [usernameInput, setUsernameInput] = useState('');
@@ -103,12 +125,18 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
+  // SETTINGS FROM WORKER (with safe defaults)
+  const [cooldownSeconds, setCooldownSeconds] = useState(45);
+  const [claimAmount, setClaimAmount] = useState(0.001);
+  const [minWithdrawal, setMinWithdrawal] = useState(1);
+
   // FAUCET
   const [demoBalance, setDemoBalance] = useState(0);
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimsError, setClaimsError] = useState('');
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [claimStatus, setClaimStatus] = useState('');
+  const [claimIsError, setClaimIsError] = useState(false);
   const [showClaimEffect, setShowClaimEffect] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [demoClaims, setDemoClaims] = useState([]);
@@ -120,13 +148,19 @@ export default function App() {
   const [withdrawMsg, setWithdrawMsg] = useState('');
   const [isWithdrawing, setIsWithdrawing] = useState(false);
 
+  // REFERRALS
+  const [refCode, setRefCode] = useState('');
+  const [referralStats, setReferralStats] = useState(null);
+  const [referralLoading, setReferralLoading] = useState(false);
+  const [referralError, setReferralError] = useState('');
+
   // ADMIN
   const [adminWithdrawals, setAdminWithdrawals] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
   const [adminActionLoading, setAdminActionLoading] = useState(null);
 
-  // ADMIN IDENTIFICATION
+  // ADMIN IDENTIFICATION (visibility only)
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
 
   const adminTheme =
@@ -137,6 +171,7 @@ export default function App() {
         : null;
 
   const isDemoAdmin = Boolean(adminTheme);
+  const isBlueAdmin = adminTheme === 'blue';
 
   // API HELPER
   const apiRequest = async (path, options = {}) => {
@@ -146,19 +181,30 @@ export default function App() {
 
     const token = await firebaseUser.getIdToken();
 
-    const response = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers: {
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-        ...options.headers,
-        Authorization: `Bearer ${token}`
-      }
-    });
+    let response;
+
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers: {
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...options.headers,
+          Authorization: `Bearer ${token}`
+        }
+      });
+    } catch {
+      throw new Error('Network error. Check your connection and try again.');
+    }
 
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || data.success === false) {
-      throw new Error(data.error || `Request failed (${response.status})`);
+      const err = new Error(
+        data.error || data.message || `Request failed (${response.status})`
+      );
+      err.status = response.status;
+      err.data = data;
+      throw err;
     }
 
     return data;
@@ -190,22 +236,20 @@ export default function App() {
         setDemoWithdrawals([]);
         setAdminWithdrawals([]);
         setCooldownLeft(0);
+        setRefCode('');
+        setReferralStats(null);
         return;
       }
 
       setAuthLoading(true);
 
+      // Read synchronously: handleRegister sets this before creating the account.
+      const referredBy = pendingReferralRef.current;
+
       const fallbackProfile = {
         uid: user.uid,
         email: user.email,
         username: user.email ? user.email.split('@')[0] : 'User',
-        refCode: 'DOGE' + (
-          Math.abs(
-            user.uid.split('').reduce(
-              (acc, char) => acc + char.charCodeAt(0), 0
-            ) % 9000
-          ) + 1000
-        ),
         createdAt: Date.now()
       };
 
@@ -217,7 +261,8 @@ export default function App() {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
-          }
+          },
+          body: JSON.stringify({ referred_by: referredBy || null })
         });
 
         const syncData = await syncResponse.json().catch(() => ({}));
@@ -230,6 +275,8 @@ export default function App() {
 
         if (!isMounted) return;
 
+        pendingReferralRef.current = null;
+        setRefCode(syncData.ref_code || '');
         setApiReady(true);
       } catch (error) {
         console.error('D1 sync error:', error);
@@ -253,8 +300,7 @@ export default function App() {
           setUserProfile({
             ...fallbackProfile,
             ...data,
-            username: data.username || fallbackProfile.username,
-            refCode: data.refCode || fallbackProfile.refCode
+            username: data.username || fallbackProfile.username
           });
         } else {
           setUserProfile(fallbackProfile);
@@ -278,7 +324,7 @@ export default function App() {
     };
   }, []);
 
-  // LOAD BALANCE FROM D1
+  // LOAD BALANCE + SETTINGS FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady) return;
 
@@ -290,15 +336,30 @@ export default function App() {
 
         if (cancelled) return;
 
-        setDemoBalance(Number(data.balance_koinu || 0) / 100000000);
+        setDemoBalance(Number(data.balance_koinu || 0) / KOINU);
 
-        if (data.last_claim_at) {
-          const lastClaim = new Date(
-            String(data.last_claim_at).replace(' ', 'T') + 'Z'
-          ).getTime();
+        if (Number(data.cooldown_seconds) > 0) {
+          setCooldownSeconds(Number(data.cooldown_seconds));
+        }
 
-          const elapsed = Math.floor((Date.now() - lastClaim) / 1000);
-          setCooldownLeft(Math.max(0, 45 - elapsed));
+        if (Number(data.claim_amount_koinu) > 0) {
+          setClaimAmount(Number(data.claim_amount_koinu) / KOINU);
+        }
+
+        if (Number(data.min_withdrawal_koinu) > 0) {
+          setMinWithdrawal(Number(data.min_withdrawal_koinu) / KOINU);
+        }
+
+        if (typeof data.cooldown_remaining === 'number') {
+          setCooldownLeft(Math.max(0, data.cooldown_remaining));
+        } else if (data.last_claim_at) {
+          // Fallback for an older Worker without cooldown_remaining
+          const lastClaim = parseServerDate(data.last_claim_at);
+
+          if (lastClaim) {
+            const elapsed = Math.floor((Date.now() - lastClaim.getTime()) / 1000);
+            setCooldownLeft(Math.max(0, 45 - elapsed));
+          }
         } else {
           setCooldownLeft(0);
         }
@@ -381,6 +442,49 @@ export default function App() {
     };
   }, [firebaseUser, apiReady]);
 
+  // LOAD REFERRAL STATS FROM D1 (when the Referral tab is opened)
+  useEffect(() => {
+    if (!firebaseUser || !apiReady) {
+      setReferralStats(null);
+      return;
+    }
+
+    if (activeTab !== 'referrals') return;
+
+    let cancelled = false;
+
+    const loadReferrals = async () => {
+      setReferralLoading(true);
+      setReferralError('');
+
+      try {
+        const data = await apiRequest('/api/referrals');
+
+        if (cancelled) return;
+
+        setReferralStats({ invited: Number(data.invited_count || 0) });
+
+        if (data.ref_code) {
+          setRefCode(data.ref_code);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setReferralError(error.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setReferralLoading(false);
+        }
+      }
+    };
+
+    loadReferrals();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady, activeTab]);
+
   // LOAD ADMIN WITHDRAWALS FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin) {
@@ -461,6 +565,7 @@ export default function App() {
 
     const trimmedUsername = usernameInput.trim();
     const trimmedEmail = emailInput.trim().toLowerCase();
+    const referralCode = regRefCode.trim().toUpperCase();
 
     if (!trimmedUsername || !trimmedEmail || !passwordInput) {
       setAuthError('Please fill in all required fields.');
@@ -474,7 +579,42 @@ export default function App() {
 
     setIsLoadingAuth(true);
 
+    // Validate the referral code with the Worker before creating the account
+    if (referralCode) {
+      if (!REF_CODE_REGEX.test(referralCode)) {
+        setAuthError('Invalid referral code format.');
+        setIsLoadingAuth(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `${API_URL}/api/referral/validate?code=${encodeURIComponent(referralCode)}`
+        );
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok || data.success === false) {
+          throw new Error('Validation request failed');
+        }
+
+        if (!data.valid) {
+          setAuthError('Referral code not found.');
+          setIsLoadingAuth(false);
+          return;
+        }
+      } catch {
+        setAuthError(
+          'Could not verify the referral code. Try again or leave it empty.'
+        );
+        setIsLoadingAuth(false);
+        return;
+      }
+    }
+
     try {
+      // Must be set before the account exists: the auth listener syncs immediately.
+      pendingReferralRef.current = referralCode || null;
+
       const credential = await createUserWithEmailAndPassword(
         auth,
         trimmedEmail,
@@ -482,14 +622,12 @@ export default function App() {
       );
 
       const uid = credential.user.uid;
-      const newRefCode = 'DOGE' + Math.floor(1000 + Math.random() * 9000);
 
       const localProfile = {
         uid,
         username: trimmedUsername,
         email: trimmedEmail,
-        refCode: newRefCode,
-        referredBy: regRefCode.trim().toUpperCase() || null,
+        referredBy: referralCode || null,
         createdAt: Date.now()
       };
 
@@ -507,6 +645,7 @@ export default function App() {
       setPasswordInput('');
       setRegRefCode('');
     } catch (error) {
+      pendingReferralRef.current = null;
       setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
@@ -553,11 +692,13 @@ export default function App() {
     if (cooldownLeft > 0 || isClaiming) return;
 
     if (!firebaseUser || !apiReady) {
+      setClaimIsError(true);
       setClaimStatus('Database is not ready. Please try again.');
       return;
     }
 
     setIsClaiming(true);
+    setClaimIsError(false);
     setClaimStatus('Processing claim...');
 
     try {
@@ -565,21 +706,45 @@ export default function App() {
         method: 'POST'
       });
 
-      setDemoBalance(Number(data.balance_koinu) / 100000000);
-      setCooldownLeft(45);
+      if (Number(data.cooldown_seconds) > 0) {
+        setCooldownSeconds(Number(data.cooldown_seconds));
+      }
+
+      setDemoBalance(Number(data.balance_koinu) / KOINU);
+      setCooldownLeft(
+        typeof data.cooldown_remaining === 'number'
+          ? data.cooldown_remaining
+          : cooldownSeconds
+      );
       setShowClaimEffect(true);
 
       window.setTimeout(() => {
         setShowClaimEffect(false);
       }, 2200);
 
-      const historyData = await apiRequest('/api/claims');
-      setDemoClaims(historyData.claims || []);
-      setClaimsError('');
-
-      const reward = Number(data.amount_koinu) / 100000000;
+      const reward = Number(data.amount_koinu) / KOINU;
+      setClaimIsError(false);
       setClaimStatus(`Claim successful! +${reward.toFixed(6)} DOGE`);
+
+      // A history refresh failure must not turn a successful claim into an error
+      try {
+        const historyData = await apiRequest('/api/claims');
+        setDemoClaims(historyData.claims || []);
+        setClaimsError('');
+      } catch (historyError) {
+        setClaimsError(
+          historyError.message || 'Could not refresh claim history.'
+        );
+      }
     } catch (error) {
+      if (
+        error.status === 429 &&
+        typeof error.data?.cooldown_remaining === 'number'
+      ) {
+        setCooldownLeft(error.data.cooldown_remaining);
+      }
+
+      setClaimIsError(true);
       setClaimStatus(error.message || 'Could not complete claim.');
     } finally {
       setIsClaiming(false);
@@ -602,8 +767,10 @@ export default function App() {
 
     const amount = Number(withdrawAmount);
 
-    if (!Number.isFinite(amount) || amount < 1) {
-      setWithdrawMsg('Minimum withdrawal is 1.0 DEMO DOGE.');
+    if (!Number.isFinite(amount) || amount < minWithdrawal) {
+      setWithdrawMsg(
+        `Minimum withdrawal is ${minWithdrawal.toFixed(1)} DEMO DOGE.`
+      );
       return;
     }
 
@@ -612,7 +779,7 @@ export default function App() {
       return;
     }
 
-    const amountKoinu = Math.round(amount * 100000000);
+    const amountKoinu = Math.round(amount * KOINU);
 
     if (!Number.isSafeInteger(amountKoinu)) {
       setWithdrawMsg('Invalid withdrawal amount.');
@@ -635,7 +802,7 @@ export default function App() {
         apiRequest('/api/withdrawals')
       ]);
 
-      setDemoBalance(Number(balanceData.balance_koinu) / 100000000);
+      setDemoBalance(Number(balanceData.balance_koinu) / KOINU);
       setDemoWithdrawals(
         (historyData.withdrawals || []).map(mapWithdrawal)
       );
@@ -653,11 +820,15 @@ export default function App() {
 
   // REFRESH ADMIN WITHDRAWALS
   const refreshAdminWithdrawals = async () => {
-    const data = await apiRequest('/api/admin/withdrawals');
+    try {
+      const data = await apiRequest('/api/admin/withdrawals');
 
-    setAdminWithdrawals(
-      (data.withdrawals || []).map(mapWithdrawal)
-    );
+      setAdminWithdrawals(
+        (data.withdrawals || []).map(mapWithdrawal)
+      );
+    } catch (error) {
+      setAdminError(error.message || 'Could not refresh withdrawals.');
+    }
   };
 
   // ADMIN APPROVE
@@ -678,6 +849,7 @@ export default function App() {
       await refreshAdminWithdrawals();
     } catch (error) {
       setAdminError(error.message || 'Could not approve withdrawal.');
+      await refreshAdminWithdrawals();
     } finally {
       setAdminActionLoading(null);
     }
@@ -706,12 +878,13 @@ export default function App() {
         apiRequest('/api/withdrawals')
       ]);
 
-      setDemoBalance(Number(balanceData.balance_koinu) / 100000000);
+      setDemoBalance(Number(balanceData.balance_koinu) / KOINU);
       setDemoWithdrawals(
         (historyData.withdrawals || []).map(mapWithdrawal)
       );
     } catch (error) {
       setAdminError(error.message || 'Could not reject withdrawal.');
+      await refreshAdminWithdrawals();
     } finally {
       setAdminActionLoading(null);
     }
@@ -724,7 +897,8 @@ export default function App() {
         Loading account...
       </div>
     );
-  } 
+  }
+
   // UNAUTHENTICATED VIEW
   if (!firebaseUser || !userProfile) {
     return (
@@ -812,16 +986,14 @@ export default function App() {
           {authMode === 'login' && (
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                  Email Address
-                </label>
+                <label className={LABEL_CLS}>Email Address</label>
                 <input
                   type="email"
                   required
                   value={emailInput}
                   onChange={(e) => setEmailInput(e.target.value)}
                   placeholder="name@example.com"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                  className={INPUT_CLS}
                 />
               </div>
 
@@ -850,14 +1022,14 @@ export default function App() {
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                  className={INPUT_CLS}
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isLoadingAuth}
-                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                className={PRIMARY_BTN}
               >
                 <span>
                   {isLoadingAuth
@@ -871,49 +1043,43 @@ export default function App() {
           {authMode === 'register' && (
             <form onSubmit={handleRegister} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                  Username
-                </label>
+                <label className={LABEL_CLS}>Username</label>
                 <input
                   type="text"
                   required
                   value={usernameInput}
                   onChange={(e) => setUsernameInput(e.target.value)}
                   placeholder="YourUsername"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                  className={INPUT_CLS}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                  Email Address
-                </label>
+                <label className={LABEL_CLS}>Email Address</label>
                 <input
                   type="email"
                   required
                   value={emailInput}
                   onChange={(e) => setEmailInput(e.target.value)}
                   placeholder="name@example.com"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                  className={INPUT_CLS}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                  Password
-                </label>
+                <label className={LABEL_CLS}>Password</label>
                 <input
                   type="password"
                   required
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
                   placeholder="At least 6 characters"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                  className={INPUT_CLS}
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
                   <span>Referral Code (Optional)</span>
                   <span className="text-[10px] text-[#F4A6C1] font-normal">
                     Demo Sponsor
@@ -924,15 +1090,15 @@ export default function App() {
                   type="text"
                   value={regRefCode}
                   onChange={(e) => setRegRefCode(e.target.value)}
-                  placeholder="e.g. DOGE1234"
-                  className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors font-mono uppercase"
+                  placeholder="e.g. DOGEA7K9QX"
+                  className={`${INPUT_CLS} font-mono uppercase`}
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isLoadingAuth}
-                className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                className={PRIMARY_BTN}
               >
                 <UserPlus className="w-4 h-4" />
                 <span>
@@ -960,23 +1126,21 @@ export default function App() {
 
               <form onSubmit={handleForgotPassword} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                    Email Address
-                  </label>
+                  <label className={LABEL_CLS}>Email Address</label>
                   <input
                     type="email"
                     required
                     value={emailInput}
                     onChange={(e) => setEmailInput(e.target.value)}
                     placeholder="name@example.com"
-                    className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] transition-colors"
+                    className={INPUT_CLS}
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={isLoadingAuth}
-                  className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 font-['Space_Grotesk',sans-serif] tracking-wide"
+                  className={PRIMARY_BTN}
                 >
                   <span>
                     {isLoadingAuth ? 'Sending Link...' : 'Send Reset Link'}
@@ -1002,7 +1166,21 @@ export default function App() {
       </div>
     );
   }
-// LOGGED-IN DASHBOARD
+
+  // helper for sidebar buttons
+  const tabBtnCls = (tab) =>
+    `w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
+      activeTab === tab
+        ? 'bg-[#F4A6C1] text-black font-black shadow-lg shadow-[#F4A6C1]/20'
+        : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+    }`;
+
+  const adminAccentText = isBlueAdmin ? 'text-blue-400' : 'text-[#A78BFA]';
+  const adminActionBtn = isBlueAdmin
+    ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
+    : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]';
+
+  // LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
 
@@ -1140,11 +1318,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('faucet')}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
-                activeTab === 'faucet'
-                  ? 'bg-[#F4A6C1] text-black font-black shadow-lg shadow-[#F4A6C1]/20'
-                  : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-              }`}
+              className={tabBtnCls('faucet')}
             >
               <RefreshCw className="w-4 h-4" />
               <span>Doge Faucet</span>
@@ -1153,11 +1327,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('wallet')}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
-                activeTab === 'wallet'
-                  ? 'bg-[#F4A6C1] text-black font-black shadow-lg shadow-[#F4A6C1]/20'
-                  : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-              }`}
+              className={tabBtnCls('wallet')}
             >
               <Wallet className="w-4 h-4" />
               <span>Wallet & Withdraw</span>
@@ -1166,11 +1336,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveTab('referrals')}
-              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
-                activeTab === 'referrals'
-                  ? 'bg-[#F4A6C1] text-black font-black shadow-lg shadow-[#F4A6C1]/20'
-                  : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-              }`}
+              className={tabBtnCls('referrals')}
             >
               <Users className="w-4 h-4" />
               <span>Referral Program</span>
@@ -1180,11 +1346,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setActiveTab('admin')}
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
-                  activeTab === 'admin'
-                    ? 'bg-[#F4A6C1] text-black font-black shadow-lg shadow-[#F4A6C1]/20'
-                    : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-                }`}
+                className={tabBtnCls('admin')}
               >
                 <Shield className="w-4 h-4" />
                 <span>Admin Dashboard</span>
@@ -1210,7 +1372,7 @@ export default function App() {
             <div className="flex justify-between text-slate-400">
               <span>Ref Code:</span>
               <span className="text-[#F4A6C1] font-mono font-bold">
-                {userProfile.refCode}
+                {refCode || '...'}
               </span>
             </div>
           </div>
@@ -1225,23 +1387,23 @@ export default function App() {
               <span>{apiError}</span>
             </div>
           )}
-          
-{/* TOP ADVERTISEMENT */}
-<div className="mb-6 w-full">
-  <div className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden">
-    <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">
-      Advertisement
-    </span>
 
-    <p className="text-sm md:text-base font-bold text-white">
-      Advertise Your Brand on DogeDrip
-    </p>
+          {/* TOP ADVERTISEMENT */}
+          <div className="mb-6 w-full">
+            <div className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden">
+              <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">
+                Advertisement
+              </span>
 
-    <p className="text-xs text-slate-500 mt-1">
-      Reach crypto users and promote your project here.
-    </p>
-  </div>
-</div>
+              <p className="text-sm md:text-base font-bold text-white">
+                Advertise Your Brand on DogeDrip
+              </p>
+
+              <p className="text-xs text-slate-500 mt-1">
+                Reach crypto users and promote your project here.
+              </p>
+            </div>
+          </div>
 
           {/* FAUCET */}
           {activeTab === 'faucet' && (
@@ -1252,7 +1414,7 @@ export default function App() {
                   Crypto Faucet Claim (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Claim your simulated testnet reward of 0.001 DOGE every 45 seconds.
+                  Claim your simulated testnet reward of {claimAmount.toFixed(3)} DOGE every {cooldownSeconds} seconds.
                 </p>
               </div>
 
@@ -1279,7 +1441,7 @@ export default function App() {
                     Simulated Testnet Reward
                   </span>
                   <div className="text-3xl font-black font-mono text-white mt-1">
-                    0.001000 DOGE
+                    {claimAmount.toFixed(6)} DOGE
                   </div>
                   <span className="inline-block mt-2 px-2 py-0.5 bg-[#F4A6C1]/10 text-[#F4A6C1] text-[10px] font-mono rounded border border-[#F4A6C1]/20 uppercase font-bold">
                     DEMO BALANCES ONLY
@@ -1299,7 +1461,7 @@ export default function App() {
                       <div
                         className="bg-[#F4A6C1] h-full transition-all duration-1000"
                         style={{
-                          width: `${(cooldownLeft / 45) * 100}%`
+                          width: `${Math.min(100, (cooldownLeft / cooldownSeconds) * 100)}%`
                         }}
                       />
                     </div>
@@ -1319,13 +1481,15 @@ export default function App() {
                     <span>
                       {isClaiming
                         ? 'Processing Claim...'
-                        : 'Claim 0.001 DOGE (Demo)'}
+                        : `Claim ${claimAmount.toFixed(3)} DOGE (Demo)`}
                     </span>
                   </button>
                 )}
 
                 {claimStatus && (
-                  <p className="text-sm font-bold text-emerald-400 font-['Space_Grotesk',sans-serif]">
+                  <p className={`text-sm font-bold font-['Space_Grotesk',sans-serif] ${
+                    claimIsError ? 'text-red-400' : 'text-emerald-400'
+                  }`}>
                     {claimStatus}
                   </p>
                 )}
@@ -1373,7 +1537,7 @@ export default function App() {
                             </td>
                             <td className="py-3 pr-4 text-emerald-400 font-bold">
                               +{(
-                                Number(claim.amount_koinu) / 100000000
+                                Number(claim.amount_koinu) / KOINU
                               ).toFixed(6)} DOGE
                             </td>
                             <td className="py-3 text-slate-400">
@@ -1398,7 +1562,7 @@ export default function App() {
                   Wallet & Withdrawals (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Minimum withdrawal is 1.0 DEMO DOGE. No real payments are sent.
+                  Minimum withdrawal is {minWithdrawal.toFixed(1)} DEMO DOGE. No real payments are sent.
                 </p>
               </div>
 
@@ -1417,7 +1581,7 @@ export default function App() {
                   <div className="mt-6 pt-6 border-t border-slate-800 text-xs text-slate-400 flex justify-between font-bold">
                     <span>Minimum Testnet Payout:</span>
                     <span className="text-white font-mono font-black">
-                      1.0 DOGE
+                      {minWithdrawal.toFixed(1)} DOGE
                     </span>
                   </div>
                 </div>
@@ -1431,31 +1595,27 @@ export default function App() {
                   </h3>
 
                   <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Amount (DOGE)
-                    </label>
+                    <label className={LABEL_CLS}>Amount (DOGE)</label>
                     <input
                       type="number"
                       step="0.001"
-                      min="1"
+                      min={minWithdrawal}
                       required
                       value={withdrawAmount}
                       onChange={(e) => setWithdrawAmount(e.target.value)}
-                      className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] font-mono font-bold"
+                      className={`${INPUT_CLS} font-mono font-bold`}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Dogecoin Wallet Address
-                    </label>
+                    <label className={LABEL_CLS}>Dogecoin Wallet Address</label>
                     <input
                       type="text"
                       required
                       value={withdrawAddress}
                       onChange={(e) => setWithdrawAddress(e.target.value)}
                       placeholder="D..."
-                      className="w-full bg-black border border-slate-800 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-[#F4A6C1] focus:ring-1 focus:ring-[#F4A6C1] font-mono font-bold"
+                      className={`${INPUT_CLS} font-mono font-bold`}
                     />
                   </div>
 
@@ -1536,7 +1696,7 @@ export default function App() {
             </div>
           )}
 
-                {/* REFERRALS */}
+          {/* REFERRALS */}
           {activeTab === 'referrals' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
 
@@ -1545,9 +1705,16 @@ export default function App() {
                   Referral Program (DEMO)
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Share your testnet referral code for simulated bonuses.
+                  Share your referral code. Invited users are counted from real registrations.
                 </p>
               </div>
+
+              {referralError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{referralError}</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
@@ -1556,7 +1723,7 @@ export default function App() {
                     Your Referral Code
                   </span>
                   <div className="text-2xl font-black font-mono text-[#F4A6C1] mt-1">
-                    {userProfile.refCode}
+                    {refCode || '...'}
                   </div>
                 </div>
 
@@ -1565,253 +1732,243 @@ export default function App() {
                     Invited Users
                   </span>
                   <div className="text-2xl font-black font-mono text-white mt-1">
-                    0
+                    {referralLoading
+                      ? '...'
+                      : referralStats
+                        ? referralStats.invited
+                        : '-'}
                   </div>
                 </div>
 
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Demo Commission
+                    Commission
                   </span>
-                  <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                    0.0000 DOGE
+                  <div className="text-2xl font-black font-mono text-slate-500 mt-1">
+                    Not enabled
                   </div>
                 </div>
               </div>
 
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
                 <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
-                  How Referrals Work (Simulated)
+                  How Referrals Work
                 </h3>
 
                 <ul className="text-sm text-slate-400 space-y-2 list-disc list-inside font-medium">
                   <li>
                     Share your code{' '}
                     <strong className="text-[#F4A6C1] font-mono font-black">
-                      {userProfile.refCode}
+                      {refCode || '...'}
                     </strong>{' '}
                     with others.
                   </li>
                   <li>
-                    Referral tracking is currently a demo feature.
+                    Each new account that registers with your code counts as one invited user.
+                  </li>
+                  <li>
+                    Referral commissions are not enabled yet.
                   </li>
                 </ul>
               </div>
             </div>
-           )}
-              
+          )}
 
-{/* ADMIN DASHBOARD */}
-{activeTab === 'admin' && isDemoAdmin && (
-  <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+          {/* ADMIN DASHBOARD */}
+          {activeTab === 'admin' && isDemoAdmin && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
 
-    <div>
-      <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-        Admin Dashboard
-      </h2>
+              <div>
+                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
+                  Admin Dashboard
+                </h2>
 
-      {firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com' && (
-        <p className="text-blue-400 text-sm font-bold mt-2">
-          I love you
-        </p>
-      )}
+                {isBlueAdmin && (
+                  <p className="text-blue-400 text-sm font-bold mt-2">
+                    I love you
+                  </p>
+                )}
 
-      <p className="text-sm text-slate-400 mt-2">
-        Manage and review withdrawal requests stored in the D1 database.
-      </p>
-    </div>
+                <p className="text-sm text-slate-400 mt-2">
+                  Manage and review withdrawal requests stored in the D1 database.
+                </p>
+              </div>
 
-    <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
-      firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-        ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-        : 'bg-[#A78BFA]/10 border-[#A78BFA]/20 text-[#A78BFA]'
-    }`}>
-      <Lock className="w-4 h-4 shrink-0 mt-0.5" />
-      <span>
-        Admin actions are verified by the Worker using the
-        authenticated Firebase account and the admin role stored
-        in D1. Frontend email checks only control dashboard visibility.
-      </span>
-    </div>
+              <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
+                isBlueAdmin
+                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                  : 'bg-[#A78BFA]/10 border-[#A78BFA]/20 text-[#A78BFA]'
+              }`}>
+                <Lock className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  Admin actions are verified by the Worker using the
+                  authenticated Firebase account and the admin role stored
+                  in D1. Frontend email checks only control dashboard visibility.
+                </span>
+              </div>
 
-    {!apiReady && (
-      <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
-        Database connection is not ready.
-      </div>
-    )}
+              {!apiReady && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                  Database connection is not ready.
+                </div>
+              )}
 
-    {adminError && (
-      <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
-        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-        <span>{adminError}</span>
-      </div>
-    )}
+              {adminError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{adminError}</span>
+                </div>
+              )}
 
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
-      <div className="bg-black border border-slate-800 rounded-2xl p-5">
-        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-          Total Pending
-        </span>
-        <div className={`text-2xl font-black font-mono mt-1 ${
-          firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-            ? 'text-blue-400'
-            : 'text-[#A78BFA]'
-        }`}>
-          {adminWithdrawals.filter(w => w.status === 'pending').length}
-        </div>
-      </div>
+                <div className="bg-black border border-slate-800 rounded-2xl p-5">
+                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                    Total Pending
+                  </span>
+                  <div className={`text-2xl font-black font-mono mt-1 ${adminAccentText}`}>
+                    {adminWithdrawals.filter(w => w.status === 'pending').length}
+                  </div>
+                </div>
 
-      <div className="bg-black border border-slate-800 rounded-2xl p-5">
-        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-          Total Requests
-        </span>
-        <div className="text-2xl font-black font-mono text-white mt-1">
-          {adminWithdrawals.length}
-        </div>
-      </div>
+                <div className="bg-black border border-slate-800 rounded-2xl p-5">
+                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                    Total Requests
+                  </span>
+                  <div className="text-2xl font-black font-mono text-white mt-1">
+                    {adminWithdrawals.length}
+                  </div>
+                </div>
 
-      <div className="bg-black border border-slate-800 rounded-2xl p-5">
-        <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-          Environment
-        </span>
-        <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-          D1 DEMO
-        </div>
-      </div>
-    </div>
+                <div className="bg-black border border-slate-800 rounded-2xl p-5">
+                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                    Environment
+                  </span>
+                  <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
+                    D1 DEMO
+                  </div>
+                </div>
+              </div>
 
-    <div className="flex items-center justify-between">
-      <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
-        Withdrawal Requests
-      </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                  Withdrawal Requests
+                </h3>
 
-      <button
-        type="button"
-        disabled={adminLoading || !apiReady}
-        onClick={refreshAdminWithdrawals}
-        className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
-          firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-            ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
-            : 'border-[#A78BFA]/30 text-[#A78BFA] hover:bg-[#A78BFA]/10'
-        }`}
-      >
-        <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
-        Refresh
-      </button>
-    </div>
+                <button
+                  type="button"
+                  disabled={adminLoading || !apiReady}
+                  onClick={refreshAdminWithdrawals}
+                  className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
+                    isBlueAdmin
+                      ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
+                      : 'border-[#A78BFA]/30 text-[#A78BFA] hover:bg-[#A78BFA]/10'
+                  }`}
+                >
+                  <RefreshCw className={`w-3 h-3 ${adminLoading ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
 
-    <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
-            <tr>
-              <th className="p-4">User</th>
-              <th className="p-4">Amount</th>
-              <th className="p-4">Address</th>
-              <th className="p-4">Status</th>
-              <th className="p-4">Actions</th>
-            </tr>
-          </thead>
+              <div className="bg-black border border-slate-800 rounded-2xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-black text-slate-400 text-xs uppercase font-mono border-b border-slate-800 font-bold">
+                      <tr>
+                        <th className="p-4">User</th>
+                        <th className="p-4">Amount</th>
+                        <th className="p-4">Address</th>
+                        <th className="p-4">Status</th>
+                        <th className="p-4">Actions</th>
+                      </tr>
+                    </thead>
 
-          <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
+                    <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
 
-            {adminLoading ? (
-              <tr>
-                <td colSpan="5" className="p-6 text-center text-slate-400">
-                  Loading withdrawals...
-                </td>
-              </tr>
-            ) : adminWithdrawals.length === 0 ? (
-              <tr>
-                <td colSpan="5" className="p-6 text-center text-slate-500">
-                  No withdrawal requests found.
-                </td>
-              </tr>
-            ) : (
-              adminWithdrawals.map(w => (
-                <tr key={w.id}>
-                  <td className="p-4 text-white">
-                    {w.email || w.userId || 'Unknown User'}
-                  </td>
+                      {adminLoading ? (
+                        <tr>
+                          <td colSpan="5" className="p-6 text-center text-slate-400">
+                            Loading withdrawals...
+                          </td>
+                        </tr>
+                      ) : adminWithdrawals.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="p-6 text-center text-slate-500">
+                            No withdrawal requests found.
+                          </td>
+                        </tr>
+                      ) : (
+                        adminWithdrawals.map(w => (
+                          <tr key={w.id}>
+                            <td className="p-4 text-white">
+                              {w.email || w.userId || 'Unknown User'}
+                            </td>
 
-                  <td className={`p-4 font-black ${
-                    firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-                      ? 'text-blue-400'
-                      : 'text-[#A78BFA]'
-                  }`}>
-                    {w.amount.toFixed(6)} DOGE
-                  </td>
+                            <td className={`p-4 font-black ${adminAccentText}`}>
+                              {w.amount.toFixed(6)} DOGE
+                            </td>
 
-                  <td className="p-4 text-slate-400 truncate max-w-[140px]">
-                    {w.address}
-                  </td>
+                            <td className="p-4 text-slate-400 truncate max-w-[140px]">
+                              {w.address}
+                            </td>
 
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
-                      w.status === 'approved'
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                        : w.status === 'rejected'
-                          ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                          : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                    }`}>
-                      {w.status}
-                    </span>
-                  </td>
+                            <td className="p-4">
+                              <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
+                                w.status === 'approved'
+                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                  : w.status === 'rejected'
+                                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                    : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                              }`}>
+                                {w.status}
+                              </span>
+                            </td>
 
-                  <td className="p-4">
-                    {w.status === 'pending' ? (
-                      <div className="flex flex-wrap gap-2">
+                            <td className="p-4">
+                              {w.status === 'pending' ? (
+                                <div className="flex flex-wrap gap-2">
 
-                        <button
-                          type="button"
-                          disabled={adminActionLoading !== null}
-                          onClick={() => handleAdminApprove(w.id)}
-                          className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
-                            firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-                              ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
-                              : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]'
-                          }`}
-                        >
-                          {adminActionLoading === w.id ? '...' : 'Approve'}
-                        </button>
+                                  <button
+                                    type="button"
+                                    disabled={adminActionLoading !== null}
+                                    onClick={() => handleAdminApprove(w.id)}
+                                    className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${adminActionBtn}`}
+                                  >
+                                    {adminActionLoading === w.id ? '...' : 'Approve'}
+                                  </button>
 
-                        <button
-                          type="button"
-                          disabled={adminActionLoading !== null}
-                          onClick={() => handleAdminReject(w.id)}
-                          className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${
-                            firebaseUser?.email?.toLowerCase() === 'celamielidon26@gmail.com'
-                              ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
-                              : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]'
-                          }`}
-                        >
-                          {adminActionLoading === w.id ? '...' : 'Reject'}
-                        </button>
+                                  <button
+                                    type="button"
+                                    disabled={adminActionLoading !== null}
+                                    onClick={() => handleAdminReject(w.id)}
+                                    className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${adminActionBtn}`}
+                                  >
+                                    {adminActionLoading === w.id ? '...' : 'Reject'}
+                                  </button>
 
-                      </div>
-                    ) : (
-                      <span className="text-slate-500">
-                        Completed
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-500">
+                                  Completed
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
 
-          </tbody>
-        </table>
-      </div>
-    </div>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-    <p className="text-xs text-slate-500">
-      Approving or rejecting updates the D1 demo ledger.
-      Rejected requests are refunded by the Worker.
-      No cryptocurrency transaction is broadcast.
-    </p>
-  </div>
-)}
+              <p className="text-xs text-slate-500">
+                Approving or rejecting updates the D1 demo ledger.
+                Rejected requests are refunded by the Worker.
+                No cryptocurrency transaction is broadcast.
+              </p>
+            </div>
+          )}
         </main>
       </div>
     </div>
