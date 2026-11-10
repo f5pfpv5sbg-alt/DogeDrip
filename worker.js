@@ -1,4 +1,3 @@
-
 const PROJECT_ID = "dogedrip-3ebda";
 
 const GOOGLE_KEYS_URL =
@@ -494,7 +493,7 @@ async function syncUser(env, user, referredByCode) {
   }
 
   return env.DB.prepare(`
-    SELECT ref_code, referred_by
+    SELECT ref_code, referred_by, plan
     FROM users
     WHERE uid = ?
   `).bind(user.sub).first();
@@ -1393,7 +1392,8 @@ async function handleRequest(request, env, json) {
       message: "User synchronized successfully",
       uid: user.sub,
       ref_code: profile.ref_code,
-      referred_by: profile.referred_by
+      referred_by: profile.referred_by,
+      plan: profile.plan || "FREE"
     });
   }
 
