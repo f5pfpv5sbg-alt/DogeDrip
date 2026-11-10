@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
   Wallet,
@@ -188,6 +188,16 @@ const secondsUntilUtcReset = () => {
 
 const utcDayKey = () => new Date().toISOString().slice(0, 10);
 
+// Unique id for one claim attempt. The Worker uses it (when it supports
+// request_id) to make a repeated request idempotent.
+const newRequestId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+};
+
 const formatDuration = (totalSeconds) => {
   const s = Math.max(0, Math.floor(totalSeconds));
   const h = Math.floor(s / 3600);
@@ -355,6 +365,11 @@ export default function App() {
   // Guards against simultaneous claims (state updates are asynchronous)
   const claimInFlightRef = useRef(false);
   const claimStatusTimerRef = useRef(null);
+  // Same request_id is re-sent only while the outcome of a claim is unknown
+  // (network error / no response); it is discarded after any definitive answer.
+  const claimRequestIdRef = useRef(null);
+  // Username typed at registration (used if Firestore has no profile yet)
+  const pendingUsernameRef = useRef('');
   const lastUtcDayRef = useRef(utcDayKey());
 
   // AUTH FORM
@@ -458,7 +473,7 @@ export default function App() {
   const accountLoaded = planInfo !== null;
 
   // API HELPER
-  const apiRequest = async (path, options = {}) => {
+  const apiRequest = useCallback(async (path, options = {}) => {
     if (!firebaseUser) {
       throw new Error('Please log in first.');
     }
@@ -492,12 +507,12 @@ export default function App() {
     }
 
     return data;
-  };
+  }, [firebaseUser]);
 
   // Applies any Worker account/claim response (balance, claim, 429 bodies).
   // Zero is a valid value everywhere (VIP cooldown_seconds: 0, remaining: 0).
   // Fields the Worker does not send are simply left untouched.
-  const applyAccountData = (data) => {
+  const applyAccountData = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
     if (isNum(data.balance_koinu)) {
@@ -553,11 +568,11 @@ export default function App() {
     if (Object.keys(patch).length > 0) {
       setPlanInfo(prev => ({ ...(prev || {}), ...patch }));
     }
-  };
+  }, []);
 
   // Applies the spin counters returned by the Wheel endpoints.
   // Only fields the Worker actually sends are applied.
-  const applyWheelSpins = (spins) => {
+  const applyWheelSpins = useCallback((spins) => {
     if (!spins || typeof spins !== 'object') return;
 
     const patch = {};
@@ -576,10 +591,10 @@ export default function App() {
     if (Object.keys(patch).length > 0) {
       setWheelSpins(prev => ({ ...(prev || {}), ...patch }));
     }
-  };
+  }, []);
 
   // Applies a GET /api/wheel/state response (prizes, packs, spins, balance).
-  const applyWheelState = (data) => {
+  const applyWheelState = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
     if (Array.isArray(data.prizes)) {
@@ -592,7 +607,7 @@ export default function App() {
 
     applyWheelSpins(data.spins);
     applyAccountData(data);
-  };
+  }, [applyWheelSpins, applyAccountData]);
 
   // ADMIN REDIRECT
   useEffect(() => {
@@ -640,6 +655,17 @@ export default function App() {
       setWheelResult(null);
       setWheelMsg('');
       setWheelLoading(false);
+      setClaimStatus('');
+      setWheelAnimating(false);
+      setIsSpinning(false);
+      setBuyingPackId(null);
+      spinInFlightRef.current = false;
+      claimRequestIdRef.current = null;
+
+      if (spinTimerRef.current) {
+        clearTimeout(spinTimerRef.current);
+        spinTimerRef.current = null;
+      }
 
       if (!user) {
         setAuthLoading(false);
@@ -653,7 +679,9 @@ export default function App() {
       const fallbackProfile = {
         uid: user.uid,
         email: user.email,
-        username: user.email ? user.email.split('@')[0] : 'User',
+        username:
+          pendingUsernameRef.current ||
+          (user.email ? user.email.split('@')[0] : 'User'),
         createdAt: Date.now()
       };
 
@@ -766,7 +794,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady, activeTab, accountSyncTick]);
+  }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyAccountData]);
 
   // LOAD CLAIM HISTORY FROM D1
   useEffect(() => {
@@ -803,7 +831,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady]);
+  }, [firebaseUser, apiReady, apiRequest]);
 
   // LOAD USER WITHDRAWALS FROM D1
   useEffect(() => {
@@ -833,7 +861,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady]);
+  }, [firebaseUser, apiReady, apiRequest]);
 
   // LOAD REFERRAL STATS FROM D1 (when the Referral tab is opened)
   useEffect(() => {
@@ -876,7 +904,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady, activeTab]);
+  }, [firebaseUser, apiReady, activeTab, apiRequest]);
 
   // LOAD LUCKY WHEEL STATE + HISTORY FROM THE WORKER
   // (when the Wheel tab is opened, and again when the UTC day rolls over so
@@ -941,7 +969,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady, activeTab, accountSyncTick]);
+  }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyWheelState]);
 
   // LOAD ADMIN WITHDRAWALS FROM D1
   useEffect(() => {
@@ -981,7 +1009,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [firebaseUser, apiReady, isDemoAdmin]);
+  }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
 
   // ONE-SECOND TIMER: claim cooldown, UTC reset countdown, UTC day rollover
   useEffect(() => {
@@ -1099,6 +1127,7 @@ export default function App() {
     try {
       // Must be set before the account exists: the auth listener syncs immediately.
       pendingReferralRef.current = referralCode || null;
+      pendingUsernameRef.current = trimmedUsername;
 
       const credential = await createUserWithEmailAndPassword(
         auth,
@@ -1122,6 +1151,7 @@ export default function App() {
         console.warn('Firestore profile write unavailable:', error.message);
       }
 
+      pendingUsernameRef.current = '';
       setUserProfile(localProfile);
       setAuthSuccess('Account created successfully!');
       setActiveTab('faucet');
@@ -1131,6 +1161,7 @@ export default function App() {
       setRegRefCode('');
     } catch (error) {
       pendingReferralRef.current = null;
+      pendingUsernameRef.current = '';
       setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
@@ -1209,6 +1240,15 @@ export default function App() {
     setIsClaiming(true);
     setClaimIsError(false);
 
+    // Ignore the answer if the account changed while the request was running
+    const claimSession = authEventRef.current;
+
+    if (!claimRequestIdRef.current) {
+      claimRequestIdRef.current = newRequestId();
+    }
+
+    const requestId = claimRequestIdRef.current;
+
     if (claimStatusTimerRef.current) {
       clearTimeout(claimStatusTimerRef.current);
     }
@@ -1217,8 +1257,14 @@ export default function App() {
 
     try {
       const data = await apiRequest('/api/claim', {
-        method: 'POST'
+        method: 'POST',
+        body: JSON.stringify({ request_id: requestId })
       });
+
+      // Definitive answer received: the next claim gets a new request_id
+      claimRequestIdRef.current = null;
+
+      if (claimSession !== authEventRef.current) return;
 
       // Balance, cooldown (and plan / daily counters when reported) come from the Worker
       applyAccountData(data);
@@ -1255,6 +1301,15 @@ export default function App() {
         applyAccountData(accountResult.value);
       }
     } catch (error) {
+      // A response from the Worker (any HTTP status) is a definitive answer.
+      // Only a missing response (network error) keeps the same request_id so
+      // a retry cannot create a second claim.
+      if (typeof error.status === 'number') {
+        claimRequestIdRef.current = null;
+      }
+
+      if (claimSession !== authEventRef.current) return;
+
       const reason = error.data?.reason;
 
       if (error.status === 429 && reason === 'daily_limit') {
@@ -1360,7 +1415,11 @@ export default function App() {
       ? wheelPrizes.findIndex(p => String(p.id) === String(prize.id))
       : -1;
 
+    const spinSession = authEventRef.current;
+
     const finish = async () => {
+      if (spinSession !== authEventRef.current) return;
+
       setWheelAnimating(false);
       setWheelResult({
         prize,
