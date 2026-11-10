@@ -63,6 +63,20 @@ const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
 
+// SHARED STYLE CLASSES
+// These were missing from the file. LABEL_CLS and INPUT_CLS are used by the
+// Wallet withdrawal form (and PRIMARY_BTN / LABEL_CLS / INPUT_CLS by the auth
+// forms). Referencing an undefined constant throws a ReferenceError during
+// render, React unmounts the whole tree and the page turns completely black.
+const LABEL_CLS =
+  'block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1';
+
+const INPUT_CLS =
+  'w-full bg-black border border-slate-800 focus:border-[#F4A6C1] focus:outline-none text-white placeholder-slate-600 rounded-xl px-4 py-3 text-sm transition-colors';
+
+const PRIMARY_BTN =
+  "w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide";
+
 
 // PLAN CATALOG (DISPLAY ONLY)
 const PLAN_CATALOG = [
@@ -1074,7 +1088,9 @@ export default function App() {
         apiRequest('/api/withdrawals')
       ]);
 
-      setDemoBalance(Number(balanceData.balance_koinu) / KOINU);
+      // applyAccountData ignores a missing/invalid balance instead of
+      // writing NaN into the balance state.
+      applyAccountData(balanceData);
       setDemoWithdrawals(
         (historyData.withdrawals || []).map(mapWithdrawal)
       );
@@ -1150,7 +1166,7 @@ export default function App() {
         apiRequest('/api/withdrawals')
       ]);
 
-      setDemoBalance(Number(balanceData.balance_koinu) / KOINU);
+      applyAccountData(balanceData);
       setDemoWithdrawals(
         (historyData.withdrawals || []).map(mapWithdrawal)
       );
