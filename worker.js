@@ -84,7 +84,8 @@ function formatDoge(koinu) {
     .replace(/\.?0+$/, "");
 }
 
-// GOOGLE FIREBASE KEYS
+// FIREBASE GOOGLE KEYS
+
 let cachedKeys = null;
 let cachedKeysAt = 0;
 
@@ -260,6 +261,7 @@ function generateRefCode() {
 }
 
 // DOGE ADDRESS VALIDATION
+
 async function isValidDogeAddress(address) {
   if (
     typeof address !== "string" ||
@@ -319,6 +321,7 @@ async function isValidDogeAddress(address) {
 }
 
 // USER PLAN
+
 async function getUserPlan(env, uid) {
   const subscription = await env.DB.prepare(`
     SELECT plan
@@ -357,6 +360,7 @@ async function getUserPlan(env, uid) {
 }
 
 // ACCOUNT INFORMATION
+
 async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
   return env.DB.prepare(`
     SELECT
@@ -387,6 +391,7 @@ async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
 }
 
 // USER SYNCHRONIZATION
+
 async function syncUser(env, user, referredByCode) {
   let referrerCode = null;
 
@@ -456,6 +461,61 @@ function getRequestId(body) {
   }
 
   return id;
+}
+
+// CLAIM IDEMPOTENCY HELPERS
+
+async function getExistingClaim(env, uid, requestId) {
+  return env.DB.prepare(`
+    SELECT
+      id,
+      amount_koinu,
+      request_id,
+      claimed_at
+    FROM claims
+    WHERE uid = ? AND request_id = ?
+  `).bind(uid, requestId).first();
+}
+
+async function buildClaimResponse(
+  env,
+  uid,
+  plan,
+  claim,
+  replayed
+) {
+  const account = await getAccount(env, uid, plan);
+
+  if (!account) {
+    throw new HttpError(404, "User not found");
+  }
+
+  const dailyUsed = Number(account.daily_claims_used || 0);
+
+  return {
+    success: true,
+    replayed,
+    message: replayed
+      ? "Claim was already processed"
+      : "Claim successful",
+    claim: {
+      id: claim.id,
+      amount_koinu: Number(claim.amount_koinu),
+      claimed_at: claim.claimed_at
+    },
+    plan: plan.name,
+    amount_koinu: Number(claim.amount_koinu),
+    balance_koinu: Number(account.balance_koinu),
+    last_claim_at: account.last_claim_at,
+    cooldown_seconds: plan.cooldown_seconds,
+    cooldown_remaining: Number(account.cooldown_remaining),
+    daily_claims_used: dailyUsed,
+    daily_limit: plan.daily_limit,
+    daily_claims_remaining: Math.max(
+      0,
+      plan.daily_limit - dailyUsed
+    )
+  };
 }
 
 function selectWeightedPrize(prizes) {
@@ -695,7 +755,6 @@ async function handleWheelSpin(env, uid, body) {
 
   const statements = [];
 
-  // STEP 1: Deduct the prize from the reserve.
   statements.push(
     env.DB.prepare(`
       UPDATE faucet_reserve
@@ -708,7 +767,6 @@ async function handleWheelSpin(env, uid, body) {
     `).bind(amount, amount)
   );
 
-  // STEP 2: Consume one free or paid spin.
   if (spinType === "free") {
     statements.push(
       env.DB.prepare(`
@@ -755,7 +813,6 @@ async function handleWheelSpin(env, uid, body) {
     );
   }
 
-  // STEP 3: Save the spin.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_spins (
@@ -778,7 +835,6 @@ async function handleWheelSpin(env, uid, body) {
     )
   );
 
-  // STEP 4: Credit the user's balance.
   statements.push(
     env.DB.prepare(`
       UPDATE users
@@ -788,7 +844,6 @@ async function handleWheelSpin(env, uid, body) {
     `).bind(amount, uid)
   );
 
-  // STEP 5: Ledger entry for positive DOGE prizes only.
   if (amount > 0) {
     statements.push(
       env.DB.prepare(`
@@ -827,7 +882,6 @@ async function handleWheelSpin(env, uid, body) {
     );
   }
 
-  // STEP 6: Roll back if the last required write failed.
   statements.push(
     env.DB.prepare(`
       SELECT CASE
@@ -940,7 +994,6 @@ async function handleWheelBuy(env, uid, body) {
 
   const statements = [];
 
-  // STEP 1: Debit the user's balance.
   statements.push(
     env.DB.prepare(`
       UPDATE users
@@ -954,7 +1007,6 @@ async function handleWheelBuy(env, uid, body) {
     )
   );
 
-  // STEP 2: Record the purchase.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_purchases (
@@ -973,7 +1025,6 @@ async function handleWheelBuy(env, uid, body) {
     )
   );
 
-  // STEP 3: Add the purchased spins.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_spin_inventory (
@@ -991,7 +1042,6 @@ async function handleWheelBuy(env, uid, body) {
     `).bind(uid, pack.spins)
   );
 
-  // STEP 4: Record the financial debit.
   statements.push(
     env.DB.prepare(`
       INSERT INTO ledger_transactions (
@@ -1028,7 +1078,6 @@ async function handleWheelBuy(env, uid, body) {
     )
   );
 
-  // STEP 5: Force rollback if the ledger entry failed.
   statements.push(
     env.DB.prepare(`
       SELECT CASE
@@ -1155,6 +1204,7 @@ async function handleRequest(request, env, json) {
   const method = request.method;
 
   // HEALTH CHECK
+
   if (path === "/api/health" && method === "GET") {
     try {
       await env.DB.prepare("SELECT 1").first();
@@ -1173,6 +1223,7 @@ async function handleRequest(request, env, json) {
   }
 
   // REFERRAL VALIDATION
+
   if (path === "/api/referral/validate" && method === "GET") {
     const code = (url.searchParams.get("code") || "").trim();
 
@@ -1193,6 +1244,7 @@ async function handleRequest(request, env, json) {
   }
 
   // AUTH SYNC
+
   if (path === "/api/auth/sync" && method === "POST") {
     const user = await authenticate(request);
 
@@ -1225,6 +1277,7 @@ async function handleRequest(request, env, json) {
   }
 
   // REFERRAL STATS
+
   if (path === "/api/referrals" && method === "GET") {
     const user = await authenticate(request);
 
@@ -1258,9 +1311,7 @@ async function handleRequest(request, env, json) {
     });
   }
 
-  // ==========================================
   // LUCKY WHEEL ROUTES
-  // ==========================================
 
   if (path === "/api/wheel/state" && method === "GET") {
     const user = await authenticate(request);
@@ -1297,18 +1348,41 @@ async function handleRequest(request, env, json) {
   }
 
   // ==========================================
-  // FAUCET CLAIM + LEDGER
+  // FAUCET CLAIM + LEDGER + IDEMPOTENCY
   // ==========================================
 
   if (path === "/api/claim" && method === "POST") {
     const user = await authenticate(request);
+    const body = await readJson(request);
+    const requestId = getRequestId(body);
     const plan = await getUserPlan(env, user.sub);
+
+    // Return the original claim if this request was already processed.
+
+    const existing = await getExistingClaim(
+      env,
+      user.sub,
+      requestId
+    );
+
+    if (existing) {
+      return json(
+        await buildClaimResponse(
+          env,
+          user.sub,
+          plan,
+          existing,
+          true
+        )
+      );
+    }
 
     let results;
 
     try {
       results = await env.DB.batch([
         // STEP 1: Update balance and cooldown.
+
         env.DB.prepare(`
           UPDATE users
           SET
@@ -1332,17 +1406,24 @@ async function handleRequest(request, env, json) {
           plan.daily_limit
         ),
 
-        // STEP 2: Insert the claim.
+        // STEP 2: Insert the claim with its unique request ID.
+
         env.DB.prepare(`
-          INSERT INTO claims (uid, amount_koinu)
-          SELECT ?, ?
+          INSERT INTO claims (
+            uid,
+            amount_koinu,
+            request_id
+          )
+          SELECT ?, ?, ?
           WHERE changes() = 1
         `).bind(
           user.sub,
-          plan.amount_koinu
+          plan.amount_koinu,
+          requestId
         ),
 
         // STEP 3: Insert the immutable ledger record.
+
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
             uid,
@@ -1357,22 +1438,25 @@ async function handleRequest(request, env, json) {
           SELECT
             u.uid,
             'claim',
-            ?,
-            u.balance_koinu - ?,
+            c.amount_koinu,
+            u.balance_koinu - c.amount_koinu,
             u.balance_koinu,
             'claim',
-            CAST(last_insert_rowid() AS TEXT),
-            'claim:' || u.uid || ':' || last_insert_rowid()
+            CAST(c.id AS TEXT),
+            'claim:' || u.uid || ':' || c.request_id
           FROM users u
+          JOIN claims c
+            ON c.uid = u.uid
+           AND c.request_id = ?
           WHERE u.uid = ?
             AND changes() = 1
         `).bind(
-          plan.amount_koinu,
-          plan.amount_koinu,
+          requestId,
           user.sub
         ),
 
-        // STEP 4: Roll back if the ledger insert failed.
+        // STEP 4: Force rollback if a required write failed.
+
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
@@ -1382,6 +1466,26 @@ async function handleRequest(request, env, json) {
         `)
       ]);
     } catch (error) {
+      // Check whether another identical request completed first.
+
+      const concurrentClaim = await getExistingClaim(
+        env,
+        user.sub,
+        requestId
+      );
+
+      if (concurrentClaim) {
+        return json(
+          await buildClaimResponse(
+            env,
+            user.sub,
+            plan,
+            concurrentClaim,
+            true
+          )
+        );
+      }
+
       const errorText = [
         error?.message,
         error?.cause?.message
@@ -1445,33 +1549,32 @@ async function handleRequest(request, env, json) {
       );
     }
 
-    const account = await getAccount(env, user.sub, plan);
+    const savedClaim = await getExistingClaim(
+      env,
+      user.sub,
+      requestId
+    );
 
-    if (!account) {
-      throw new HttpError(404, "User not found");
+    if (!savedClaim) {
+      throw new HttpError(
+        500,
+        "Claim record could not be confirmed"
+      );
     }
 
-    const dailyUsed = Number(account.daily_claims_used || 0);
-
-    return json({
-      success: true,
-      message: "Claim successful",
-      plan: plan.name,
-      amount_koinu: plan.amount_koinu,
-      balance_koinu: account.balance_koinu,
-      last_claim_at: account.last_claim_at,
-      cooldown_seconds: plan.cooldown_seconds,
-      cooldown_remaining: account.cooldown_remaining,
-      daily_claims_used: dailyUsed,
-      daily_limit: plan.daily_limit,
-      daily_claims_remaining: Math.max(
-        0,
-        plan.daily_limit - dailyUsed
+    return json(
+      await buildClaimResponse(
+        env,
+        user.sub,
+        plan,
+        savedClaim,
+        false
       )
-    });
+    );
   }
 
   // CLAIM HISTORY
+
   if (path === "/api/claims" && method === "GET") {
     const user = await authenticate(request);
 
@@ -1490,6 +1593,7 @@ async function handleRequest(request, env, json) {
   }
 
   // BALANCE
+
   if (path === "/api/balance" && method === "GET") {
     const user = await authenticate(request);
     const plan = await getUserPlan(env, user.sub);
@@ -1565,6 +1669,7 @@ async function handleRequest(request, env, json) {
     try {
       results = await env.DB.batch([
         // STEP 1: Reserve the user's balance.
+
         env.DB.prepare(`
           UPDATE users
           SET balance_koinu = balance_koinu - ?
@@ -1573,6 +1678,7 @@ async function handleRequest(request, env, json) {
         `).bind(amount, user.sub, amount),
 
         // STEP 2: Create the pending withdrawal.
+
         env.DB.prepare(`
           INSERT INTO withdrawals (
             uid,
@@ -1596,6 +1702,7 @@ async function handleRequest(request, env, json) {
         ),
 
         // STEP 3: Record the withdrawal debit.
+
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
             uid,
@@ -1626,6 +1733,7 @@ async function handleRequest(request, env, json) {
         ),
 
         // STEP 4: Roll back if the ledger insert failed.
+
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
@@ -1699,6 +1807,7 @@ async function handleRequest(request, env, json) {
   }
 
   // USER WITHDRAWAL HISTORY
+
   if (path === "/api/withdrawals" && method === "GET") {
     const user = await authenticate(request);
 
@@ -1722,6 +1831,7 @@ async function handleRequest(request, env, json) {
   }
 
   // ADMIN: LIST WITHDRAWALS
+
   if (path === "/api/admin/withdrawals" && method === "GET") {
     const user = await authenticate(request);
     await requireAdmin(user, env);
@@ -1751,7 +1861,7 @@ async function handleRequest(request, env, json) {
 
   // ADMIN: APPROVE WITHDRAWAL
   // Real DOGE sending and transaction-ID verification are not integrated.
-  // Approval remains blocked to prevent false payment status.
+
   const approveMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
   );
@@ -1767,6 +1877,7 @@ async function handleRequest(request, env, json) {
   }
 
   // ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER
+
   const rejectMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/reject$/
   );
@@ -1786,6 +1897,7 @@ async function handleRequest(request, env, json) {
     try {
       results = await env.DB.batch([
         // STEP 1: Reject only a pending withdrawal.
+
         env.DB.prepare(`
           UPDATE withdrawals
           SET
@@ -1797,6 +1909,7 @@ async function handleRequest(request, env, json) {
         `).bind(admin.uid, id),
 
         // STEP 2: Refund the user's balance.
+
         env.DB.prepare(`
           UPDATE users
           SET balance_koinu = balance_koinu + (
@@ -1815,6 +1928,7 @@ async function handleRequest(request, env, json) {
         `).bind(id, id),
 
         // STEP 3: Record the refund in the ledger.
+
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
             uid,
@@ -1843,6 +1957,7 @@ async function handleRequest(request, env, json) {
         `).bind(id),
 
         // STEP 4: Roll back if the refund ledger record failed.
+
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
