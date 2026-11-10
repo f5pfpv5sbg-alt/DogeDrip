@@ -1,3 +1,4 @@
+
 const PROJECT_ID = "dogedrip-3ebda";
 
 const GOOGLE_KEYS_URL =
@@ -22,9 +23,9 @@ const PLAN_CONFIG = {
     free_wheel_spins: 2
   },
   VIP: {
-    amount_koinu: 100000,
-    cooldown_seconds: 45,
-    daily_limit: 50,
+    amount_koinu: 150000,
+    cooldown_seconds: 0,
+    daily_limit: 100,
     free_wheel_spins: 2
   }
 };
@@ -222,7 +223,9 @@ async function verifyFirebaseToken(token) {
   return claims;
 }
 
-async function authenticate(request) {
+// By default, every authenticated API route requires verified email.
+// Only /api/auth/sync is allowed to work before email verification.
+async function authenticate(request, options = {}) {
   const authorization = request.headers.get("Authorization");
 
   if (
@@ -238,7 +241,16 @@ async function authenticate(request) {
     throw new HttpError(401, "Invalid authentication token");
   }
 
-  return verifyFirebaseToken(token);
+  const user = await verifyFirebaseToken(token);
+
+  if (
+    options.requireVerifiedEmail !== false &&
+    user.email_verified !== true
+  ) {
+    throw new HttpError(403, "EMAIL_NOT_VERIFIED");
+  }
+
+  return user;
 }
 
 async function requireAdmin(user, env) {
@@ -666,7 +678,6 @@ async function getWheelConfiguration(env) {
 
   const maxPrize = getMaxWheelPrize(prizes);
 
-  // Validate every prize, including prizes with zero probability.
   selectWeightedPrize(prizes);
 
   return { prizes, maxPrize };
@@ -1371,9 +1382,14 @@ async function handleRequest(request, env, json) {
   }
 
   // AUTH SYNC
+  // Unverified users may synchronize their account only.
+  // All benefit-related routes still require verified email.
 
   if (path === "/api/auth/sync" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, {
+      requireVerifiedEmail: false
+    });
+
     const body = await readJson(request);
 
     const rawRef =
@@ -1393,7 +1409,8 @@ async function handleRequest(request, env, json) {
       uid: user.sub,
       ref_code: profile.ref_code,
       referred_by: profile.referred_by,
-      plan: profile.plan || "FREE"
+      plan: profile.plan || "FREE",
+      email_verified: user.email_verified === true
     });
   }
 
