@@ -1,4 +1,3 @@
-
 const PROJECT_ID = "dogedrip-3ebda";
 
 const GOOGLE_KEYS_URL =
@@ -517,6 +516,245 @@ async function syncUser(env, user, referredByCode) {
 
 function getUtcDate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// ==========================================
+// DAILY STREAK
+// ==========================================
+
+const STREAK_REWARDS = {
+  1: 1000,
+  2: 2000,
+  3: 3000,
+  4: 4000,
+  5: 5000,
+  6: 6000,
+  7: 7000
+};
+
+function getPreviousUtcDate(today) {
+  const date = new Date(`${today}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+async function getStreakInfo(env, uid) {
+  const today = getUtcDate();
+  const yesterday = getPreviousUtcDate(today);
+
+  const row = await env.DB.prepare(`
+    SELECT
+      u.balance_koinu,
+      s.current_day,
+      s.last_checkin_date,
+      s.total_rewards_koinu
+    FROM users u
+    LEFT JOIN daily_streaks s ON s.uid = u.uid
+    WHERE u.uid = ?
+  `).bind(uid).first();
+
+  if (!row) {
+    throw new HttpError(404, "User not found");
+  }
+
+  const storedDay = Number(row.current_day || 0);
+  const lastDate = row.last_checkin_date || null;
+  const checkedInToday = lastDate === today;
+
+  const activeDay =
+    lastDate === today || lastDate === yesterday
+      ? storedDay
+      : 0;
+
+  const nextDay =
+    lastDate === yesterday
+      ? (activeDay >= 7 ? 1 : activeDay + 1)
+      : 1;
+
+  return {
+    current_day: activeDay,
+    next_day: checkedInToday ? 0 : nextDay,
+    last_checkin_date: lastDate,
+    checked_in_today: checkedInToday,
+    can_checkin: !checkedInToday,
+    next_reward_koinu: checkedInToday
+      ? 0
+      : STREAK_REWARDS[nextDay],
+    total_rewards_koinu: Number(row.total_rewards_koinu || 0),
+    balance_koinu: Number(row.balance_koinu)
+  };
+}
+
+async function handleStreakCheckin(env, uid) {
+  const today = getUtcDate();
+  const yesterday = getPreviousUtcDate(today);
+
+  const current = await getStreakInfo(env, uid);
+
+  if (current.checked_in_today) {
+    return {
+      success: true,
+      already_checked_in: true,
+      reward_koinu: 0,
+      reward_doge: 0,
+      ...current
+    };
+  }
+
+  const idempotencyKey = `daily_streak:${uid}:${today}`;
+
+  const rewardSql = `
+    CASE current_day
+      WHEN 1 THEN 1000
+      WHEN 2 THEN 2000
+      WHEN 3 THEN 3000
+      WHEN 4 THEN 4000
+      WHEN 5 THEN 5000
+      WHEN 6 THEN 6000
+      WHEN 7 THEN 7000
+    END
+  `;
+
+  const statements = [
+    env.DB.prepare(`
+      INSERT INTO daily_streaks (
+        uid,
+        current_day,
+        last_checkin_date,
+        total_rewards_koinu
+      )
+      VALUES (?, 1, ?, 0)
+
+      ON CONFLICT(uid) DO UPDATE SET
+        current_day = CASE
+          WHEN daily_streaks.last_checkin_date = ?
+            THEN CASE
+              WHEN daily_streaks.current_day >= 7 THEN 1
+              ELSE daily_streaks.current_day + 1
+            END
+          ELSE 1
+        END,
+        last_checkin_date = excluded.last_checkin_date,
+        updated_at = CURRENT_TIMESTAMP
+
+      WHERE daily_streaks.last_checkin_date IS NULL
+         OR daily_streaks.last_checkin_date < excluded.last_checkin_date
+    `).bind(uid, today, yesterday),
+
+    env.DB.prepare(`
+      UPDATE users
+      SET balance_koinu = balance_koinu + (
+        SELECT ${rewardSql}
+        FROM daily_streaks
+        WHERE uid = ?
+          AND last_checkin_date = ?
+      )
+      WHERE uid = ?
+        AND changes() = 1
+        AND EXISTS (
+          SELECT 1
+          FROM daily_streaks
+          WHERE uid = ?
+            AND last_checkin_date = ?
+        )
+    `).bind(uid, today, uid, uid, today),
+
+    env.DB.prepare(`
+      UPDATE daily_streaks
+      SET
+        total_rewards_koinu = total_rewards_koinu + (
+          SELECT ${rewardSql}
+          FROM daily_streaks
+          WHERE uid = ?
+            AND last_checkin_date = ?
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE uid = ?
+        AND last_checkin_date = ?
+        AND changes() = 1
+    `).bind(uid, today, uid, today),
+
+    env.DB.prepare(`
+      INSERT INTO ledger_transactions (
+        uid,
+        transaction_type,
+        amount_koinu,
+        balance_before_koinu,
+        balance_after_koinu,
+        reference_type,
+        reference_id,
+        idempotency_key
+      )
+      SELECT
+        u.uid,
+        'daily_streak',
+        CASE s.current_day
+          WHEN 1 THEN 1000
+          WHEN 2 THEN 2000
+          WHEN 3 THEN 3000
+          WHEN 4 THEN 4000
+          WHEN 5 THEN 5000
+          WHEN 6 THEN 6000
+          WHEN 7 THEN 7000
+        END,
+        u.balance_koinu - CASE s.current_day
+          WHEN 1 THEN 1000
+          WHEN 2 THEN 2000
+          WHEN 3 THEN 3000
+          WHEN 4 THEN 4000
+          WHEN 5 THEN 5000
+          WHEN 6 THEN 6000
+          WHEN 7 THEN 7000
+        END,
+        u.balance_koinu,
+        'daily_streak',
+        ?,
+        ?
+      FROM users u
+      JOIN daily_streaks s ON s.uid = u.uid
+      WHERE u.uid = ?
+        AND s.last_checkin_date = ?
+        AND changes() = 1
+    `).bind(today, idempotencyKey, uid, today),
+
+    env.DB.prepare(`
+      SELECT CASE
+        WHEN changes() = 1 THEN 1
+        ELSE abs(-9223372036854775808)
+      END
+    `)
+  ];
+
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    const latest = await getStreakInfo(env, uid);
+
+    if (latest.checked_in_today) {
+      return {
+        success: true,
+        already_checked_in: true,
+        reward_koinu: 0,
+        reward_doge: 0,
+        ...latest
+      };
+    }
+
+    console.error("Daily streak transaction failed:", error);
+    throw new HttpError(500, "Daily streak check-in failed");
+  }
+
+  const result = await getStreakInfo(env, uid);
+  const reward = STREAK_REWARDS[result.current_day];
+
+  return {
+    success: true,
+    already_checked_in: false,
+    streak_day: result.current_day,
+    reward_koinu: reward,
+    reward_doge: reward / 100000000,
+    ...result
+  };
 }
 
 function getRequestId(body) {
@@ -1673,6 +1911,27 @@ async function handleRequest(request, env, json) {
       success: true,
       claims: result.results || []
     });
+  }
+
+  // ==========================================
+  // DAILY STREAKS
+  // ==========================================
+
+  if (path === "/api/streak" && method === "GET") {
+    const user = await authenticate(request);
+
+    return json({
+      success: true,
+      ...(await getStreakInfo(env, user.sub))
+    });
+  }
+
+  if (path === "/api/streak/checkin" && method === "POST") {
+    const user = await authenticate(request);
+
+    return json(
+      await handleStreakCheckin(env, user.sub)
+    );
   }
 
   // BALANCE
