@@ -78,6 +78,12 @@ function decodeBase64Url(value) {
   return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
 
+function formatDoge(koinu) {
+  return (Number(koinu) / 100000000)
+    .toFixed(8)
+    .replace(/\.?0+$/, "");
+}
+
 // GOOGLE FIREBASE KEYS
 let cachedKeys = null;
 let cachedKeysAt = 0;
@@ -159,7 +165,6 @@ async function verifyFirebaseToken(token) {
   }
 
   let keys = await getGoogleKeys();
-
   let jwk = keys.find(key => key.kid === tokenHeader.kid);
 
   if (!jwk) {
@@ -467,14 +472,26 @@ function selectWeightedPrize(prizes) {
     0
   );
 
-  if (!Number.isSafeInteger(totalWeight) || totalWeight <= 0) {
+  if (
+    !Number.isSafeInteger(totalWeight) ||
+    totalWeight <= 0 ||
+    totalWeight > 4294967296
+  ) {
     throw new HttpError(503, "Wheel prize configuration unavailable");
   }
 
-  const random = new Uint32Array(1);
-  crypto.getRandomValues(random);
+  const range = 4294967296;
+  const limit = Math.floor(range / totalWeight) * totalWeight;
 
-  let ticket = random[0] % totalWeight;
+  let ticket;
+
+  do {
+    const random = new Uint32Array(1);
+    crypto.getRandomValues(random);
+    ticket = random[0];
+  } while (ticket >= limit);
+
+  ticket %= totalWeight;
 
   for (const prize of valid) {
     const weight = Number(prize.probability_weight);
@@ -555,11 +572,7 @@ async function getWheelData(env, uid, plan) {
   return {
     prizes: prizesResult.results.map(p => ({
       id: p.prize_key,
-      label: `${(
-        Number(p.amount_koinu) / 100000000
-      ).toFixed(
-        Number(p.amount_koinu) % 100000000 === 0 ? 0 : 3
-      )} DOGE`,
+      label: `${formatDoge(p.amount_koinu)} DOGE`,
       amount_koinu: Number(p.amount_koinu)
     })),
     packs: WHEEL_PACKAGES,
@@ -643,7 +656,6 @@ async function handleWheelSpin(env, uid, body) {
 
   const plan = await getUserPlan(env, uid);
 
-  // Idempotency check.
   const existing = await getExistingSpin(env, uid, requestId);
 
   if (existing) {
@@ -683,7 +695,7 @@ async function handleWheelSpin(env, uid, body) {
 
   const statements = [];
 
-  // STEP 1: Deduct the exact prize from the reserve.
+  // STEP 1: Deduct the prize from the reserve.
   statements.push(
     env.DB.prepare(`
       UPDATE faucet_reserve
@@ -696,7 +708,7 @@ async function handleWheelSpin(env, uid, body) {
     `).bind(amount, amount)
   );
 
-  // STEP 2: Consume exactly one free or paid spin.
+  // STEP 2: Consume one free or paid spin.
   if (spinType === "free") {
     statements.push(
       env.DB.prepare(`
@@ -743,7 +755,7 @@ async function handleWheelSpin(env, uid, body) {
     );
   }
 
-  // STEP 3: Insert the spin only if STEP 2 succeeded.
+  // STEP 3: Save the spin.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_spins (
@@ -766,7 +778,7 @@ async function handleWheelSpin(env, uid, body) {
     )
   );
 
-  // STEP 4: Credit the user only if STEP 3 succeeded.
+  // STEP 4: Credit the user's balance.
   statements.push(
     env.DB.prepare(`
       UPDATE users
@@ -776,8 +788,46 @@ async function handleWheelSpin(env, uid, body) {
     `).bind(amount, uid)
   );
 
-  // STEP 5: Force a SQL error if any previous write changed 0 rows.
-  // D1 rolls back the entire batch when a statement errors.
+  // STEP 5: Ledger entry for positive DOGE prizes only.
+  if (amount > 0) {
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO ledger_transactions (
+          uid,
+          transaction_type,
+          amount_koinu,
+          balance_before_koinu,
+          balance_after_koinu,
+          reference_type,
+          reference_id,
+          idempotency_key
+        )
+        SELECT
+          u.uid,
+          'wheel_prize',
+          ?,
+          u.balance_koinu - ?,
+          u.balance_koinu,
+          'wheel_spin',
+          CAST(s.id AS TEXT),
+          'wheel_spin:' || u.uid || ':' || ?
+        FROM users u
+        JOIN wheel_spins s
+          ON s.uid = u.uid
+         AND s.request_id = ?
+        WHERE u.uid = ?
+          AND changes() = 1
+      `).bind(
+        amount,
+        amount,
+        requestId,
+        requestId,
+        uid
+      )
+    );
+  }
+
+  // STEP 6: Roll back if the last required write failed.
   statements.push(
     env.DB.prepare(`
       SELECT CASE
@@ -791,7 +841,6 @@ async function handleWheelSpin(env, uid, body) {
   try {
     await env.DB.batch(statements);
   } catch (error) {
-    // Another request may have completed the same request_id.
     const concurrentSpin = await getExistingSpin(
       env,
       uid,
@@ -905,7 +954,7 @@ async function handleWheelBuy(env, uid, body) {
     )
   );
 
-  // STEP 2: Record the purchase only after the debit.
+  // STEP 2: Record the purchase.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_purchases (
@@ -924,7 +973,7 @@ async function handleWheelBuy(env, uid, body) {
     )
   );
 
-  // STEP 3: Add paid spins only after purchase insertion.
+  // STEP 3: Add the purchased spins.
   statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_spin_inventory (
@@ -942,7 +991,44 @@ async function handleWheelBuy(env, uid, body) {
     `).bind(uid, pack.spins)
   );
 
-  // STEP 4: Force rollback if any required write changed 0 rows.
+  // STEP 4: Record the financial debit.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO ledger_transactions (
+        uid,
+        transaction_type,
+        amount_koinu,
+        balance_before_koinu,
+        balance_after_koinu,
+        reference_type,
+        reference_id,
+        idempotency_key
+      )
+      SELECT
+        u.uid,
+        'wheel_purchase',
+        -?,
+        u.balance_koinu + ?,
+        u.balance_koinu,
+        'wheel_purchase',
+        CAST(p.id AS TEXT),
+        'wheel_purchase:' || u.uid || ':' || ?
+      FROM users u
+      JOIN wheel_purchases p
+        ON p.uid = u.uid
+       AND p.request_id = ?
+      WHERE u.uid = ?
+        AND changes() = 1
+    `).bind(
+      pack.price_koinu,
+      pack.price_koinu,
+      requestId,
+      requestId,
+      uid
+    )
+  );
+
+  // STEP 5: Force rollback if the ledger entry failed.
   statements.push(
     env.DB.prepare(`
       SELECT CASE
@@ -1211,7 +1297,7 @@ async function handleRequest(request, env, json) {
   }
 
   // ==========================================
-  // FAUCET CLAIM
+  // FAUCET CLAIM + LEDGER
   // ==========================================
 
   if (path === "/api/claim" && method === "POST") {
@@ -1222,7 +1308,7 @@ async function handleRequest(request, env, json) {
 
     try {
       results = await env.DB.batch([
-        // STEP 1: Update the user's balance and cooldown.
+        // STEP 1: Update balance and cooldown.
         env.DB.prepare(`
           UPDATE users
           SET
@@ -1246,7 +1332,7 @@ async function handleRequest(request, env, json) {
           plan.daily_limit
         ),
 
-        // STEP 2: Insert the claim only after the balance update.
+        // STEP 2: Insert the claim.
         env.DB.prepare(`
           INSERT INTO claims (uid, amount_koinu)
           SELECT ?, ?
@@ -1256,7 +1342,37 @@ async function handleRequest(request, env, json) {
           plan.amount_koinu
         ),
 
-        // STEP 3: Force rollback if the claim was not inserted.
+        // STEP 3: Insert the immutable ledger record.
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid,
+            transaction_type,
+            amount_koinu,
+            balance_before_koinu,
+            balance_after_koinu,
+            reference_type,
+            reference_id,
+            idempotency_key
+          )
+          SELECT
+            u.uid,
+            'claim',
+            ?,
+            u.balance_koinu - ?,
+            u.balance_koinu,
+            'claim',
+            CAST(last_insert_rowid() AS TEXT),
+            'claim:' || u.uid || ':' || last_insert_rowid()
+          FROM users u
+          WHERE u.uid = ?
+            AND changes() = 1
+        `).bind(
+          plan.amount_koinu,
+          plan.amount_koinu,
+          user.sub
+        ),
+
+        // STEP 4: Roll back if the ledger insert failed.
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
@@ -1266,9 +1382,12 @@ async function handleRequest(request, env, json) {
         `)
       ]);
     } catch (error) {
-      if (
-        String(error.message).includes("INSUFFICIENT_FAUCET_RESERVE")
-      ) {
+      const errorText = [
+        error?.message,
+        error?.cause?.message
+      ].filter(Boolean).join(" ");
+
+      if (errorText.includes("INSUFFICIENT_FAUCET_RESERVE")) {
         throw new HttpError(
           503,
           "Faucet temporarily unavailable. Please try again later."
@@ -1315,8 +1434,11 @@ async function handleRequest(request, env, json) {
       );
     }
 
-    if (results[0].meta.changes !== 1 ||
-        results[1].meta.changes !== 1) {
+    if (
+      results[0].meta.changes !== 1 ||
+      results[1].meta.changes !== 1 ||
+      results[2].meta.changes !== 1
+    ) {
       throw new HttpError(
         500,
         "Claim transaction could not be confirmed"
@@ -1398,7 +1520,7 @@ async function handleRequest(request, env, json) {
   }
 
   // ==========================================
-  // CREATE WITHDRAWAL
+  // CREATE WITHDRAWAL + LEDGER
   // ==========================================
 
   if (path === "/api/withdrawals" && method === "POST") {
@@ -1450,8 +1572,7 @@ async function handleRequest(request, env, json) {
             AND balance_koinu >= ?
         `).bind(amount, user.sub, amount),
 
-        // STEP 2: Create one pending request only after the debit.
-        // The NOT EXISTS condition protects against simultaneous requests.
+        // STEP 2: Create the pending withdrawal.
         env.DB.prepare(`
           INSERT INTO withdrawals (
             uid,
@@ -1474,7 +1595,37 @@ async function handleRequest(request, env, json) {
           user.sub
         ),
 
-        // STEP 3: Roll back if the withdrawal was not created.
+        // STEP 3: Record the withdrawal debit.
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid,
+            transaction_type,
+            amount_koinu,
+            balance_before_koinu,
+            balance_after_koinu,
+            reference_type,
+            reference_id,
+            idempotency_key
+          )
+          SELECT
+            u.uid,
+            'withdrawal',
+            -?,
+            u.balance_koinu + ?,
+            u.balance_koinu,
+            'withdrawal',
+            CAST(last_insert_rowid() AS TEXT),
+            'withdrawal:' || u.uid || ':' || last_insert_rowid()
+          FROM users u
+          WHERE u.uid = ?
+            AND changes() = 1
+        `).bind(
+          amount,
+          amount,
+          user.sub
+        ),
+
+        // STEP 4: Roll back if the ledger insert failed.
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
@@ -1515,8 +1666,11 @@ async function handleRequest(request, env, json) {
       );
     }
 
-    if (results[0].meta.changes !== 1 ||
-        results[1].meta.changes !== 1) {
+    if (
+      results[0].meta.changes !== 1 ||
+      results[1].meta.changes !== 1 ||
+      results[2].meta.changes !== 1
+    ) {
       throw new HttpError(
         500,
         "Withdrawal transaction could not be confirmed"
@@ -1597,7 +1751,7 @@ async function handleRequest(request, env, json) {
 
   // ADMIN: APPROVE WITHDRAWAL
   // Real DOGE sending and transaction-ID verification are not integrated.
-  // Therefore approval is deliberately blocked to prevent false payment status.
+  // Approval remains blocked to prevent false payment status.
   const approveMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
   );
@@ -1612,7 +1766,7 @@ async function handleRequest(request, env, json) {
     );
   }
 
-  // ADMIN: REJECT WITHDRAWAL AND REFUND
+  // ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER
   const rejectMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/reject$/
   );
@@ -1642,7 +1796,7 @@ async function handleRequest(request, env, json) {
             AND status = 'pending'
         `).bind(admin.uid, id),
 
-        // STEP 2: Refund only if STEP 1 changed one row.
+        // STEP 2: Refund the user's balance.
         env.DB.prepare(`
           UPDATE users
           SET balance_koinu = balance_koinu + (
@@ -1660,7 +1814,35 @@ async function handleRequest(request, env, json) {
             AND changes() = 1
         `).bind(id, id),
 
-        // STEP 3: Roll back if the refund did not happen.
+        // STEP 3: Record the refund in the ledger.
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid,
+            transaction_type,
+            amount_koinu,
+            balance_before_koinu,
+            balance_after_koinu,
+            reference_type,
+            reference_id,
+            idempotency_key
+          )
+          SELECT
+            u.uid,
+            'withdrawal_refund',
+            w.amount_koinu,
+            u.balance_koinu - w.amount_koinu,
+            u.balance_koinu,
+            'withdrawal',
+            CAST(w.id AS TEXT),
+            'withdrawal_refund:' || w.id
+          FROM withdrawals w
+          JOIN users u ON u.uid = w.uid
+          WHERE w.id = ?
+            AND w.status = 'rejected'
+            AND changes() = 1
+        `).bind(id),
+
+        // STEP 4: Roll back if the refund ledger record failed.
         env.DB.prepare(`
           SELECT CASE
             WHEN changes() != 1
@@ -1689,8 +1871,11 @@ async function handleRequest(request, env, json) {
       );
     }
 
-    if (results[0].meta.changes !== 1 ||
-        results[1].meta.changes !== 1) {
+    if (
+      results[0].meta.changes !== 1 ||
+      results[1].meta.changes !== 1 ||
+      results[2].meta.changes !== 1
+    ) {
       throw new HttpError(
         500,
         "Withdrawal refund could not be confirmed"
