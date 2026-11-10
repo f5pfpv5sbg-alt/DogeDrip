@@ -16,7 +16,9 @@ import {
   ArrowLeft,
   Crown,
   Zap,
-  Gift
+  Gift,
+  Sparkles,
+  Ticket
 } from 'lucide-react';
 
 // FIREBASE
@@ -64,10 +66,9 @@ const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
 
 // SHARED STYLE CLASSES
-// These were missing from the file. LABEL_CLS and INPUT_CLS are used by the
-// Wallet withdrawal form (and PRIMARY_BTN / LABEL_CLS / INPUT_CLS by the auth
-// forms). Referencing an undefined constant throws a ReferenceError during
-// render, React unmounts the whole tree and the page turns completely black.
+// LABEL_CLS and INPUT_CLS are used by the Wallet withdrawal form (and
+// PRIMARY_BTN / LABEL_CLS / INPUT_CLS by the auth forms). An undefined
+// constant here throws a ReferenceError and blanks the whole page.
 const LABEL_CLS =
   'block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1';
 
@@ -76,6 +77,12 @@ const INPUT_CLS =
 
 const PRIMARY_BTN =
   "w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide";
+
+// LUCKY WHEEL (presentation constants only; prizes, odds, prices and spin
+// counts ALL come from the Worker)
+const WHEEL_SPIN_MS = 5200;
+const WHEEL_EXTRA_TURNS = 6;
+const WHEEL_SLICE_FILLS = ['#050505', '#1c0f15'];
 
 
 // PLAN CATALOG (DISPLAY ONLY)
@@ -211,6 +218,10 @@ const formatDate = (value) => {
   return date ? date.toLocaleString() : 'N/A';
 };
 
+// Koinu -> DOGE text without trailing zeros (180000 -> "0.0018")
+const formatDoge = (koinu) =>
+  isNum(koinu) ? String(Number((Number(koinu) / KOINU).toFixed(8))) : '...';
+
 const mapWithdrawal = (w) => ({
   id: w.id,
   userId: w.uid || w.userId || '',
@@ -221,7 +232,15 @@ const mapWithdrawal = (w) => ({
   timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
-// Small presentational tile used on the Faucet page
+// Label shown on a wheel slice / result. The text comes from the Worker
+// (wheel_prizes.label) and falls back to the amount it reports.
+const prizeLabel = (p) => {
+  if (!p) return '';
+  if (typeof p.label === 'string' && p.label) return p.label;
+  return `${formatDoge(p.amount_koinu)} DOGE`;
+};
+
+// Small presentational tile used on the Faucet and Lucky Wheel pages
 const StatTile = ({ label, value, sub, valueCls = 'text-white' }) => (
   <div className="bg-black border border-slate-800 rounded-xl p-4 text-left">
     <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-mono font-bold">
@@ -235,6 +254,86 @@ const StatTile = ({ label, value, sub, valueCls = 'text-white' }) => (
     )}
   </div>
 );
+
+// Pink divider used on the Lucky Wheel page
+const PinkDivider = () => (
+  <div
+    aria-hidden="true"
+    className="h-px w-full bg-gradient-to-r from-transparent via-[#F4A6C1] to-transparent opacity-70"
+  />
+);
+
+// SVG wheel. Slices are all the same visual size: the size of a slice says
+// nothing about its odds (the Worker decides the outcome).
+const WheelGraphic = ({ prizes }) => {
+  const size = 400;
+  const c = size / 2;
+  const r = 190;
+  const n = prizes.length;
+  const sliceAngle = n > 0 ? 360 / n : 360;
+
+  const point = (angleDeg, radius) => {
+    const a = (angleDeg * Math.PI) / 180;
+    return [c + radius * Math.sin(a), c - radius * Math.cos(a)];
+  };
+
+  return (
+    <svg
+      viewBox={`0 0 ${size} ${size}`}
+      className="w-full h-full block"
+      role="img"
+      aria-label="Lucky Wheel"
+    >
+      <circle cx={c} cy={c} r={r + 6} fill="#000" stroke="#F4A6C1" strokeWidth="3" />
+
+      {n === 1 && (
+        <circle cx={c} cy={c} r={r} fill={WHEEL_SLICE_FILLS[0]} stroke="#F4A6C1" strokeWidth="2" />
+      )}
+
+      {n > 1 && prizes.map((p, i) => {
+        const start = i * sliceAngle;
+        const end = (i + 1) * sliceAngle;
+        const [x1, y1] = point(start, r);
+        const [x2, y2] = point(end, r);
+        const largeArc = sliceAngle > 180 ? 1 : 0;
+        const mid = start + sliceAngle / 2;
+        const labelY = c - r * 0.58;
+
+        return (
+          <g key={`${p.id}-${i}`}>
+            <path
+              d={`M ${c} ${c} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`}
+              fill={WHEEL_SLICE_FILLS[i % WHEEL_SLICE_FILLS.length]}
+              stroke="#F4A6C1"
+              strokeWidth="2"
+            />
+            <g transform={`rotate(${mid} ${c} ${c})`}>
+              <text
+                x={c}
+                y={labelY}
+                transform={`rotate(-90 ${c} ${labelY})`}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fill="#ffffff"
+                fontSize="19"
+                fontWeight="800"
+                fontFamily="'Space Grotesk', ui-monospace, monospace"
+              >
+                {prizeLabel(p)}
+              </text>
+            </g>
+          </g>
+        );
+      })}
+
+      {/* Outer pink studs */}
+      {Array.from({ length: 24 }).map((_, i) => {
+        const [sx, sy] = point(i * 15, r + 6);
+        return <circle key={i} cx={sx} cy={sy} r="2.5" fill="#F4A6C1" />;
+      })}
+    </svg>
+  );
+};
 
 export default function App() {
   // NAVIGATION
@@ -301,6 +400,27 @@ export default function App() {
   const [referralStats, setReferralStats] = useState(null);
   const [referralLoading, setReferralLoading] = useState(false);
   const [referralError, setReferralError] = useState('');
+
+  // LUCKY WHEEL (everything here is data returned by the Worker)
+  const [wheelPrizes, setWheelPrizes] = useState([]);
+  const [wheelPacks, setWheelPacks] = useState([]);
+  // { freeRemaining, freeTotal, paidRemaining, totalRemaining } (null until loaded)
+  const [wheelSpins, setWheelSpins] = useState(null);
+  const [wheelHistory, setWheelHistory] = useState([]);
+  const [wheelPurchases, setWheelPurchases] = useState([]);
+  const [wheelLoading, setWheelLoading] = useState(false);
+  const [wheelError, setWheelError] = useState('');
+  const [wheelBackendMissing, setWheelBackendMissing] = useState(false);
+  const [wheelRotation, setWheelRotation] = useState(0);
+  const [wheelAnimating, setWheelAnimating] = useState(false);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const [wheelResult, setWheelResult] = useState(null);
+  const [wheelMsg, setWheelMsg] = useState('');
+  const [wheelMsgIsError, setWheelMsgIsError] = useState(false);
+  const [buyingPackId, setBuyingPackId] = useState(null);
+  const spinInFlightRef = useRef(false);
+  const spinTimerRef = useRef(null);
+  const wheelRotationRef = useRef(0);
 
   // ADMIN
   const [adminWithdrawals, setAdminWithdrawals] = useState([]);
@@ -435,6 +555,45 @@ export default function App() {
     }
   };
 
+  // Applies the spin counters returned by the Wheel endpoints.
+  // Only fields the Worker actually sends are applied.
+  const applyWheelSpins = (spins) => {
+    if (!spins || typeof spins !== 'object') return;
+
+    const patch = {};
+
+    if (isNum(spins.free_remaining)) patch.freeRemaining = Number(spins.free_remaining);
+    if (isNum(spins.free_total)) patch.freeTotal = Number(spins.free_total);
+    if (isNum(spins.paid_remaining)) patch.paidRemaining = Number(spins.paid_remaining);
+
+    if (isNum(spins.total_remaining)) {
+      patch.totalRemaining = Number(spins.total_remaining);
+    } else if (isNum(spins.free_remaining) && isNum(spins.paid_remaining)) {
+      patch.totalRemaining =
+        Number(spins.free_remaining) + Number(spins.paid_remaining);
+    }
+
+    if (Object.keys(patch).length > 0) {
+      setWheelSpins(prev => ({ ...(prev || {}), ...patch }));
+    }
+  };
+
+  // Applies a GET /api/wheel/state response (prizes, packs, spins, balance).
+  const applyWheelState = (data) => {
+    if (!data || typeof data !== 'object') return;
+
+    if (Array.isArray(data.prizes)) {
+      setWheelPrizes(data.prizes);
+    }
+
+    if (Array.isArray(data.packs)) {
+      setWheelPacks(data.packs);
+    }
+
+    applyWheelSpins(data.spins);
+    applyAccountData(data);
+  };
+
   // ADMIN REDIRECT
   useEffect(() => {
     if (activeTab === 'admin' && !isDemoAdmin) {
@@ -471,6 +630,16 @@ export default function App() {
       setReferralLoading(false);
       setClaimsLoading(false);
       setAdminLoading(false);
+      setWheelPrizes([]);
+      setWheelPacks([]);
+      setWheelSpins(null);
+      setWheelHistory([]);
+      setWheelPurchases([]);
+      setWheelError('');
+      setWheelBackendMissing(false);
+      setWheelResult(null);
+      setWheelMsg('');
+      setWheelLoading(false);
 
       if (!user) {
         setAuthLoading(false);
@@ -575,6 +744,9 @@ export default function App() {
 
         // Do not overwrite fresher claim data while a claim is in flight
         if (cancelled || claimInFlightRef.current) return;
+
+        // Do not reveal a spin result early by refreshing the balance mid-animation
+        if (spinInFlightRef.current) return;
 
         applyAccountData(data);
         setAccountError('');
@@ -706,6 +878,71 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, activeTab]);
 
+  // LOAD LUCKY WHEEL STATE + HISTORY FROM THE WORKER
+  // (when the Wheel tab is opened, and again when the UTC day rolls over so
+  // the free spins reset shows up). Nothing is simulated: if the Worker does
+  // not have the Wheel endpoints, the page says so and stays disabled.
+  useEffect(() => {
+    if (!firebaseUser || !apiReady) return;
+    if (activeTab !== 'wheel') return;
+
+    let cancelled = false;
+
+    const loadWheel = async () => {
+      setWheelLoading(true);
+      setWheelError('');
+
+      try {
+        const state = await apiRequest('/api/wheel/state');
+
+        if (cancelled) return;
+
+        setWheelBackendMissing(false);
+
+        // Keep a pending spin result hidden until the animation ends
+        if (!spinInFlightRef.current) {
+          applyWheelState(state);
+        }
+      } catch (error) {
+        if (cancelled) return;
+
+        if (error.status === 404) {
+          setWheelBackendMissing(true);
+        } else {
+          setWheelError(error.message || 'Could not load the Lucky Wheel.');
+        }
+
+        setWheelLoading(false);
+        return;
+      }
+
+      try {
+        const history = await apiRequest('/api/wheel/history');
+
+        if (!cancelled) {
+          setWheelHistory(Array.isArray(history.spins) ? history.spins : []);
+          setWheelPurchases(
+            Array.isArray(history.purchases) ? history.purchases : []
+          );
+        }
+      } catch (error) {
+        if (!cancelled && error.status !== 404) {
+          setWheelError(error.message || 'Could not load the wheel history.');
+        }
+      } finally {
+        if (!cancelled) {
+          setWheelLoading(false);
+        }
+      }
+    };
+
+    loadWheel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady, activeTab, accountSyncTick]);
+
   // LOAD ADMIN WITHDRAWALS FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin) {
@@ -769,6 +1006,15 @@ export default function App() {
     return () => {
       if (claimStatusTimerRef.current) {
         clearTimeout(claimStatusTimerRef.current);
+      }
+    };
+  }, []);
+
+  // CLEAR WHEEL TIMER ON UNMOUNT
+  useEffect(() => {
+    return () => {
+      if (spinTimerRef.current) {
+        clearTimeout(spinTimerRef.current);
       }
     };
   }, []);
@@ -1038,6 +1284,176 @@ export default function App() {
     } finally {
       claimInFlightRef.current = false;
       setIsClaiming(false);
+    }
+  };
+
+  // Re-reads the wheel state + history from the Worker (after a spin / purchase).
+  // A refresh failure never turns a successful action into an error.
+  const refreshWheelData = async () => {
+    const [stateResult, historyResult] = await Promise.allSettled([
+      apiRequest('/api/wheel/state'),
+      apiRequest('/api/wheel/history')
+    ]);
+
+    if (stateResult.status === 'fulfilled') {
+      applyWheelState(stateResult.value);
+    }
+
+    if (historyResult.status === 'fulfilled') {
+      setWheelHistory(
+        Array.isArray(historyResult.value.spins) ? historyResult.value.spins : []
+      );
+      setWheelPurchases(
+        Array.isArray(historyResult.value.purchases)
+          ? historyResult.value.purchases
+          : []
+      );
+    }
+  };
+
+  // LUCKY WHEEL SPIN
+  // The Worker picks the prize (probabilities live only in wheel_prizes on
+  // the backend), consumes the spin, credits the balance and answers with the
+  // prize. The frontend only animates the wheel to that prize and shows it.
+  const handleWheelSpin = async () => {
+    if (spinInFlightRef.current || isSpinning) return;
+
+    if (!firebaseUser || !apiReady) {
+      setWheelMsgIsError(true);
+      setWheelMsg('Database is not ready. Please try again.');
+      return;
+    }
+
+    if (wheelPrizes.length < 2) {
+      setWheelMsgIsError(true);
+      setWheelMsg('The wheel is not available yet.');
+      return;
+    }
+
+    spinInFlightRef.current = true;
+    setIsSpinning(true);
+    setWheelResult(null);
+    setWheelMsg('');
+    setWheelMsgIsError(false);
+
+    let data;
+
+    try {
+      data = await apiRequest('/api/wheel/spin', { method: 'POST' });
+    } catch (error) {
+      if (error.status === 404) {
+        setWheelBackendMissing(true);
+      } else {
+        // Out of spins / limits etc.: take the counters the Worker reports
+        applyWheelSpins(error.data?.spins);
+        setWheelMsgIsError(true);
+        setWheelMsg(error.message || 'Could not spin the wheel.');
+      }
+
+      spinInFlightRef.current = false;
+      setIsSpinning(false);
+      return;
+    }
+
+    const prize = data?.prize;
+    const prizeIndex = prize
+      ? wheelPrizes.findIndex(p => String(p.id) === String(prize.id))
+      : -1;
+
+    const finish = async () => {
+      setWheelAnimating(false);
+      setWheelResult({
+        prize,
+        source: typeof data.source === 'string' ? data.source : ''
+      });
+
+      // Balance and counters from the spin response, shown only now so the
+      // result is not revealed before the wheel stops.
+      applyAccountData(data);
+      applyWheelSpins(data.spins);
+
+      spinInFlightRef.current = false;
+      setIsSpinning(false);
+
+      await refreshWheelData();
+    };
+
+    if (!prize || prizeIndex < 0) {
+      // The Worker returned a prize that is not on the wheel: show it, do not fake an animation.
+      await finish();
+
+      if (!prize) {
+        setWheelResult(null);
+        setWheelMsgIsError(true);
+        setWheelMsg('The server did not return a prize. Check your balance and history.');
+      }
+
+      return;
+    }
+
+    // Land the CENTER of the winning slice under the pointer (top).
+    const sliceAngle = 360 / wheelPrizes.length;
+    const targetMod = (((-(prizeIndex + 0.5) * sliceAngle) % 360) + 360) % 360;
+    const currentMod = ((wheelRotationRef.current % 360) + 360) % 360;
+    const delta = (targetMod - currentMod + 360) % 360;
+    const nextRotation =
+      wheelRotationRef.current + 360 * WHEEL_EXTRA_TURNS + delta;
+
+    wheelRotationRef.current = nextRotation;
+    setWheelAnimating(true);
+    setWheelRotation(nextRotation);
+
+    if (spinTimerRef.current) {
+      clearTimeout(spinTimerRef.current);
+    }
+
+    spinTimerRef.current = window.setTimeout(finish, WHEEL_SPIN_MS + 150);
+  };
+
+  // BUY SPINS (the Worker owns the pack prices and debits the DEMO balance)
+  const handleBuyPack = async (pack) => {
+    if (!pack || spinInFlightRef.current || isSpinning || buyingPackId !== null) return;
+
+    if (!firebaseUser || !apiReady) {
+      setWheelMsgIsError(true);
+      setWheelMsg('Database is not ready. Please try again.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Buy ${pack.spins} spin${Number(pack.spins) === 1 ? '' : 's'} for ${formatDoge(pack.price_koinu)} DEMO DOGE?`
+    );
+
+    if (!confirmed) return;
+
+    setBuyingPackId(pack.id);
+    setWheelMsg('');
+    setWheelMsgIsError(false);
+
+    try {
+      const data = await apiRequest('/api/wheel/buy', {
+        method: 'POST',
+        body: JSON.stringify({ pack_id: pack.id })
+      });
+
+      applyAccountData(data);
+      applyWheelSpins(data.spins);
+
+      setWheelMsgIsError(false);
+      setWheelMsg(
+        `Purchased ${pack.spins} spin${Number(pack.spins) === 1 ? '' : 's'}.`
+      );
+
+      await refreshWheelData();
+    } catch (error) {
+      if (error.status === 404) {
+        setWheelBackendMissing(true);
+      } else {
+        setWheelMsgIsError(true);
+        setWheelMsg(error.message || 'Could not buy spins.');
+      }
+    } finally {
+      setBuyingPackId(null);
     }
   };
 
@@ -1492,6 +1908,29 @@ export default function App() {
             ? `Available in ${cooldownLeft}s`
             : `Claim ${claimAmount.toFixed(6)} DOGE (Demo)`;
 
+  // Lucky Wheel helpers for the UI (display only; the Worker enforces everything)
+  const wheelReady =
+    !wheelBackendMissing && wheelPrizes.length >= 2 && wheelSpins !== null;
+  const wheelTotalSpins =
+    wheelSpins && isNum(wheelSpins.totalRemaining)
+      ? wheelSpins.totalRemaining
+      : null;
+  const wheelNoSpins = wheelTotalSpins !== null && wheelTotalSpins <= 0;
+  const canSpin =
+    apiReady && wheelReady && !isSpinning && buyingPackId === null && !wheelNoSpins;
+
+  const spinButtonLabel = isSpinning
+    ? 'Spinning...'
+    : !apiReady
+      ? 'Connecting...'
+      : wheelBackendMissing
+        ? 'Wheel Unavailable'
+        : !wheelReady
+          ? 'Loading wheel...'
+          : wheelNoSpins
+            ? 'No Spins Left'
+            : 'Spin Now';
+
   // LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
@@ -1573,6 +2012,19 @@ export default function App() {
           0%, 75% { opacity: 1; }
           100% { opacity: 0; }
         }
+
+        @keyframes wheelResultPop {
+          0% { transform: scale(.92); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+
+        .wheel-result-pop {
+          animation: wheelResultPop .35s ease-out both;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .wheel-result-pop { animation: none; }
+        }
       `}</style>
 
       {/* HEADER */}
@@ -1634,6 +2086,15 @@ export default function App() {
             >
               <RefreshCw className="w-4 h-4" />
               <span>Doge Faucet</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('wheel')}
+              className={tabBtnCls('wheel')}
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Lucky Wheel</span>
             </button>
 
             <button
@@ -1960,6 +2421,343 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* LUCKY WHEEL */}
+          {activeTab === 'wheel' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-8">
+
+              <div className="text-center">
+                <h2 className="text-2xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif] tracking-tight">
+                  Lucky Wheel <span className="text-[#F4A6C1]">(DEMO)</span>
+                </h2>
+                <p className="text-sm text-slate-400">
+                  Spin for simulated DEMO DOGE. The prize is decided by the server.
+                </p>
+              </div>
+
+              {wheelBackendMissing && (
+                <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    The Lucky Wheel is not available yet: the Worker does not have the
+                    Wheel endpoints (/api/wheel/state, /api/wheel/spin, /api/wheel/buy,
+                    /api/wheel/history). Nothing is simulated here, so spinning and
+                    buying are disabled until they are deployed.
+                  </span>
+                </div>
+              )}
+
+              {wheelError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{wheelError}</span>
+                </div>
+              )}
+
+              <PinkDivider />
+
+              {/* SPINS + BALANCE */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatTile
+                  label="Free Spins Left"
+                  value={
+                    wheelSpins && isNum(wheelSpins.freeRemaining)
+                      ? `${wheelSpins.freeRemaining}${isNum(wheelSpins.freeTotal) ? ` / ${wheelSpins.freeTotal}` : ''}`
+                      : (wheelLoading ? '...' : 'N/A')
+                  }
+                  sub="Today (UTC)"
+                />
+                <StatTile
+                  label="Purchased Spins"
+                  value={
+                    wheelSpins && isNum(wheelSpins.paidRemaining)
+                      ? wheelSpins.paidRemaining
+                      : (wheelLoading ? '...' : 'N/A')
+                  }
+                />
+                <StatTile
+                  label="Total Spins"
+                  value={wheelTotalSpins !== null ? wheelTotalSpins : (wheelLoading ? '...' : 'N/A')}
+                  valueCls="text-[#F4A6C1]"
+                />
+                <StatTile
+                  label="Balance"
+                  value={demoBalance.toFixed(6)}
+                  sub="DOGE (demo)"
+                />
+              </div>
+
+              <p className="text-xs text-slate-500 text-center -mt-4">
+                Free spins reset at 00:00 UTC, in {formatDuration(resetSeconds)}.
+              </p>
+
+              <PinkDivider />
+
+              {/* WHEEL */}
+              <div className="flex flex-col items-center space-y-6">
+                <div className="relative w-full max-w-[22rem] aspect-square">
+                  {/* Pointer */}
+                  <div className="absolute left-1/2 -top-3 -translate-x-1/2 z-20 drop-shadow-[0_0_8px_rgba(244,166,193,0.7)]" aria-hidden="true">
+                    <svg width="34" height="40" viewBox="0 0 34 40">
+                      <polygon points="17,40 1,4 33,4" fill="#F4A6C1" stroke="#000" strokeWidth="2" />
+                    </svg>
+                  </div>
+
+                  {/* Rotating wheel */}
+                  <div
+                    className="absolute inset-0 rounded-full shadow-[0_0_40px_rgba(244,166,193,0.25)]"
+                    style={{
+                      transform: `rotate(${wheelRotation}deg)`,
+                      transition: wheelAnimating
+                        ? `transform ${WHEEL_SPIN_MS}ms cubic-bezier(0.12, 0.6, 0.08, 1)`
+                        : 'none',
+                      willChange: 'transform'
+                    }}
+                  >
+                    {wheelPrizes.length >= 2 ? (
+                      <WheelGraphic prizes={wheelPrizes} />
+                    ) : (
+                      <div className="w-full h-full rounded-full border-4 border-[#F4A6C1]/40 flex items-center justify-center text-xs text-slate-500 text-center p-10">
+                        {wheelLoading ? 'Loading wheel...' : 'Wheel prizes are not available.'}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Center logo (does not rotate) */}
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-black border-[3px] border-[#F4A6C1] shadow-[0_0_20px_rgba(244,166,193,0.45)] flex flex-col items-center justify-center">
+                      <Shield className="w-5 h-5 text-[#F4A6C1] mb-0.5" />
+                      <span className="font-black leading-none tracking-tight text-white font-['Space_Grotesk',sans-serif] text-base sm:text-lg">
+                        DOGE
+                      </span>
+                      <span className="font-black leading-none tracking-tight text-[#F4A6C1] font-['Space_Grotesk',sans-serif] text-base sm:text-lg">
+                        DRIP
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleWheelSpin}
+                  disabled={!canSpin}
+                  className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
+                >
+                  {isSpinning
+                    ? <RefreshCw className="w-5 h-5 animate-spin" />
+                    : <Sparkles className="w-5 h-5" />
+                  }
+                  <span>{spinButtonLabel}</span>
+                </button>
+
+                {/* RESULT */}
+                {wheelResult && wheelResult.prize && (
+                  <div
+                    key={`${wheelResult.prize.id}-${wheelHistory.length}-${wheelResult.source}`}
+                    className="wheel-result-pop w-full max-w-sm bg-black border-2 border-[#F4A6C1] rounded-2xl p-5 text-center shadow-lg shadow-[#F4A6C1]/20"
+                  >
+                    <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono font-bold">
+                      Spin Result
+                    </span>
+
+                    {isNum(wheelResult.prize.amount_koinu) && Number(wheelResult.prize.amount_koinu) > 0 ? (
+                      <>
+                        <div className="text-3xl font-black font-mono text-[#F4A6C1] mt-1">
+                          +{formatDoge(wheelResult.prize.amount_koinu)} DOGE
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Added to your DEMO balance.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-2xl font-black text-white mt-1 font-['Space_Grotesk',sans-serif]">
+                          No prize this time
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Better luck on the next spin.
+                        </p>
+                      </>
+                    )}
+
+                    {wheelResult.source && (
+                      <p className="text-[10px] uppercase tracking-wider text-slate-500 font-mono mt-2">
+                        {wheelResult.source === 'free' ? 'Free spin' : wheelResult.source === 'paid' ? 'Purchased spin' : wheelResult.source}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {wheelMsg && (
+                  <p className={`text-sm font-bold font-['Space_Grotesk',sans-serif] text-center ${
+                    wheelMsgIsError ? 'text-red-400' : 'text-emerald-400'
+                  }`}>
+                    {wheelMsg}
+                  </p>
+                )}
+              </div>
+
+              <PinkDivider />
+
+              {/* SPIN PACKS */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                    Buy Spins
+                  </h3>
+                  <span className="text-xs text-[#F4A6C1] font-mono">
+                    Paid from DEMO balance
+                  </span>
+                </div>
+
+                {wheelPacks.length === 0 ? (
+                  <p className="text-sm text-slate-500 text-center py-4">
+                    {wheelBackendMissing
+                      ? 'Spin packs are not available yet.'
+                      : wheelLoading
+                        ? 'Loading spin packs...'
+                        : 'No spin packs available.'}
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    {wheelPacks.map(pack => {
+                      const priceDoge = Number(pack.price_koinu) / KOINU;
+                      const cannotAfford = Number.isFinite(priceDoge) && demoBalance < priceDoge;
+
+                      return (
+                        <div
+                          key={pack.id}
+                          className="bg-black border border-[#F4A6C1]/30 rounded-xl p-4 flex flex-col items-center text-center space-y-3"
+                        >
+                          <Ticket className="w-6 h-6 text-[#F4A6C1]" />
+
+                          <div>
+                            <div className="text-xl font-black font-mono text-white">
+                              {pack.spins} {Number(pack.spins) === 1 ? 'Spin' : 'Spins'}
+                            </div>
+                            <div className="text-xs font-mono text-[#F4A6C1] mt-0.5">
+                              {formatDoge(pack.price_koinu)} DOGE
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleBuyPack(pack)}
+                            disabled={!apiReady || isSpinning || buyingPackId !== null || cannotAfford}
+                            className="w-full bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/40 text-[#F4A6C1] disabled:opacity-40 disabled:cursor-not-allowed font-black py-2 rounded-lg text-xs transition-colors font-['Space_Grotesk',sans-serif]"
+                          >
+                            {buyingPackId === pack.id
+                              ? 'Buying...'
+                              : cannotAfford
+                                ? 'Not enough balance'
+                                : 'Buy'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <PinkDivider />
+
+              {/* SPIN HISTORY */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                    Spin History
+                  </h3>
+                  <span className="text-xs text-[#F4A6C1] font-mono">
+                    Recent spins
+                  </span>
+                </div>
+
+                {wheelHistory.length === 0 ? (
+                  <p className="text-sm text-slate-500 text-center py-4">
+                    {wheelLoading ? 'Loading history...' : 'No spins yet.'}
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="text-slate-400 uppercase border-b border-[#F4A6C1]/30">
+                        <tr>
+                          <th className="py-3 pr-4">Prize</th>
+                          <th className="py-3 pr-4">Type</th>
+                          <th className="py-3">Date</th>
+                        </tr>
+                      </thead>
+
+                      <tbody className="divide-y divide-slate-800/60">
+                        {wheelHistory.map((s, index) => (
+                          <tr key={s.id ?? index}>
+                            <td className={`py-3 pr-4 font-bold ${
+                              isNum(s.amount_koinu) && Number(s.amount_koinu) > 0
+                                ? 'text-emerald-400'
+                                : 'text-slate-500'
+                            }`}>
+                              {isNum(s.amount_koinu) && Number(s.amount_koinu) > 0
+                                ? `+${formatDoge(s.amount_koinu)} DOGE`
+                                : 'No prize'}
+                            </td>
+                            <td className="py-3 pr-4 text-slate-400">
+                              {s.source === 'free' ? 'Free' : s.source === 'paid' ? 'Purchased' : (s.source || '-')}
+                            </td>
+                            <td className="py-3 text-slate-400">
+                              {formatDate(s.created_at)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* PURCHASE HISTORY */}
+              {wheelPurchases.length > 0 && (
+                <div className="space-y-4">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                    Purchase History
+                  </h3>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="text-slate-400 uppercase border-b border-[#F4A6C1]/30">
+                        <tr>
+                          <th className="py-3 pr-4">Spins</th>
+                          <th className="py-3 pr-4">Price</th>
+                          <th className="py-3">Date</th>
+                        </tr>
+                      </thead>
+
+                      <tbody className="divide-y divide-slate-800/60">
+                        {wheelPurchases.map((p, index) => (
+                          <tr key={p.id ?? index}>
+                            <td className="py-3 pr-4 text-white font-bold">
+                              {p.spins}
+                            </td>
+                            <td className="py-3 pr-4 text-[#F4A6C1] font-bold">
+                              -{formatDoge(p.price_koinu)} DOGE
+                            </td>
+                            <td className="py-3 text-slate-400">
+                              {formatDate(p.created_at)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <PinkDivider />
+
+              <p className="text-[11px] text-slate-500 text-center">
+                DEMO ledger only. No real DOGE is paid out. Prizes, odds, spin
+                counts and prices are controlled by the server.
+              </p>
             </div>
           )}
 
