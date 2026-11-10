@@ -5,7 +5,6 @@ const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
 const MIN_WITHDRAWAL_KOINU = 100000000;
-const WHEEL_USES_FAUCET_RESERVE = true;
 
 const PLAN_CONFIG = {
   FREE: {
@@ -21,10 +20,10 @@ const PLAN_CONFIG = {
     free_wheel_spins: 2
   },
   VIP: {
-    amount_koinu: 150000,
-    cooldown_seconds: 0,
-    daily_limit: 100,
-    free_wheel_spins: 3
+    amount_koinu: 100000,
+    cooldown_seconds: 45,
+    daily_limit: 50,
+    free_wheel_spins: 2
   }
 };
 
@@ -84,7 +83,9 @@ function formatDoge(koinu) {
     .replace(/\.?0+$/, "");
 }
 
-// FIREBASE GOOGLE KEYS
+// ==========================================
+// FIREBASE TOKEN VERIFICATION
+// ==========================================
 
 let cachedKeys = null;
 let cachedKeysAt = 0;
@@ -260,7 +261,9 @@ function generateRefCode() {
   return code;
 }
 
+// ==========================================
 // DOGE ADDRESS VALIDATION
+// ==========================================
 
 async function isValidDogeAddress(address) {
   if (
@@ -320,7 +323,9 @@ async function isValidDogeAddress(address) {
   return payload[0] === 0x1e || payload[0] === 0x16;
 }
 
+// ==========================================
 // USER PLAN
+// ==========================================
 
 async function getUserPlan(env, uid) {
   const subscription = await env.DB.prepare(`
@@ -359,14 +364,15 @@ async function getUserPlan(env, uid) {
   };
 }
 
+// ==========================================
 // ACCOUNT INFORMATION
+// ==========================================
 
 async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
   return env.DB.prepare(`
     SELECT
       balance_koinu,
       last_claim_at,
-
       CASE
         WHEN last_claim_at IS NULL THEN 0
         ELSE MAX(
@@ -377,20 +383,20 @@ async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
           )
         )
       END AS cooldown_remaining,
-
       (
         SELECT COUNT(*)
         FROM claims
         WHERE claims.uid = users.uid
           AND date(claims.claimed_at) = date('now')
       ) AS daily_claims_used
-
     FROM users
     WHERE uid = ?
   `).bind(plan.cooldown_seconds, uid).first();
 }
 
+// ==========================================
 // USER SYNCHRONIZATION
+// ==========================================
 
 async function syncUser(env, user, referredByCode) {
   let referrerCode = null;
@@ -443,7 +449,7 @@ async function syncUser(env, user, referredByCode) {
 }
 
 // ==========================================
-// LUCKY WHEEL HELPERS
+// GENERAL HELPERS
 // ==========================================
 
 function getUtcDate() {
@@ -463,27 +469,15 @@ function getRequestId(body) {
   return id;
 }
 
-// CLAIM IDEMPOTENCY HELPERS
-
 async function getExistingClaim(env, uid, requestId) {
   return env.DB.prepare(`
-    SELECT
-      id,
-      amount_koinu,
-      request_id,
-      claimed_at
+    SELECT id, amount_koinu, request_id, claimed_at
     FROM claims
     WHERE uid = ? AND request_id = ?
   `).bind(uid, requestId).first();
 }
 
-async function buildClaimResponse(
-  env,
-  uid,
-  plan,
-  claim,
-  replayed
-) {
+async function buildClaimResponse(env, uid, plan, claim, replayed) {
   const account = await getAccount(env, uid, plan);
 
   if (!account) {
@@ -495,9 +489,7 @@ async function buildClaimResponse(
   return {
     success: true,
     replayed,
-    message: replayed
-      ? "Claim was already processed"
-      : "Claim successful",
+    message: replayed ? "Claim was already processed" : "Claim successful",
     claim: {
       id: claim.id,
       amount_koinu: Number(claim.amount_koinu),
@@ -511,12 +503,13 @@ async function buildClaimResponse(
     cooldown_remaining: Number(account.cooldown_remaining),
     daily_claims_used: dailyUsed,
     daily_limit: plan.daily_limit,
-    daily_claims_remaining: Math.max(
-      0,
-      plan.daily_limit - dailyUsed
-    )
+    daily_claims_remaining: Math.max(0, plan.daily_limit - dailyUsed)
   };
 }
+
+// ==========================================
+// LUCKY WHEEL HELPERS
+// ==========================================
 
 function selectWeightedPrize(prizes) {
   const valid = prizes.filter(
@@ -526,6 +519,10 @@ function selectWeightedPrize(prizes) {
       Number.isSafeInteger(Number(p.probability_weight)) &&
       Number(p.probability_weight) >= 0
   );
+
+  if (valid.length !== prizes.length) {
+    throw new HttpError(503, "Wheel prize configuration unavailable");
+  }
 
   const totalWeight = valid.reduce(
     (sum, p) => sum + Number(p.probability_weight),
@@ -566,94 +563,64 @@ function selectWeightedPrize(prizes) {
   throw new HttpError(500, "Could not select wheel prize");
 }
 
-async function getWheelData(env, uid, plan) {
-  const utcDate = getUtcDate();
+function getMaxWheelPrize(prizes) {
+  const active = prizes.filter(p => Number(p.probability_weight) > 0);
 
-  const [prizesResult, inventory, usage, account, reserve] =
-    await Promise.all([
-      env.DB.prepare(`
-        SELECT
-          id,
-          prize_key,
-          amount_koinu,
-          probability_weight,
-          display_order
-        FROM wheel_prizes
-        ORDER BY display_order ASC
-      `).all(),
-
-      env.DB.prepare(`
-        SELECT paid_spins
-        FROM wheel_spin_inventory
-        WHERE uid = ?
-      `).bind(uid).first(),
-
-      env.DB.prepare(`
-        SELECT free_spins_used
-        FROM wheel_daily_usage
-        WHERE uid = ? AND utc_date = ?
-      `).bind(uid, utcDate).first(),
-
-      env.DB.prepare(`
-        SELECT balance_koinu
-        FROM users
-        WHERE uid = ?
-      `).bind(uid).first(),
-
-      WHEEL_USES_FAUCET_RESERVE
-        ? env.DB.prepare(`
-            SELECT available_koinu, payouts_enabled
-            FROM faucet_reserve
-            WHERE id = 1
-          `).first()
-        : Promise.resolve({
-            available_koinu: 0,
-            payouts_enabled: 1
-          })
-    ]);
-
-  if (!account) {
-    throw new HttpError(404, "User not found");
+  if (!active.length) {
+    throw new HttpError(503, "No active wheel prizes");
   }
 
-  if (!prizesResult.results?.length) {
+  let maxPrize = 0;
+
+  for (const prize of active) {
+    const amount = Number(prize.amount_koinu);
+    const weight = Number(prize.probability_weight);
+
+    if (
+      !Number.isSafeInteger(amount) ||
+      amount < 0 ||
+      !Number.isSafeInteger(weight) ||
+      weight <= 0
+    ) {
+      throw new HttpError(503, "Invalid wheel prize configuration");
+    }
+
+    maxPrize = Math.max(maxPrize, amount);
+  }
+
+  if (!Number.isSafeInteger(maxPrize)) {
+    throw new HttpError(503, "Invalid maximum wheel prize");
+  }
+
+  return maxPrize;
+}
+
+async function getWheelConfiguration(env) {
+  const result = await env.DB.prepare(`
+    SELECT
+      id,
+      prize_key,
+      amount_koinu,
+      probability_weight,
+      display_order
+    FROM wheel_prizes
+    ORDER BY display_order ASC
+  `).all();
+
+  const prizes = result.results || [];
+
+  if (!prizes.length) {
     throw new HttpError(503, "Wheel prizes are not configured");
   }
 
-  if (WHEEL_USES_FAUCET_RESERVE && !reserve) {
-    throw new HttpError(503, "Wheel reserve is not configured");
-  }
+  const maxPrize = getMaxWheelPrize(prizes);
 
-  const freeUsed = Number(usage?.free_spins_used || 0);
-  const freeTotal = Number(plan.free_wheel_spins || 0);
-  const freeRemaining = Math.max(0, freeTotal - freeUsed);
-  const paidRemaining = Number(inventory?.paid_spins || 0);
-
-  return {
-    prizes: prizesResult.results.map(p => ({
-      id: p.prize_key,
-      label: `${formatDoge(p.amount_koinu)} DOGE`,
-      amount_koinu: Number(p.amount_koinu)
-    })),
-    packs: WHEEL_PACKAGES,
-    spins: {
-      free_remaining: freeRemaining,
-      free_total: freeTotal,
-      paid_remaining: paidRemaining,
-      total_remaining: freeRemaining + paidRemaining
-    },
-    balance_koinu: Number(account.balance_koinu)
-  };
+  return { prizes, maxPrize };
 }
 
 async function getExistingSpin(env, uid, requestId) {
   return env.DB.prepare(`
-    SELECT
-      id,
-      spin_type,
-      prize_key,
-      prize_koinu,
-      created_at
+    SELECT id, spin_type, prize_key, prize_koinu, created_at
     FROM wheel_spins
     WHERE uid = ? AND request_id = ?
   `).bind(uid, requestId).first();
@@ -661,11 +628,7 @@ async function getExistingSpin(env, uid, requestId) {
 
 async function getExistingPurchase(env, uid, requestId) {
   return env.DB.prepare(`
-    SELECT
-      id,
-      package_spins,
-      cost_koinu,
-      created_at
+    SELECT id, package_spins, cost_koinu, created_at
     FROM wheel_purchases
     WHERE uid = ? AND request_id = ?
   `).bind(uid, requestId).first();
@@ -690,13 +653,96 @@ function wheelSpinResponse(savedSpin, replayed, data) {
 // LUCKY WHEEL STATE
 // ==========================================
 
+async function getWheelData(env, uid, plan) {
+  const utcDate = getUtcDate();
+
+  const [configuration, inventory, usage, account, reserve] =
+    await Promise.all([
+      getWheelConfiguration(env),
+
+      env.DB.prepare(`
+        SELECT paid_spins
+        FROM wheel_spin_inventory
+        WHERE uid = ?
+      `).bind(uid).first(),
+
+      env.DB.prepare(`
+        SELECT free_spins_used
+        FROM wheel_daily_usage
+        WHERE uid = ? AND utc_date = ?
+      `).bind(uid, utcDate).first(),
+
+      env.DB.prepare(`
+        SELECT balance_koinu
+        FROM users
+        WHERE uid = ?
+      `).bind(uid).first(),
+
+      env.DB.prepare(`
+        SELECT available_koinu, payouts_enabled, locked_koinu
+        FROM wheel_reserve
+        WHERE id = 1
+      `).first()
+    ]);
+
+  if (!account) {
+    throw new HttpError(404, "User not found");
+  }
+
+  if (!reserve) {
+    throw new HttpError(503, "Wheel reserve is not configured");
+  }
+
+  const freeUsed = Number(usage?.free_spins_used || 0);
+  const freeTotal = Number(plan.free_wheel_spins || 0);
+  const freeRemaining = Math.max(0, freeTotal - freeUsed);
+  const paidRemaining = Number(inventory?.paid_spins || 0);
+  const maxPrize = configuration.maxPrize;
+  const available = Number(reserve.available_koinu || 0);
+  const locked = Number(reserve.locked_koinu || 0);
+  const payoutsEnabled = Number(reserve.payouts_enabled) === 1;
+
+  const canFreeSpin =
+    payoutsEnabled &&
+    freeRemaining > 0 &&
+    available >= maxPrize;
+
+  const canPaidSpin =
+    paidRemaining > 0 &&
+    locked >= maxPrize;
+
+  const canBuy = payoutsEnabled &&
+    WHEEL_PACKAGES.some(
+      pack => available >= maxPrize * pack.spins
+    );
+
+  return {
+    prizes: configuration.prizes.map(p => ({
+      id: p.prize_key,
+      label: `${formatDoge(p.amount_koinu)} DOGE`,
+      amount_koinu: Number(p.amount_koinu)
+    })),
+    packs: WHEEL_PACKAGES,
+    spins: {
+      free_remaining: freeRemaining,
+      free_total: freeTotal,
+      paid_remaining: paidRemaining,
+      total_remaining: freeRemaining + paidRemaining
+    },
+    can_free_spin: canFreeSpin,
+    can_paid_spin: canPaidSpin,
+    can_buy: canBuy,
+    wheel_enabled: canFreeSpin || canPaidSpin,
+    balance_koinu: Number(account.balance_koinu)
+  };
+}
+
 async function handleWheelState(env, uid) {
   const plan = await getUserPlan(env, uid);
-  const data = await getWheelData(env, uid, plan);
 
   return {
     success: true,
-    ...data
+    ...(await getWheelData(env, uid, plan))
   };
 }
 
@@ -706,68 +752,64 @@ async function handleWheelState(env, uid) {
 
 async function handleWheelSpin(env, uid, body) {
   const requestId = getRequestId(body);
-
-  if (!WHEEL_USES_FAUCET_RESERVE) {
-    throw new HttpError(
-      503,
-      "Wheel reserve protection is required"
-    );
-  }
-
   const plan = await getUserPlan(env, uid);
 
   const existing = await getExistingSpin(env, uid, requestId);
 
   if (existing) {
-    const data = await getWheelData(env, uid, plan);
-    return wheelSpinResponse(existing, true, data);
+    return wheelSpinResponse(
+      existing,
+      true,
+      await getWheelData(env, uid, plan)
+    );
   }
 
   const before = await getWheelData(env, uid, plan);
 
   let spinType;
 
-  if (before.spins.free_remaining > 0) {
+  if (before.can_free_spin) {
     spinType = "free";
-  } else if (before.spins.paid_remaining > 0) {
+  } else if (before.can_paid_spin) {
     spinType = "paid";
+  } else if (before.spins.free_remaining > 0) {
+    throw new HttpError(503, "Free wheel temporarily unavailable");
+  } else if (before.spins.paid_remaining > 0) {
+    throw new HttpError(503, "Paid spins are not sufficiently backed");
   } else {
     throw new HttpError(409, "No spins remaining");
   }
 
-  const prizeRows = await env.DB.prepare(`
-    SELECT
-      id,
-      prize_key,
-      amount_koinu,
-      probability_weight
-    FROM wheel_prizes
-    ORDER BY display_order ASC
-  `).all();
-
-  const prize = selectWeightedPrize(prizeRows.results || []);
+  const configuration = await getWheelConfiguration(env);
+  const prize = selectWeightedPrize(configuration.prizes);
   const amount = Number(prize.amount_koinu);
+  const maxPrize = configuration.maxPrize;
   const utcDate = getUtcDate();
 
-  if (!Number.isSafeInteger(amount) || amount < 0) {
-    throw new HttpError(500, "Invalid wheel prize amount");
+  if (
+    !Number.isSafeInteger(amount) ||
+    amount < 0 ||
+    amount > maxPrize
+  ) {
+    throw new HttpError(503, "Invalid wheel prize amount");
   }
 
   const statements = [];
 
-  statements.push(
-    env.DB.prepare(`
-      UPDATE faucet_reserve
-      SET
-        available_koinu = available_koinu - ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = 1
-        AND payouts_enabled = 1
-        AND available_koinu >= ?
-    `).bind(amount, amount)
-  );
-
   if (spinType === "free") {
+    // Reserve the maximum possible prize before selecting the result.
+    statements.push(
+      env.DB.prepare(`
+        UPDATE wheel_reserve
+        SET
+          available_koinu = available_koinu - ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+          AND payouts_enabled = 1
+          AND available_koinu >= ?
+      `).bind(maxPrize, maxPrize)
+    );
+
     statements.push(
       env.DB.prepare(`
         INSERT INTO wheel_daily_usage (
@@ -800,6 +842,24 @@ async function handleWheelSpin(env, uid, body) {
       )
     );
   } else {
+    // Consume the locked maximum and release the unused difference.
+    // Existing paid spins remain redeemable even if payouts are disabled.
+    statements.push(
+      env.DB.prepare(`
+        UPDATE wheel_reserve
+        SET
+          locked_koinu = locked_koinu - ?,
+          available_koinu = available_koinu + ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+          AND locked_koinu >= ?
+      `).bind(
+        maxPrize,
+        maxPrize - amount,
+        maxPrize
+      )
+    );
+
     statements.push(
       env.DB.prepare(`
         UPDATE wheel_spin_inventory
@@ -843,6 +903,20 @@ async function handleWheelSpin(env, uid, body) {
         AND changes() = 1
     `).bind(amount, uid)
   );
+
+  if (spinType === "free") {
+    // Release the unused part of the maximum prize reservation.
+    statements.push(
+      env.DB.prepare(`
+        UPDATE wheel_reserve
+        SET
+          available_koinu = available_koinu + ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+          AND changes() = 1
+      `).bind(maxPrize - amount)
+    );
+  }
 
   if (amount > 0) {
     statements.push(
@@ -895,31 +969,13 @@ async function handleWheelSpin(env, uid, body) {
   try {
     await env.DB.batch(statements);
   } catch (error) {
-    const concurrentSpin = await getExistingSpin(
-      env,
-      uid,
-      requestId
-    );
+    const concurrentSpin = await getExistingSpin(env, uid, requestId);
 
     if (concurrentSpin) {
-      const data = await getWheelData(env, uid, plan);
-      return wheelSpinResponse(concurrentSpin, true, data);
-    }
-
-    const reserve = await env.DB.prepare(`
-      SELECT available_koinu, payouts_enabled
-      FROM faucet_reserve
-      WHERE id = 1
-    `).first();
-
-    if (
-      !reserve ||
-      Number(reserve.payouts_enabled) !== 1 ||
-      Number(reserve.available_koinu) < amount
-    ) {
-      throw new HttpError(
-        503,
-        "Wheel temporarily unavailable. Insufficient faucet reserve."
+      return wheelSpinResponse(
+        concurrentSpin,
+        true,
+        await getWheelData(env, uid, plan)
       );
     }
 
@@ -948,15 +1004,14 @@ async function handleWheelSpin(env, uid, body) {
   const savedSpin = await getExistingSpin(env, uid, requestId);
 
   if (!savedSpin) {
-    throw new HttpError(
-      500,
-      "Spin record could not be confirmed"
-    );
+    throw new HttpError(500, "Spin record could not be confirmed");
   }
 
-  const after = await getWheelData(env, uid, plan);
-
-  return wheelSpinResponse(savedSpin, false, after);
+  return wheelSpinResponse(
+    savedSpin,
+    false,
+    await getWheelData(env, uid, plan)
+  );
 }
 
 // ==========================================
@@ -971,7 +1026,6 @@ async function handleWheelBuy(env, uid, body) {
 
   if (existing) {
     const plan = await getUserPlan(env, uid);
-    const data = await getWheelData(env, uid, plan);
 
     return {
       success: true,
@@ -982,7 +1036,7 @@ async function handleWheelBuy(env, uid, body) {
         price_koinu: Number(existing.cost_koinu),
         created_at: existing.created_at
       },
-      ...data
+      ...(await getWheelData(env, uid, plan))
     };
   }
 
@@ -992,22 +1046,39 @@ async function handleWheelBuy(env, uid, body) {
     throw new HttpError(400, "Invalid spin package");
   }
 
-  const statements = [];
+  const configuration = await getWheelConfiguration(env);
+  const maxPrize = configuration.maxPrize;
+  const requiredReserve = maxPrize * pack.spins;
 
-  statements.push(
+  if (!Number.isSafeInteger(requiredReserve)) {
+    throw new HttpError(400, "Invalid spin package reserve");
+  }
+
+  const statements = [
+    // Lock the maximum possible prize for every purchased spin.
+    env.DB.prepare(`
+      UPDATE wheel_reserve
+      SET
+        available_koinu = available_koinu - ?,
+        locked_koinu = locked_koinu + ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = 1
+        AND payouts_enabled = 1
+        AND available_koinu >= ?
+    `).bind(
+      requiredReserve,
+      requiredReserve,
+      requiredReserve
+    ),
+
     env.DB.prepare(`
       UPDATE users
       SET balance_koinu = balance_koinu - ?
       WHERE uid = ?
         AND balance_koinu >= ?
-    `).bind(
-      pack.price_koinu,
-      uid,
-      pack.price_koinu
-    )
-  );
+        AND changes() = 1
+    `).bind(pack.price_koinu, uid, pack.price_koinu),
 
-  statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_purchases (
         uid,
@@ -1017,15 +1088,8 @@ async function handleWheelBuy(env, uid, body) {
       )
       SELECT ?, ?, ?, ?
       WHERE changes() = 1
-    `).bind(
-      uid,
-      requestId,
-      pack.spins,
-      pack.price_koinu
-    )
-  );
+    `).bind(uid, requestId, pack.spins, pack.price_koinu),
 
-  statements.push(
     env.DB.prepare(`
       INSERT INTO wheel_spin_inventory (
         uid,
@@ -1036,13 +1100,10 @@ async function handleWheelBuy(env, uid, body) {
       WHERE changes() = 1
       ON CONFLICT(uid)
       DO UPDATE SET
-        paid_spins =
-          wheel_spin_inventory.paid_spins + excluded.paid_spins,
+        paid_spins = wheel_spin_inventory.paid_spins + excluded.paid_spins,
         updated_at = CURRENT_TIMESTAMP
-    `).bind(uid, pack.spins)
-  );
+    `).bind(uid, pack.spins),
 
-  statements.push(
     env.DB.prepare(`
       INSERT INTO ledger_transactions (
         uid,
@@ -1075,10 +1136,8 @@ async function handleWheelBuy(env, uid, body) {
       requestId,
       requestId,
       uid
-    )
-  );
+    ),
 
-  statements.push(
     env.DB.prepare(`
       SELECT CASE
         WHEN changes() != 1
@@ -1086,7 +1145,7 @@ async function handleWheelBuy(env, uid, body) {
         ELSE 1
       END
     `)
-  );
+  ];
 
   try {
     await env.DB.batch(statements);
@@ -1099,7 +1158,6 @@ async function handleWheelBuy(env, uid, body) {
 
     if (concurrentPurchase) {
       const plan = await getUserPlan(env, uid);
-      const data = await getWheelData(env, uid, plan);
 
       return {
         success: true,
@@ -1110,18 +1168,33 @@ async function handleWheelBuy(env, uid, body) {
           price_koinu: Number(concurrentPurchase.cost_koinu),
           created_at: concurrentPurchase.created_at
         },
-        ...data
+        ...(await getWheelData(env, uid, plan))
       };
     }
 
-    const account = await env.DB.prepare(`
-      SELECT balance_koinu
-      FROM users
-      WHERE uid = ?
-    `).bind(uid).first();
+    const [reserve, account] = await Promise.all([
+      env.DB.prepare(`
+        SELECT available_koinu, payouts_enabled
+        FROM wheel_reserve
+        WHERE id = 1
+      `).first(),
+      env.DB.prepare(`
+        SELECT balance_koinu
+        FROM users
+        WHERE uid = ?
+      `).bind(uid).first()
+    ]);
 
     if (!account) {
       throw new HttpError(404, "User not found");
+    }
+
+    if (!reserve || Number(reserve.payouts_enabled) !== 1) {
+      throw new HttpError(503, "Wheel purchases are temporarily disabled");
+    }
+
+    if (Number(reserve.available_koinu) < requiredReserve) {
+      throw new HttpError(503, "Insufficient wheel reserve for this package");
     }
 
     if (Number(account.balance_koinu) < pack.price_koinu) {
@@ -1141,7 +1214,6 @@ async function handleWheelBuy(env, uid, body) {
   }
 
   const plan = await getUserPlan(env, uid);
-  const data = await getWheelData(env, uid, plan);
 
   return {
     success: true,
@@ -1152,7 +1224,7 @@ async function handleWheelBuy(env, uid, body) {
       price_koinu: Number(purchase.cost_koinu),
       created_at: purchase.created_at
     },
-    ...data
+    ...(await getWheelData(env, uid, plan))
   };
 }
 
@@ -1316,35 +1388,27 @@ async function handleRequest(request, env, json) {
   if (path === "/api/wheel/state" && method === "GET") {
     const user = await authenticate(request);
 
-    return json(
-      await handleWheelState(env, user.sub)
-    );
+    return json(await handleWheelState(env, user.sub));
   }
 
   if (path === "/api/wheel/spin" && method === "POST") {
     const user = await authenticate(request);
     const body = await readJson(request);
 
-    return json(
-      await handleWheelSpin(env, user.sub, body)
-    );
+    return json(await handleWheelSpin(env, user.sub, body));
   }
 
   if (path === "/api/wheel/buy" && method === "POST") {
     const user = await authenticate(request);
     const body = await readJson(request);
 
-    return json(
-      await handleWheelBuy(env, user.sub, body)
-    );
+    return json(await handleWheelBuy(env, user.sub, body));
   }
 
   if (path === "/api/wheel/history" && method === "GET") {
     const user = await authenticate(request);
 
-    return json(
-      await handleWheelHistory(env, user.sub)
-    );
+    return json(await handleWheelHistory(env, user.sub));
   }
 
   // ==========================================
@@ -1357,23 +1421,11 @@ async function handleRequest(request, env, json) {
     const requestId = getRequestId(body);
     const plan = await getUserPlan(env, user.sub);
 
-    // Return the original claim if this request was already processed.
-
-    const existing = await getExistingClaim(
-      env,
-      user.sub,
-      requestId
-    );
+    const existing = await getExistingClaim(env, user.sub, requestId);
 
     if (existing) {
       return json(
-        await buildClaimResponse(
-          env,
-          user.sub,
-          plan,
-          existing,
-          true
-        )
+        await buildClaimResponse(env, user.sub, plan, existing, true)
       );
     }
 
@@ -1381,8 +1433,6 @@ async function handleRequest(request, env, json) {
 
     try {
       results = await env.DB.batch([
-        // STEP 1: Update balance and cooldown.
-
         env.DB.prepare(`
           UPDATE users
           SET
@@ -1406,23 +1456,11 @@ async function handleRequest(request, env, json) {
           plan.daily_limit
         ),
 
-        // STEP 2: Insert the claim with its unique request ID.
-
         env.DB.prepare(`
-          INSERT INTO claims (
-            uid,
-            amount_koinu,
-            request_id
-          )
+          INSERT INTO claims (uid, amount_koinu, request_id)
           SELECT ?, ?, ?
           WHERE changes() = 1
-        `).bind(
-          user.sub,
-          plan.amount_koinu,
-          requestId
-        ),
-
-        // STEP 3: Insert the immutable ledger record.
+        `).bind(user.sub, plan.amount_koinu, requestId),
 
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
@@ -1450,12 +1488,7 @@ async function handleRequest(request, env, json) {
            AND c.request_id = ?
           WHERE u.uid = ?
             AND changes() = 1
-        `).bind(
-          requestId,
-          user.sub
-        ),
-
-        // STEP 4: Force rollback if a required write failed.
+        `).bind(requestId, user.sub),
 
         env.DB.prepare(`
           SELECT CASE
@@ -1466,8 +1499,6 @@ async function handleRequest(request, env, json) {
         `)
       ]);
     } catch (error) {
-      // Check whether another identical request completed first.
-
       const concurrentClaim = await getExistingClaim(
         env,
         user.sub,
@@ -1507,17 +1538,13 @@ async function handleRequest(request, env, json) {
       const dailyUsed = Number(account.daily_claims_used || 0);
 
       if (dailyUsed >= plan.daily_limit) {
-        throw new HttpError(
-          429,
-          "Daily claim limit reached",
-          {
-            reason: "daily_limit",
-            plan: plan.name,
-            daily_claims_used: dailyUsed,
-            daily_limit: plan.daily_limit,
-            daily_claims_remaining: 0
-          }
-        );
+        throw new HttpError(429, "Daily claim limit reached", {
+          reason: "daily_limit",
+          plan: plan.name,
+          daily_claims_used: dailyUsed,
+          daily_limit: plan.daily_limit,
+          daily_claims_remaining: 0
+        });
       }
 
       if (Number(account.cooldown_remaining) > 0) {
@@ -1543,23 +1570,13 @@ async function handleRequest(request, env, json) {
       results[1].meta.changes !== 1 ||
       results[2].meta.changes !== 1
     ) {
-      throw new HttpError(
-        500,
-        "Claim transaction could not be confirmed"
-      );
+      throw new HttpError(500, "Claim transaction could not be confirmed");
     }
 
-    const savedClaim = await getExistingClaim(
-      env,
-      user.sub,
-      requestId
-    );
+    const savedClaim = await getExistingClaim(env, user.sub, requestId);
 
     if (!savedClaim) {
-      throw new HttpError(
-        500,
-        "Claim record could not be confirmed"
-      );
+      throw new HttpError(500, "Claim record could not be confirmed");
     }
 
     return json(
@@ -1616,10 +1633,7 @@ async function handleRequest(request, env, json) {
       plan: plan.name,
       daily_claims_used: dailyUsed,
       daily_limit: plan.daily_limit,
-      daily_claims_remaining: Math.max(
-        0,
-        plan.daily_limit - dailyUsed
-      )
+      daily_claims_remaining: Math.max(0, plan.daily_limit - dailyUsed)
     });
   }
 
@@ -1668,16 +1682,12 @@ async function handleRequest(request, env, json) {
 
     try {
       results = await env.DB.batch([
-        // STEP 1: Reserve the user's balance.
-
         env.DB.prepare(`
           UPDATE users
           SET balance_koinu = balance_koinu - ?
           WHERE uid = ?
             AND balance_koinu >= ?
         `).bind(amount, user.sub, amount),
-
-        // STEP 2: Create the pending withdrawal.
 
         env.DB.prepare(`
           INSERT INTO withdrawals (
@@ -1694,14 +1704,7 @@ async function handleRequest(request, env, json) {
               WHERE uid = ?
                 AND status = 'pending'
             )
-        `).bind(
-          user.sub,
-          amount,
-          wallet,
-          user.sub
-        ),
-
-        // STEP 3: Record the withdrawal debit.
+        `).bind(user.sub, amount, wallet, user.sub),
 
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
@@ -1726,13 +1729,7 @@ async function handleRequest(request, env, json) {
           FROM users u
           WHERE u.uid = ?
             AND changes() = 1
-        `).bind(
-          amount,
-          amount,
-          user.sub
-        ),
-
-        // STEP 4: Roll back if the ledger insert failed.
+        `).bind(amount, amount, user.sub),
 
         env.DB.prepare(`
           SELECT CASE
@@ -1794,10 +1791,7 @@ async function handleRequest(request, env, json) {
         created_at
       FROM withdrawals
       WHERE id = ? AND uid = ?
-    `).bind(
-      results[1].meta.last_row_id,
-      user.sub
-    ).first();
+    `).bind(results[1].meta.last_row_id, user.sub).first();
 
     return json({
       success: true,
@@ -1860,7 +1854,7 @@ async function handleRequest(request, env, json) {
   }
 
   // ADMIN: APPROVE WITHDRAWAL
-  // Real DOGE sending and transaction-ID verification are not integrated.
+  // Real DOGE sending is not integrated.
 
   const approveMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
@@ -1885,7 +1879,6 @@ async function handleRequest(request, env, json) {
   if (rejectMatch && method === "POST") {
     const user = await authenticate(request);
     const admin = await requireAdmin(user, env);
-
     const id = Number(rejectMatch[1]);
 
     if (!Number.isSafeInteger(id)) {
@@ -1896,8 +1889,6 @@ async function handleRequest(request, env, json) {
 
     try {
       results = await env.DB.batch([
-        // STEP 1: Reject only a pending withdrawal.
-
         env.DB.prepare(`
           UPDATE withdrawals
           SET
@@ -1907,8 +1898,6 @@ async function handleRequest(request, env, json) {
           WHERE id = ?
             AND status = 'pending'
         `).bind(admin.uid, id),
-
-        // STEP 2: Refund the user's balance.
 
         env.DB.prepare(`
           UPDATE users
@@ -1926,8 +1915,6 @@ async function handleRequest(request, env, json) {
           )
             AND changes() = 1
         `).bind(id, id),
-
-        // STEP 3: Record the refund in the ledger.
 
         env.DB.prepare(`
           INSERT INTO ledger_transactions (
@@ -1955,8 +1942,6 @@ async function handleRequest(request, env, json) {
             AND w.status = 'rejected'
             AND changes() = 1
         `).bind(id),
-
-        // STEP 4: Roll back if the refund ledger record failed.
 
         env.DB.prepare(`
           SELECT CASE
