@@ -1,3 +1,4 @@
+Ja kodi i plotë i App.jsx i përditësuar me bllokun e ri të sinkronizimit (/api/auth/sync):
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
@@ -66,9 +67,6 @@ const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
 
 // SHARED STYLE CLASSES
-// LABEL_CLS and INPUT_CLS are used by the Wallet withdrawal form (and
-// PRIMARY_BTN / LABEL_CLS / INPUT_CLS by the auth forms). An undefined
-// constant here throws a ReferenceError and blanks the whole page.
 const LABEL_CLS =
   'block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1';
 
@@ -78,12 +76,10 @@ const INPUT_CLS =
 const PRIMARY_BTN =
   "w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide";
 
-// LUCKY WHEEL (presentation constants only; prizes, odds, prices and spin
-// counts ALL come from the Worker)
+// LUCKY WHEEL (presentation constants only)
 const WHEEL_SPIN_MS = 5200;
 const WHEEL_EXTRA_TURNS = 6;
 const WHEEL_SLICE_FILLS = ['#050505', '#1c0f15'];
-
 
 // PLAN CATALOG (DISPLAY ONLY)
 const PLAN_CATALOG = [
@@ -165,8 +161,6 @@ const PLAN_CATALOG = [
   }
 ];
 
-// True for real numbers (including 0). Never use plain truthiness for Worker values:
-// VIP has cooldown_seconds: 0 and daily_claims_remaining can be 0.
 const isNum = (v) =>
   v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
@@ -175,7 +169,6 @@ const formatCooldown = (seconds) => {
   return Number(seconds) === 0 ? 'No cooldown' : `${Number(seconds)} seconds`;
 };
 
-// Seconds until the next 00:00 UTC (daily claims reset on the UTC date)
 const secondsUntilUtcReset = () => {
   const now = new Date();
   const nextReset = Date.UTC(
@@ -188,13 +181,10 @@ const secondsUntilUtcReset = () => {
 
 const utcDayKey = () => new Date().toISOString().slice(0, 10);
 
-// Unique id for one claim attempt. The Worker uses it (when it supports
-// request_id) to make a repeated request idempotent.
 const newRequestId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-
   return `req_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 };
 
@@ -206,20 +196,16 @@ const formatDuration = (totalSeconds) => {
   return `${h}h ${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}s`;
 };
 
-// Parses numbers, "YYYY-MM-DD HH:MM:SS" (UTC from D1) and ISO strings safely.
 const parseServerDate = (value) => {
   if (value === null || value === undefined || value === '') return null;
-
   if (typeof value === 'number') {
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? null : d;
   }
-
   const s = String(value).trim();
   const iso = s.includes('T') ? s : s.replace(' ', 'T');
   const hasTimezone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(iso);
   const date = new Date(hasTimezone ? iso : iso + 'Z');
-
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
@@ -228,7 +214,6 @@ const formatDate = (value) => {
   return date ? date.toLocaleString() : 'N/A';
 };
 
-// Koinu -> DOGE text without trailing zeros (180000 -> "0.0018")
 const formatDoge = (koinu) =>
   isNum(koinu) ? String(Number((Number(koinu) / KOINU).toFixed(8))) : '...';
 
@@ -242,15 +227,12 @@ const mapWithdrawal = (w) => ({
   timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
-// Label shown on a wheel slice / result. The text comes from the Worker
-// (wheel_prizes.label) and falls back to the amount it reports.
 const prizeLabel = (p) => {
   if (!p) return '';
   if (typeof p.label === 'string' && p.label) return p.label;
   return `${formatDoge(p.amount_koinu)} DOGE`;
 };
 
-// Small presentational tile used on the Faucet and Lucky Wheel pages
 const StatTile = ({ label, value, sub, valueCls = 'text-white' }) => (
   <div className="bg-black border border-slate-800 rounded-xl p-4 text-left">
     <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-mono font-bold">
@@ -265,7 +247,6 @@ const StatTile = ({ label, value, sub, valueCls = 'text-white' }) => (
   </div>
 );
 
-// Pink divider used on the Lucky Wheel page
 const PinkDivider = () => (
   <div
     aria-hidden="true"
@@ -273,8 +254,6 @@ const PinkDivider = () => (
   />
 );
 
-// SVG wheel. Slices are all the same visual size: the size of a slice says
-// nothing about its odds (the Worker decides the outcome).
 const WheelGraphic = ({ prizes }) => {
   const size = 400;
   const c = size / 2;
@@ -336,7 +315,6 @@ const WheelGraphic = ({ prizes }) => {
         );
       })}
 
-      {/* Outer pink studs */}
       {Array.from({ length: 24 }).map((_, i) => {
         const [sx, sy] = point(i * 15, r + 6);
         return <circle key={i} cx={sx} cy={sy} r="2.5" fill="#F4A6C1" />;
@@ -346,10 +324,8 @@ const WheelGraphic = ({ prizes }) => {
 };
 
 export default function App() {
-  // NAVIGATION
   const [activeTab, setActiveTab] = useState('faucet');
 
-  // AUTH STATE
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
@@ -357,22 +333,16 @@ export default function App() {
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
 
-  // Referral code of the pending registration (read by the auth sync)
   const pendingReferralRef = useRef(null);
   const authEventRef = useRef(0);
   const [authSyncRetry, setAuthSyncRetry] = useState(0);
 
-  // Guards against simultaneous claims (state updates are asynchronous)
   const claimInFlightRef = useRef(false);
   const claimStatusTimerRef = useRef(null);
-  // Same request_id is re-sent only while the outcome of a claim is unknown
-  // (network error / no response); it is discarded after any definitive answer.
   const claimRequestIdRef = useRef(null);
-  // Username typed at registration (used if Firestore has no profile yet)
   const pendingUsernameRef = useRef('');
   const lastUtcDayRef = useRef(utcDayKey());
 
-  // AUTH FORM
   const [usernameInput, setUsernameInput] = useState('');
   const [emailInput, setEmailInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
@@ -381,18 +351,13 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
-  // SETTINGS FROM WORKER
   const [minWithdrawal, setMinWithdrawal] = useState(1);
 
-  // CLAIM RULES + PLAN (always taken from the Worker; null until loaded)
-  // { name?, cooldownSeconds, claimAmount (DOGE), dailyUsed?, dailyLimit?, dailyRemaining? }
-  // name / daily* only exist when the deployed Worker reports them.
   const [planInfo, setPlanInfo] = useState(null);
   const [accountError, setAccountError] = useState('');
   const [resetSeconds, setResetSeconds] = useState(secondsUntilUtcReset());
   const [accountSyncTick, setAccountSyncTick] = useState(0);
 
-  // FAUCET
   const [demoBalance, setDemoBalance] = useState(0);
   const [claimsLoading, setClaimsLoading] = useState(false);
   const [claimsError, setClaimsError] = useState('');
@@ -403,23 +368,19 @@ export default function App() {
   const [isClaiming, setIsClaiming] = useState(false);
   const [demoClaims, setDemoClaims] = useState([]);
 
-  // WITHDRAWALS
   const [demoWithdrawals, setDemoWithdrawals] = useState([]);
   const [withdrawAmount, setWithdrawAmount] = useState('1.0');
   const [withdrawAddress, setWithdrawAddress] = useState('');
   const [withdrawMsg, setWithdrawMsg] = useState('');
   const [isWithdrawing, setIsWithdrawing] = useState(false);
 
-  // REFERRALS
   const [refCode, setRefCode] = useState('');
   const [referralStats, setReferralStats] = useState(null);
   const [referralLoading, setReferralLoading] = useState(false);
   const [referralError, setReferralError] = useState('');
 
-  // LUCKY WHEEL (everything here is data returned by the Worker)
   const [wheelPrizes, setWheelPrizes] = useState([]);
   const [wheelPacks, setWheelPacks] = useState([]);
-  // { freeRemaining, freeTotal, paidRemaining, totalRemaining } (null until loaded)
   const [wheelSpins, setWheelSpins] = useState(null);
   const [wheelHistory, setWheelHistory] = useState([]);
   const [wheelPurchases, setWheelPurchases] = useState([]);
@@ -437,13 +398,11 @@ export default function App() {
   const spinTimerRef = useRef(null);
   const wheelRotationRef = useRef(0);
 
-  // ADMIN
   const [adminWithdrawals, setAdminWithdrawals] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
   const [adminActionLoading, setAdminActionLoading] = useState(null);
 
-  // ADMIN IDENTIFICATION (visibility only)
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
 
   const adminTheme =
@@ -456,7 +415,6 @@ export default function App() {
   const isDemoAdmin = Boolean(adminTheme);
   const isBlueAdmin = adminTheme === 'blue';
 
-  // DERIVED VALUES (read-only views of the Worker responses)
   const planName =
     typeof planInfo?.name === 'string' && planInfo.name ? planInfo.name : null;
   const claimAmount = isNum(planInfo?.claimAmount) ? planInfo.claimAmount : null;
@@ -472,14 +430,12 @@ export default function App() {
   const rulesReady = claimAmount !== null && cooldownSeconds !== null;
   const accountLoaded = planInfo !== null;
 
-  // API HELPER
   const apiRequest = useCallback(async (path, options = {}) => {
     if (!firebaseUser) {
       throw new Error('Please log in first.');
     }
 
     const token = await firebaseUser.getIdToken();
-
     let response;
 
     try {
@@ -509,9 +465,6 @@ export default function App() {
     return data;
   }, [firebaseUser]);
 
-  // Applies any Worker account/claim response (balance, claim, 429 bodies).
-  // Zero is a valid value everywhere (VIP cooldown_seconds: 0, remaining: 0).
-  // Fields the Worker does not send are simply left untouched.
   const applyAccountData = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
@@ -526,9 +479,7 @@ export default function App() {
     if (isNum(data.cooldown_remaining)) {
       setCooldownLeft(Math.max(0, Number(data.cooldown_remaining)));
     } else if (data.last_claim_at && isNum(data.cooldown_seconds)) {
-      // Fallback for a Worker response without cooldown_remaining
       const lastClaim = parseServerDate(data.last_claim_at);
-
       if (lastClaim) {
         const elapsed = Math.floor((Date.now() - lastClaim.getTime()) / 1000);
         setCooldownLeft(Math.max(0, Number(data.cooldown_seconds) - elapsed));
@@ -570,13 +521,10 @@ export default function App() {
     }
   }, []);
 
-  // Applies the spin counters returned by the Wheel endpoints.
-  // Only fields the Worker actually sends are applied.
   const applyWheelSpins = useCallback((spins) => {
     if (!spins || typeof spins !== 'object') return;
 
     const patch = {};
-
     if (isNum(spins.free_remaining)) patch.freeRemaining = Number(spins.free_remaining);
     if (isNum(spins.free_total)) patch.freeTotal = Number(spins.free_total);
     if (isNum(spins.paid_remaining)) patch.paidRemaining = Number(spins.paid_remaining);
@@ -593,7 +541,6 @@ export default function App() {
     }
   }, []);
 
-  // Applies a GET /api/wheel/state response (prizes, packs, spins, balance).
   const applyWheelState = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
@@ -609,14 +556,12 @@ export default function App() {
     applyAccountData(data);
   }, [applyWheelSpins, applyAccountData]);
 
-  // ADMIN REDIRECT
   useEffect(() => {
     if (activeTab === 'admin' && !isDemoAdmin) {
       setActiveTab('faucet');
     }
   }, [activeTab, isDemoAdmin]);
 
-  // FIREBASE AUTH + D1 SYNC
   useEffect(() => {
     let isMounted = true;
 
@@ -625,7 +570,6 @@ export default function App() {
 
       if (!isMounted) return;
 
-      // Clear previous account data immediately when identity changes.
       setFirebaseUser(user);
       setUserProfile(null);
       setApiReady(false);
@@ -711,6 +655,14 @@ export default function App() {
 
         pendingReferralRef.current = null;
         setRefCode(syncData.ref_code || '');
+
+        if (syncData.plan) {
+          setPlanInfo(prev => ({
+            ...(prev || {}),
+            name: syncData.plan.toUpperCase()
+          }));
+        }
+
         setApiReady(true);
         setApiError('');
       } catch (error) {
@@ -729,7 +681,6 @@ export default function App() {
 
         if (docSnap.exists()) {
           const data = docSnap.data();
-
           setUserProfile({
             ...fallbackProfile,
             ...data,
@@ -758,9 +709,6 @@ export default function App() {
     };
   }, [authSyncRetry]);
 
-  // LOAD BALANCE + CLAIM RULES (+ PLAN / DAILY INFO WHEN REPORTED) FROM THE WORKER
-  // Runs on login, when switching tabs (so a backend plan change shows up)
-  // and when the UTC day rolls over (daily counter reset).
   useEffect(() => {
     if (!firebaseUser || !apiReady) return;
 
@@ -770,10 +718,7 @@ export default function App() {
       try {
         const data = await apiRequest('/api/balance');
 
-        // Do not overwrite fresher claim data while a claim is in flight
         if (cancelled || claimInFlightRef.current) return;
-
-        // Do not reveal a spin result early by refreshing the balance mid-animation
         if (spinInFlightRef.current) return;
 
         applyAccountData(data);
@@ -796,7 +741,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyAccountData]);
 
-  // LOAD CLAIM HISTORY FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady) {
       setDemoClaims([]);
@@ -819,7 +763,7 @@ export default function App() {
         if (!cancelled) {
           setClaimsError(error.message);
         }
-      } finally {
+      } font-bold {
         if (!cancelled) {
           setClaimsLoading(false);
         }
@@ -833,7 +777,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, apiRequest]);
 
-  // LOAD USER WITHDRAWALS FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady) {
       setDemoWithdrawals([]);
@@ -863,7 +806,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, apiRequest]);
 
-  // LOAD REFERRAL STATS FROM D1 (when the Referral tab is opened)
   useEffect(() => {
     if (!firebaseUser || !apiReady) {
       setReferralStats(null);
@@ -906,10 +848,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, activeTab, apiRequest]);
 
-  // LOAD LUCKY WHEEL STATE + HISTORY FROM THE WORKER
-  // (when the Wheel tab is opened, and again when the UTC day rolls over so
-  // the free spins reset shows up). Nothing is simulated: if the Worker does
-  // not have the Wheel endpoints, the page says so and stays disabled.
   useEffect(() => {
     if (!firebaseUser || !apiReady) return;
     if (activeTab !== 'wheel') return;
@@ -927,7 +865,6 @@ export default function App() {
 
         setWheelBackendMissing(false);
 
-        // Keep a pending spin result hidden until the animation ends
         if (!spinInFlightRef.current) {
           applyWheelState(state);
         }
@@ -971,7 +908,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyWheelState]);
 
-  // LOAD ADMIN WITHDRAWALS FROM D1
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin) {
       setAdminWithdrawals([]);
@@ -1011,7 +947,6 @@ export default function App() {
     };
   }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
 
-  // ONE-SECOND TIMER: claim cooldown, UTC reset countdown, UTC day rollover
   useEffect(() => {
     const timer = setInterval(() => {
       setCooldownLeft(prev => (prev > 0 ? prev - 1 : 0));
@@ -1021,7 +956,6 @@ export default function App() {
 
       if (today !== lastUtcDayRef.current) {
         lastUtcDayRef.current = today;
-        // New UTC day: re-sync so the daily counter shown matches the backend
         setAccountSyncTick(t => t + 1);
       }
     }, 1000);
@@ -1029,7 +963,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // CLEAR STATUS TIMER ON UNMOUNT
   useEffect(() => {
     return () => {
       if (claimStatusTimerRef.current) {
@@ -1038,7 +971,6 @@ export default function App() {
     };
   }, []);
 
-  // CLEAR WHEEL TIMER ON UNMOUNT
   useEffect(() => {
     return () => {
       if (spinTimerRef.current) {
@@ -1047,7 +979,6 @@ export default function App() {
     };
   }, []);
 
-  // LOGIN
   const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -1070,7 +1001,6 @@ export default function App() {
     }
   };
 
-  // REGISTER
   const handleRegister = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -1092,7 +1022,6 @@ export default function App() {
 
     setIsLoadingAuth(true);
 
-    // Validate the referral code with the Worker before creating the account
     if (referralCode) {
       if (!REF_CODE_REGEX.test(referralCode)) {
         setAuthError('Invalid referral code format.');
@@ -1125,7 +1054,6 @@ export default function App() {
     }
 
     try {
-      // Must be set before the account exists: the auth listener syncs immediately.
       pendingReferralRef.current = referralCode || null;
       pendingUsernameRef.current = trimmedUsername;
 
@@ -1168,7 +1096,6 @@ export default function App() {
     }
   };
 
-  // FORGOT PASSWORD
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     setAuthError('');
@@ -1193,7 +1120,6 @@ export default function App() {
     }
   };
 
-  // SIGN OUT
   const handleSignOut = async () => {
     try {
       await signOut(auth);
@@ -1203,7 +1129,6 @@ export default function App() {
     }
   };
 
-  // Shows a claim message and clears it after 5 seconds (latest message wins)
   const showClaimMessage = (message, isError) => {
     if (claimStatusTimerRef.current) {
       clearTimeout(claimStatusTimerRef.current);
@@ -1217,7 +1142,6 @@ export default function App() {
     }, 5000);
   };
 
-  // CLAIM (the Worker decides the reward, cooldown and daily limit)
   const handleClaim = async () => {
     if (claimInFlightRef.current || isClaiming) return;
 
@@ -1240,7 +1164,6 @@ export default function App() {
     setIsClaiming(true);
     setClaimIsError(false);
 
-    // Ignore the answer if the account changed while the request was running
     const claimSession = authEventRef.current;
 
     if (!claimRequestIdRef.current) {
@@ -1261,12 +1184,10 @@ export default function App() {
         body: JSON.stringify({ request_id: requestId })
       });
 
-      // Definitive answer received: the next claim gets a new request_id
       claimRequestIdRef.current = null;
 
       if (claimSession !== authEventRef.current) return;
 
-      // Balance, cooldown (and plan / daily counters when reported) come from the Worker
       applyAccountData(data);
 
       setShowClaimEffect(true);
@@ -1281,8 +1202,6 @@ export default function App() {
         false
       );
 
-      // Re-sync balance/limits and history. A refresh failure must not turn
-      // a successful claim into an error.
       const [historyResult, accountResult] = await Promise.allSettled([
         apiRequest('/api/claims'),
         apiRequest('/api/balance')
@@ -1301,9 +1220,6 @@ export default function App() {
         applyAccountData(accountResult.value);
       }
     } catch (error) {
-      // A response from the Worker (any HTTP status) is a definitive answer.
-      // Only a missing response (network error) keeps the same request_id so
-      // a retry cannot create a second claim.
       if (typeof error.status === 'number') {
         claimRequestIdRef.current = null;
       }
@@ -1313,14 +1229,12 @@ export default function App() {
       const reason = error.data?.reason;
 
       if (error.status === 429 && reason === 'daily_limit') {
-        // Updates plan, daily_claims_used, daily_limit and remaining (0)
         applyAccountData(error.data);
         showClaimMessage(
           'Daily claim limit reached. Your limit resets at 00:00 UTC.',
           true
         );
       } else if (error.status === 429) {
-        // Cooldown (or any other 429): show the remaining time from the Worker
         applyAccountData(error.data);
         showClaimMessage(
           isNum(error.data?.cooldown_remaining)
@@ -1342,8 +1256,6 @@ export default function App() {
     }
   };
 
-  // Re-reads the wheel state + history from the Worker (after a spin / purchase).
-  // A refresh failure never turns a successful action into an error.
   const refreshWheelData = async () => {
     const [stateResult, historyResult] = await Promise.allSettled([
       apiRequest('/api/wheel/state'),
@@ -1366,10 +1278,6 @@ export default function App() {
     }
   };
 
-  // LUCKY WHEEL SPIN
-  // The Worker picks the prize (probabilities live only in wheel_prizes on
-  // the backend), consumes the spin, credits the balance and answers with the
-  // prize. The frontend only animates the wheel to that prize and shows it.
   const handleWheelSpin = async () => {
     if (spinInFlightRef.current || isSpinning) return;
 
@@ -1399,7 +1307,6 @@ export default function App() {
       if (error.status === 404) {
         setWheelBackendMissing(true);
       } else {
-        // Out of spins / limits etc.: take the counters the Worker reports
         applyWheelSpins(error.data?.spins);
         setWheelMsgIsError(true);
         setWheelMsg(error.message || 'Could not spin the wheel.');
@@ -1426,8 +1333,6 @@ export default function App() {
         source: typeof data.source === 'string' ? data.source : ''
       });
 
-      // Balance and counters from the spin response, shown only now so the
-      // result is not revealed before the wheel stops.
       applyAccountData(data);
       applyWheelSpins(data.spins);
 
@@ -1438,19 +1343,15 @@ export default function App() {
     };
 
     if (!prize || prizeIndex < 0) {
-      // The Worker returned a prize that is not on the wheel: show it, do not fake an animation.
       await finish();
-
       if (!prize) {
         setWheelResult(null);
         setWheelMsgIsError(true);
         setWheelMsg('The server did not return a prize. Check your balance and history.');
       }
-
       return;
     }
 
-    // Land the CENTER of the winning slice under the pointer (top).
     const sliceAngle = 360 / wheelPrizes.length;
     const targetMod = (((-(prizeIndex + 0.5) * sliceAngle) % 360) + 360) % 360;
     const currentMod = ((wheelRotationRef.current % 360) + 360) % 360;
@@ -1469,7 +1370,6 @@ export default function App() {
     spinTimerRef.current = window.setTimeout(finish, WHEEL_SPIN_MS + 150);
   };
 
-  // BUY SPINS (the Worker owns the pack prices and debits the DEMO balance)
   const handleBuyPack = async (pack) => {
     if (!pack || spinInFlightRef.current || isSpinning || buyingPackId !== null) return;
 
@@ -1516,7 +1416,6 @@ export default function App() {
     }
   };
 
-  // USER WITHDRAWAL
   const handleWithdraw = async (e) => {
     e.preventDefault();
     setWithdrawMsg('');
@@ -1563,8 +1462,6 @@ export default function App() {
         apiRequest('/api/withdrawals')
       ]);
 
-      // applyAccountData ignores a missing/invalid balance instead of
-      // writing NaN into the balance state.
       applyAccountData(balanceData);
       setDemoWithdrawals(
         (historyData.withdrawals || []).map(mapWithdrawal)
@@ -1581,11 +1478,9 @@ export default function App() {
     }
   };
 
-  // REFRESH ADMIN WITHDRAWALS
   const refreshAdminWithdrawals = async () => {
     try {
       const data = await apiRequest('/api/admin/withdrawals');
-
       setAdminWithdrawals(
         (data.withdrawals || []).map(mapWithdrawal)
       );
@@ -1594,7 +1489,6 @@ export default function App() {
     }
   };
 
-  // ADMIN APPROVE
   const handleAdminApprove = async (wId) => {
     if (!isDemoAdmin || adminActionLoading !== null) return;
 
@@ -1604,11 +1498,8 @@ export default function App() {
     try {
       await apiRequest(
         `/api/admin/withdrawals/${encodeURIComponent(wId)}/approve`,
-        {
-          method: 'POST'
-        }
+        { method: 'POST' }
       );
-
       await refreshAdminWithdrawals();
     } catch (error) {
       setAdminError(error.message || 'Could not approve withdrawal.');
@@ -1618,7 +1509,6 @@ export default function App() {
     }
   };
 
-  // ADMIN REJECT
   const handleAdminReject = async (wId) => {
     if (!isDemoAdmin || adminActionLoading !== null) return;
 
@@ -1628,14 +1518,10 @@ export default function App() {
     try {
       await apiRequest(
         `/api/admin/withdrawals/${encodeURIComponent(wId)}/reject`,
-        {
-          method: 'POST'
-        }
+        { method: 'POST' }
       );
-
       await refreshAdminWithdrawals();
 
-      // Refresh balance and withdrawal history if admin rejected own request.
       const [balanceData, historyData] = await Promise.all([
         apiRequest('/api/balance'),
         apiRequest('/api/withdrawals')
@@ -1653,7 +1539,6 @@ export default function App() {
     }
   };
 
-  // AUTH LOADING
   if (authLoading) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
@@ -1662,7 +1547,6 @@ export default function App() {
     );
   }
 
-  // UNAUTHENTICATED VIEW
   if (!firebaseUser || !userProfile) {
     return (
       <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-4 font-sans">
@@ -1721,7 +1605,7 @@ export default function App() {
                   setAuthError('');
                   setAuthSuccess('');
                 }}
-                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all font-['Space_Grotesk',sans-serif] ${
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all font-[#Space_Grotesk',sans-serif] ${
                   authMode === 'register'
                     ? 'bg-[#F4A6C1] text-black shadow-lg shadow-[#F4A6C1]/20'
                     : 'text-slate-400 hover:text-white'
@@ -1930,7 +1814,6 @@ export default function App() {
     );
   }
 
-  // helper for sidebar buttons
   const tabBtnCls = (tab) =>
     `w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-bold transition-all font-['Space_Grotesk',sans-serif] ${
       activeTab === tab
@@ -1943,7 +1826,6 @@ export default function App() {
     ? 'bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-400'
     : 'bg-[#A78BFA]/10 hover:bg-[#A78BFA]/20 border border-[#A78BFA]/30 text-[#A78BFA]';
 
-  // Plan helpers for the UI
   const activeCatalogEntry = planName
     ? PLAN_CATALOG.find(p => p.key === planName)
     : null;
@@ -1967,7 +1849,6 @@ export default function App() {
             ? `Available in ${cooldownLeft}s`
             : `Claim ${claimAmount.toFixed(6)} DOGE (Demo)`;
 
-  // Lucky Wheel helpers for the UI (display only; the Worker enforces everything)
   const wheelReady =
     !wheelBackendMissing && wheelPrizes.length >= 2 && wheelSpins !== null;
   const wheelTotalSpins =
@@ -1990,10 +1871,8 @@ export default function App() {
             ? 'No Spins Left'
             : 'Spin Now';
 
-  // LOGGED-IN DASHBOARD
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
-
       <style>{`
         .claim-celebration {
           position: absolute;
@@ -2086,7 +1965,6 @@ export default function App() {
         }
       `}</style>
 
-      {/* HEADER */}
       <header className="bg-black border-b border-slate-800 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
@@ -2133,11 +2011,8 @@ export default function App() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full flex flex-col md:flex-row gap-8">
-
-        {/* SIDEBAR */}
         <aside className="w-full md:w-64 space-y-2 shrink-0">
           <div className="bg-black border border-slate-800 rounded-2xl p-3 space-y-1">
-
             <button
               type="button"
               onClick={() => setActiveTab('faucet')}
@@ -2226,9 +2101,7 @@ export default function App() {
           </div>
         </aside>
 
-        {/* MAIN CONTENT */}
         <main className="flex-1 min-w-0">
-
           {apiError && (
             <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm flex items-start gap-2">
               <AlertTriangle className="w-5 h-5 shrink-0" />
@@ -2245,27 +2118,22 @@ export default function App() {
             </div>
           )}
 
-          {/* TOP ADVERTISEMENT */}
           <div className="mb-6 w-full">
             <div className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden">
               <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">
                 Advertisement
               </span>
-
               <p className="text-sm md:text-base font-bold text-white">
                 Advertise Your Brand on DogeDrip
               </p>
-
               <p className="text-xs text-slate-500 mt-1">
                 Reach crypto users and promote your project here.
               </p>
             </div>
           </div>
 
-          {/* FAUCET */}
           {activeTab === 'faucet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Crypto Faucet Claim (DEMO)
@@ -2291,7 +2159,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* PLAN + LIMIT OVERVIEW (all values come from the Worker) */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatTile
                   label="Active Plan"
@@ -2323,7 +2190,6 @@ export default function App() {
                   value={dailyLimit !== null ? dailyLimit : (accountLoaded ? 'N/A' : '...')}
                   sub={accountLoaded && dailyLimit === null ? 'Not reported by server' : undefined}
                 />
-               
                 <StatTile
                   label="Daily Reset (UTC)"
                   value={formatDuration(resetSeconds)}
@@ -2332,7 +2198,6 @@ export default function App() {
               </div>
 
               <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
-
                 {showClaimEffect && (
                   <div className="claim-celebration" aria-hidden="true">
                     <div className="claim-glow" />
@@ -2361,7 +2226,6 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* DAILY LIMIT REACHED */}
                 {dailyLimitReached && (
                   <div className="w-full max-w-sm bg-red-500/10 border border-red-500/20 p-4 rounded-xl space-y-1">
                     <div className="flex items-center justify-center space-x-2 text-red-400 text-sm font-bold">
@@ -2377,7 +2241,6 @@ export default function App() {
                   </div>
                 )}
 
-                {/* COOLDOWN (only shown when the Worker reports remaining time) */}
                 {!dailyLimitReached && cooldownLeft > 0 && (
                   <div className="w-full max-w-sm bg-black border border-slate-800 p-4 rounded-xl space-y-2">
                     <div className="flex items-center justify-center space-x-2 text-[#F4A6C1] text-sm font-bold">
@@ -2412,7 +2275,6 @@ export default function App() {
                     ? <RefreshCw className="w-5 h-5 animate-spin" />
                     : <CheckCircle className="w-5 h-5" />
                   }
-
                   <span>{claimButtonLabel}</span>
                 </button>
 
@@ -2425,7 +2287,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* CLAIM HISTORY */}
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">
@@ -2483,10 +2344,8 @@ export default function App() {
             </div>
           )}
 
-          {/* LUCKY WHEEL */}
           {activeTab === 'wheel' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-8">
-
               <div className="text-center">
                 <h2 className="text-2xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif] tracking-tight">
                   Lucky Wheel <span className="text-[#F4A6C1]">(DEMO)</span>
@@ -2517,7 +2376,6 @@ export default function App() {
 
               <PinkDivider />
 
-              {/* SPINS + BALANCE */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatTile
                   label="Free Spins Left"
@@ -2554,17 +2412,14 @@ export default function App() {
 
               <PinkDivider />
 
-              {/* WHEEL */}
               <div className="flex flex-col items-center space-y-6">
                 <div className="relative w-full max-w-[22rem] aspect-square">
-                  {/* Pointer */}
                   <div className="absolute left-1/2 -top-3 -translate-x-1/2 z-20 drop-shadow-[0_0_8px_rgba(244,166,193,0.7)]" aria-hidden="true">
                     <svg width="34" height="40" viewBox="0 0 34 40">
                       <polygon points="17,40 1,4 33,4" fill="#F4A6C1" stroke="#000" strokeWidth="2" />
                     </svg>
                   </div>
 
-                  {/* Rotating wheel */}
                   <div
                     className="absolute inset-0 rounded-full shadow-[0_0_40px_rgba(244,166,193,0.25)]"
                     style={{
@@ -2584,7 +2439,6 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Center logo (does not rotate) */}
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
                     <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-black border-[3px] border-[#F4A6C1] shadow-[0_0_20px_rgba(244,166,193,0.45)] flex flex-col items-center justify-center">
                       <Shield className="w-5 h-5 text-[#F4A6C1] mb-0.5" />
@@ -2611,7 +2465,6 @@ export default function App() {
                   <span>{spinButtonLabel}</span>
                 </button>
 
-                {/* RESULT */}
                 {wheelResult && wheelResult.prize && (
                   <div
                     key={`${wheelResult.prize.id}-${wheelHistory.length}-${wheelResult.source}`}
@@ -2660,7 +2513,6 @@ export default function App() {
 
               <PinkDivider />
 
-              {/* SPIN PACKS */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
@@ -2722,7 +2574,6 @@ export default function App() {
 
               <PinkDivider />
 
-              {/* SPIN HISTORY */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
@@ -2774,7 +2625,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* PURCHASE HISTORY */}
               {wheelPurchases.length > 0 && (
                 <div className="space-y-4">
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
@@ -2820,11 +2670,8 @@ export default function App() {
             </div>
           )}
 
-        
-          {/* PLANS */}
           {activeTab === 'plans' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Plans
@@ -2858,7 +2705,6 @@ export default function App() {
                   const isActive = planName !== null && planName === p.key;
                   const Icon = p.icon;
 
-                  // Active plan: show what the Worker reported. Other plans: catalog (display only).
                   const reward =
                     isActive && claimAmount !== null
                       ? claimAmount
@@ -2873,7 +2719,6 @@ export default function App() {
                       : p.dailyLimit;
 
                   let claimsTodayText = '—';
-
                   if (isActive) {
                     claimsTodayText =
                       dailyUsed !== null && dailyRemaining !== null
@@ -2882,7 +2727,6 @@ export default function App() {
                   }
 
                   let statusText = 'Not active';
-
                   if (isActive) {
                     statusText = 'Active';
                   } else if (accountLoaded && !planName) {
@@ -2975,13 +2819,11 @@ export default function App() {
                         </li>
                       </ul>
 
-                      {/* PLAN BENEFITS */}
                       {Array.isArray(p.features) && p.features.length > 0 && (
                         <div className="mt-6 pt-5 border-t border-slate-800/70">
                           <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 mb-4">
                             What's Included
                           </h4>
-
                           <ul className="space-y-3">
                             {p.features.map((feature, index) => (
                               <li
@@ -3033,10 +2875,8 @@ export default function App() {
             </div>
           )}
 
-          {/* WALLET */}
           {activeTab === 'wallet' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Wallet & Withdrawals (DEMO)
@@ -3049,7 +2889,6 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
                 <div className="bg-black border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
                   <div>
                     <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
@@ -3119,7 +2958,6 @@ export default function App() {
                 </form>
               </div>
 
-              {/* USER WITHDRAWAL HISTORY */}
               <div className="mt-8">
                 <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 mb-4 font-['Space_Grotesk',sans-serif]">
                   Withdrawal History
@@ -3178,10 +3016,8 @@ export default function App() {
             </div>
           )}
 
-          {/* REFERRALS */}
           {activeTab === 'referrals' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Referral Program (DEMO)
@@ -3199,7 +3035,6 @@ export default function App() {
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Your Referral Code
@@ -3256,10 +3091,8 @@ export default function App() {
             </div>
           )}
 
-          {/* ADMIN DASHBOARD */}
           {activeTab === 'admin' && isDemoAdmin && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                   Admin Dashboard
@@ -3303,7 +3136,6 @@ export default function App() {
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Total Pending
@@ -3366,7 +3198,6 @@ export default function App() {
                     </thead>
 
                     <tbody className="divide-y divide-slate-800/60 font-mono text-xs font-bold">
-
                       {adminLoading ? (
                         <tr>
                           <td colSpan="5" className="p-6 text-center text-slate-400">
@@ -3409,7 +3240,6 @@ export default function App() {
                             <td className="p-4">
                               {w.status === 'pending' ? (
                                 <div className="flex flex-wrap gap-2">
-
                                   <button
                                     type="button"
                                     disabled={adminActionLoading !== null}
@@ -3427,7 +3257,6 @@ export default function App() {
                                   >
                                     {adminActionLoading === w.id ? '...' : 'Reject'}
                                   </button>
-
                                 </div>
                               ) : (
                                 <span className="text-slate-500">
@@ -3438,7 +3267,6 @@ export default function App() {
                           </tr>
                         ))
                       )}
-
                     </tbody>
                   </table>
                 </div>
@@ -3456,3 +3284,4 @@ export default function App() {
     </div>
   );
 }
+
