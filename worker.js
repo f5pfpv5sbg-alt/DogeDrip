@@ -6,6 +6,9 @@ const GOOGLE_KEYS_URL =
 
 const MIN_WITHDRAWAL_KOINU = 100000000;
 
+const MAX_REQUEST_BODY_BYTES = 16384;
+const MAX_FIREBASE_TOKEN_LENGTH = 8192;
+
 const PLAN_CONFIG = {
   FREE: {
     amount_koinu: 50000,
@@ -57,15 +60,18 @@ class HttpError extends Error {
 function corsHeaders(request) {
   const origin = request.headers.get("Origin");
 
-  return {
-    "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin)
-      ? origin
-      : ALLOWED_ORIGINS[0],
+  const headers = {
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400"
   };
+
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+
+  return headers;
 }
 
 function decodeBase64Url(value) {
@@ -118,6 +124,14 @@ async function getGoogleKeys(force = false) {
 }
 
 async function verifyFirebaseToken(token) {
+  if (
+    typeof token !== "string" ||
+    !token ||
+    token.length > MAX_FIREBASE_TOKEN_LENGTH
+  ) {
+    throw new HttpError(401, "Invalid Firebase token");
+  }
+
   let parts;
   let tokenHeader;
   let claims;
@@ -148,6 +162,7 @@ async function verifyFirebaseToken(token) {
     !claims ||
     typeof claims !== "object" ||
     tokenHeader.alg !== "RS256" ||
+    typeof tokenHeader.kid !== "string" ||
     !tokenHeader.kid ||
     claims.aud !== PROJECT_ID ||
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
@@ -161,7 +176,9 @@ async function verifyFirebaseToken(token) {
     !Number.isFinite(claims.auth_time) ||
     claims.exp <= now ||
     claims.iat > now ||
-    claims.auth_time > now
+    claims.auth_time > now ||
+    claims.iat < now - 3600 ||
+    claims.auth_time > claims.iat
   ) {
     throw new HttpError(401, "Invalid Firebase token");
   }
@@ -209,11 +226,20 @@ async function verifyFirebaseToken(token) {
 async function authenticate(request) {
   const authorization = request.headers.get("Authorization");
 
-  if (!authorization?.startsWith("Bearer ")) {
+  if (
+    typeof authorization !== "string" ||
+    !authorization.startsWith("Bearer ")
+  ) {
     throw new HttpError(401, "Authentication required");
   }
 
-  return verifyFirebaseToken(authorization.slice(7));
+  const token = authorization.slice(7).trim();
+
+  if (!token || token.length > MAX_FIREBASE_TOKEN_LENGTH) {
+    throw new HttpError(401, "Invalid authentication token");
+  }
+
+  return verifyFirebaseToken(token);
 }
 
 async function requireAdmin(user, env) {
@@ -235,8 +261,32 @@ async function requireAdmin(user, env) {
 }
 
 async function readJson(request) {
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > MAX_REQUEST_BODY_BYTES
+  ) {
+    throw new HttpError(413, "Request body too large");
+  }
+
+  let raw;
+
   try {
-    const data = await request.json();
+    raw = await request.text();
+  } catch {
+    throw new HttpError(400, "Invalid request body");
+  }
+
+  if (
+    !raw ||
+    new TextEncoder().encode(raw).length > MAX_REQUEST_BODY_BYTES
+  ) {
+    throw new HttpError(413, "Request body too large");
+  }
+
+  try {
+    const data = JSON.parse(raw);
 
     if (data && typeof data === "object" && !Array.isArray(data)) {
       return data;
@@ -292,8 +342,10 @@ async function isValidDogeAddress(address) {
 
   const bytes = [];
 
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.slice(i, i + 2), 16));
+  if (num > 0n) {
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes.push(parseInt(hex.slice(i, i + 2), 16));
+    }
   }
 
   let leadingZeros = 0;
@@ -615,6 +667,9 @@ async function getWheelConfiguration(env) {
 
   const maxPrize = getMaxWheelPrize(prizes);
 
+  // Validate every prize, including prizes with zero probability.
+  selectWeightedPrize(prizes);
+
   return { prizes, maxPrize };
 }
 
@@ -700,6 +755,7 @@ async function getWheelData(env, uid, plan) {
   const maxPrize = configuration.maxPrize;
   const available = Number(reserve.available_koinu || 0);
   const locked = Number(reserve.locked_koinu || 0);
+  const balance = Number(account.balance_koinu);
   const payoutsEnabled = Number(reserve.payouts_enabled) === 1;
 
   const canFreeSpin =
@@ -711,9 +767,13 @@ async function getWheelData(env, uid, plan) {
     paidRemaining > 0 &&
     locked >= maxPrize;
 
-  const canBuy = payoutsEnabled &&
+  const canBuy =
+    payoutsEnabled &&
+    Number.isSafeInteger(balance) &&
     WHEEL_PACKAGES.some(
-      pack => available >= maxPrize * pack.spins
+      pack =>
+        balance >= pack.price_koinu &&
+        available >= maxPrize * pack.spins
     );
 
   return {
@@ -733,7 +793,7 @@ async function getWheelData(env, uid, plan) {
     can_paid_spin: canPaidSpin,
     can_buy: canBuy,
     wheel_enabled: canFreeSpin || canPaidSpin,
-    balance_koinu: Number(account.balance_koinu)
+    balance_koinu: balance
   };
 }
 
@@ -797,7 +857,6 @@ async function handleWheelSpin(env, uid, body) {
   const statements = [];
 
   if (spinType === "free") {
-    // Reserve the maximum possible prize before selecting the result.
     statements.push(
       env.DB.prepare(`
         UPDATE wheel_reserve
@@ -842,8 +901,6 @@ async function handleWheelSpin(env, uid, body) {
       )
     );
   } else {
-    // Consume the locked maximum and release the unused difference.
-    // Existing paid spins remain redeemable even if payouts are disabled.
     statements.push(
       env.DB.prepare(`
         UPDATE wheel_reserve
@@ -905,7 +962,6 @@ async function handleWheelSpin(env, uid, body) {
   );
 
   if (spinType === "free") {
-    // Release the unused part of the maximum prize reservation.
     statements.push(
       env.DB.prepare(`
         UPDATE wheel_reserve
@@ -1055,7 +1111,6 @@ async function handleWheelBuy(env, uid, body) {
   }
 
   const statements = [
-    // Lock the maximum possible prize for every purchased spin.
     env.DB.prepare(`
       UPDATE wheel_reserve
       SET
@@ -1178,6 +1233,7 @@ async function handleWheelBuy(env, uid, body) {
         FROM wheel_reserve
         WHERE id = 1
       `).first(),
+
       env.DB.prepare(`
         SELECT balance_koinu
         FROM users
@@ -1319,17 +1375,10 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/auth/sync" && method === "POST") {
     const user = await authenticate(request);
-
-    let body = {};
-
-    try {
-      body = await request.json();
-    } catch {
-      body = {};
-    }
+    const body = await readJson(request);
 
     const rawRef =
-      body && typeof body.referred_by === "string"
+      typeof body.referred_by === "string"
         ? body.referred_by.trim().toUpperCase()
         : "";
 
@@ -1372,7 +1421,7 @@ async function handleRequest(request, env, json) {
         WHERE referred_by = ?
       `).bind(account.ref_code).first();
 
-      invitedCount = row ? row.total : 0;
+      invitedCount = row ? Number(row.total) : 0;
     }
 
     return json({
@@ -1605,7 +1654,7 @@ async function handleRequest(request, env, json) {
 
     return json({
       success: true,
-      claims: result.results
+      claims: result.results || []
     });
   }
 
@@ -1624,9 +1673,9 @@ async function handleRequest(request, env, json) {
 
     return json({
       success: true,
-      balance_koinu: account.balance_koinu,
+      balance_koinu: Number(account.balance_koinu),
       last_claim_at: account.last_claim_at,
-      cooldown_remaining: account.cooldown_remaining,
+      cooldown_remaining: Number(account.cooldown_remaining),
       cooldown_seconds: plan.cooldown_seconds,
       claim_amount_koinu: plan.amount_koinu,
       min_withdrawal_koinu: MIN_WITHDRAWAL_KOINU,
@@ -1793,6 +1842,10 @@ async function handleRequest(request, env, json) {
       WHERE id = ? AND uid = ?
     `).bind(results[1].meta.last_row_id, user.sub).first();
 
+    if (!withdrawal) {
+      throw new HttpError(500, "Withdrawal record could not be confirmed");
+    }
+
     return json({
       success: true,
       message: "Withdrawal request submitted",
@@ -1820,7 +1873,7 @@ async function handleRequest(request, env, json) {
 
     return json({
       success: true,
-      withdrawals: result.results
+      withdrawals: result.results || []
     });
   }
 
@@ -1849,7 +1902,7 @@ async function handleRequest(request, env, json) {
 
     return json({
       success: true,
-      withdrawals: result.results
+      withdrawals: result.results || []
     });
   }
 
@@ -2008,6 +2061,21 @@ export default {
         status,
         headers: { ...JSON_HEADERS, ...cors }
       });
+
+    const origin = request.headers.get("Origin");
+
+    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Origin not allowed"
+        }),
+        {
+          status: 403,
+          headers: JSON_HEADERS
+        }
+      );
+    }
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
