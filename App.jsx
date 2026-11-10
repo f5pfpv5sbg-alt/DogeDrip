@@ -1,4 +1,4 @@
-Ja kodi i plotë i App.jsx i përditësuar me bllokun e ri të sinkronizimit (/api/auth/sync):
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
