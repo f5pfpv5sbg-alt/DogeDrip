@@ -5,24 +5,35 @@ const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
 const MIN_WITHDRAWAL_KOINU = 100000000;
+const WHEEL_USES_FAUCET_RESERVE = true;
 
 const PLAN_CONFIG = {
   FREE: {
     amount_koinu: 50000,
-    cooldown_seconds: 120,
-    daily_limit: 50
+    cooldown_seconds: 50,
+    daily_limit: 50,
+    free_wheel_spins: 1
   },
   PREMIUM: {
     amount_koinu: 100000,
     cooldown_seconds: 45,
-    daily_limit: 50
+    daily_limit: 50,
+    free_wheel_spins: 2
   },
   VIP: {
     amount_koinu: 150000,
     cooldown_seconds: 0,
-    daily_limit: 100
+    daily_limit: 100,
+    free_wheel_spins: 3
   }
 };
+
+const WHEEL_PACKAGES = [
+  { id: "1", spins: 1, price_koinu: 180000 },
+  { id: "5", spins: 5, price_koinu: 850000 },
+  { id: "10", spins: 10, price_koinu: 1600000 },
+  { id: "25", spins: 25, price_koinu: 3750000 }
+];
 
 const ALLOWED_ORIGINS = ["https://dogedrip.pages.dev"];
 
@@ -418,6 +429,619 @@ async function syncUser(env, user, referredByCode) {
   `).bind(user.sub).first();
 }
 
+// ==========================================
+// LUCKY WHEEL HELPERS
+// ==========================================
+
+function getUtcDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getRequestId(body) {
+  const id = body?.request_id;
+
+  if (
+    typeof id !== "string" ||
+    !/^[A-Za-z0-9_-]{8,64}$/.test(id)
+  ) {
+    throw new HttpError(400, "Valid request_id is required");
+  }
+
+  return id;
+}
+
+function selectWeightedPrize(prizes) {
+  const valid = prizes.filter(
+    p =>
+      Number.isSafeInteger(Number(p.amount_koinu)) &&
+      Number(p.amount_koinu) >= 0 &&
+      Number.isSafeInteger(Number(p.probability_weight)) &&
+      Number(p.probability_weight) >= 0
+  );
+
+  const totalWeight = valid.reduce(
+    (sum, p) => sum + Number(p.probability_weight),
+    0
+  );
+
+  if (!Number.isSafeInteger(totalWeight) || totalWeight <= 0) {
+    throw new HttpError(503, "Wheel prize configuration unavailable");
+  }
+
+  const random = new Uint32Array(1);
+  crypto.getRandomValues(random);
+
+  let ticket = random[0] % totalWeight;
+
+  for (const prize of valid) {
+    const weight = Number(prize.probability_weight);
+
+    if (weight <= 0) continue;
+
+    if (ticket < weight) return prize;
+
+    ticket -= weight;
+  }
+
+  throw new HttpError(500, "Could not select wheel prize");
+}
+
+async function getWheelData(env, uid, plan) {
+  const utcDate = getUtcDate();
+
+  const [prizesResult, inventory, usage, account, reserve] =
+    await Promise.all([
+      env.DB.prepare(`
+        SELECT
+          id,
+          prize_key,
+          amount_koinu,
+          probability_weight,
+          display_order
+        FROM wheel_prizes
+        ORDER BY display_order ASC
+      `).all(),
+
+      env.DB.prepare(`
+        SELECT paid_spins
+        FROM wheel_spin_inventory
+        WHERE uid = ?
+      `).bind(uid).first(),
+
+      env.DB.prepare(`
+        SELECT free_spins_used
+        FROM wheel_daily_usage
+        WHERE uid = ? AND utc_date = ?
+      `).bind(uid, utcDate).first(),
+
+      env.DB.prepare(`
+        SELECT balance_koinu
+        FROM users
+        WHERE uid = ?
+      `).bind(uid).first(),
+
+      WHEEL_USES_FAUCET_RESERVE
+        ? env.DB.prepare(`
+            SELECT available_koinu, payouts_enabled
+            FROM faucet_reserve
+            WHERE id = 1
+          `).first()
+        : Promise.resolve({ available_koinu: 0, payouts_enabled: 1 })
+    ]);
+
+  if (!account) {
+    throw new HttpError(404, "User not found");
+  }
+
+  if (!prizesResult.results?.length) {
+    throw new HttpError(503, "Wheel prizes are not configured");
+  }
+
+  if (WHEEL_USES_FAUCET_RESERVE && !reserve) {
+    throw new HttpError(503, "Wheel reserve is not configured");
+  }
+
+  const freeUsed = Number(usage?.free_spins_used || 0);
+  const freeTotal = Number(plan.free_wheel_spins || 0);
+  const freeRemaining = Math.max(0, freeTotal - freeUsed);
+  const paidRemaining = Number(inventory?.paid_spins || 0);
+
+  return {
+    prizes: prizesResult.results.map(p => ({
+      id: p.prize_key,
+      label: `${(Number(p.amount_koinu) / 100000000).toFixed(
+        Number(p.amount_koinu) % 100000000 === 0 ? 0 : 3
+      )} DOGE`,
+      amount_koinu: Number(p.amount_koinu)
+    })),
+    packs: WHEEL_PACKAGES,
+    spins: {
+      free_remaining: freeRemaining,
+      free_total: freeTotal,
+      paid_remaining: paidRemaining,
+      total_remaining: freeRemaining + paidRemaining
+    },
+    balance_koinu: Number(account.balance_koinu)
+  };
+}
+
+async function getExistingSpin(env, uid, requestId) {
+  return env.DB.prepare(`
+    SELECT
+      id,
+      spin_type,
+      prize_key,
+      prize_koinu,
+      created_at
+    FROM wheel_spins
+    WHERE uid = ? AND request_id = ?
+  `).bind(uid, requestId).first();
+}
+
+async function getExistingPurchase(env, uid, requestId) {
+  return env.DB.prepare(`
+    SELECT
+      id,
+      package_spins,
+      cost_koinu,
+      created_at
+    FROM wheel_purchases
+    WHERE uid = ? AND request_id = ?
+  `).bind(uid, requestId).first();
+}
+
+async function handleWheelState(env, uid) {
+  const plan = await getUserPlan(env, uid);
+  const data = await getWheelData(env, uid, plan);
+
+  return {
+    success: true,
+    ...data
+  };
+}
+
+async function handleWheelSpin(env, uid, body) {
+  const requestId = getRequestId(body);
+
+  // Idempotency: an already completed request is never paid twice.
+  const existing = await getExistingSpin(env, uid, requestId);
+
+  if (existing) {
+    const plan = await getUserPlan(env, uid);
+    const data = await getWheelData(env, uid, plan);
+
+    return {
+      success: true,
+      replayed: true,
+      spin: {
+        id: existing.id,
+        spin_type: existing.spin_type,
+        prize_key: existing.prize_key,
+        amount_koinu: Number(existing.prize_koinu),
+        created_at: existing.created_at
+      },
+      ...data
+    };
+  }
+
+  const plan = await getUserPlan(env, uid);
+  const before = await getWheelData(env, uid, plan);
+
+  let spinType;
+
+  if (before.spins.free_remaining > 0) {
+    spinType = "free";
+  } else if (before.spins.paid_remaining > 0) {
+    spinType = "paid";
+  } else {
+    throw new HttpError(409, "No spins remaining");
+  }
+
+  const prizeRows = await env.DB.prepare(`
+    SELECT
+      id,
+      prize_key,
+      amount_koinu,
+      probability_weight
+    FROM wheel_prizes
+    ORDER BY display_order ASC
+  `).all();
+
+  const prize = selectWeightedPrize(prizeRows.results || []);
+  const amount = Number(prize.amount_koinu);
+  const utcDate = getUtcDate();
+
+  const statements = [];
+
+  // Reserve is checked and locked through a conditional update.
+  if (WHEEL_USES_FAUCET_RESERVE) {
+    statements.push(
+      env.DB.prepare(`
+        UPDATE faucet_reserve
+        SET
+          available_koinu = available_koinu,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+          AND (
+            ? = 0
+            OR (
+              payouts_enabled = 1
+              AND available_koinu >= ?
+            )
+          )
+      `).bind(amount, amount)
+    );
+  }
+
+  // Consume exactly one spin.
+  if (spinType === "free") {
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO wheel_daily_usage (
+          uid,
+          utc_date,
+          free_spins_used
+        )
+        SELECT ?, ?, 1
+        WHERE changes() = 1
+        ON CONFLICT(uid, utc_date)
+        DO UPDATE SET
+          free_spins_used = wheel_daily_usage.free_spins_used + 1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE wheel_daily_usage.free_spins_used < ?
+      `).bind(uid, utcDate, plan.free_wheel_spins)
+    );
+  } else {
+    statements.push(
+      env.DB.prepare(`
+        UPDATE wheel_spin_inventory
+        SET
+          paid_spins = paid_spins - 1,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE uid = ?
+          AND paid_spins > 0
+          AND changes() = 1
+      `).bind(uid)
+    );
+  }
+
+  // Insert the spin only if the previous step succeeded.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO wheel_spins (
+        uid,
+        request_id,
+        spin_type,
+        prize_key,
+        prize_koinu,
+        utc_date
+      )
+      SELECT ?, ?, ?, ?, ?, ?
+      WHERE changes() = 1
+    `).bind(
+      uid,
+      requestId,
+      spinType,
+      prize.prize_key,
+      amount,
+      utcDate
+    )
+  );
+
+  // Credit the user's balance only after the spin was inserted.
+  statements.push(
+    env.DB.prepare(`
+      UPDATE users
+      SET balance_koinu = balance_koinu + ?
+      WHERE uid = ?
+        AND changes() = 1
+    `).bind(amount, uid)
+  );
+
+  // If any required operation failed, force the entire batch to roll back.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO wheel_spins (
+        uid,
+        request_id,
+        spin_type,
+        prize_key,
+        prize_koinu,
+        utc_date
+      )
+      SELECT NULL, NULL, NULL, NULL, NULL, NULL
+      WHERE changes() != 1
+    `)
+  );
+
+  let results;
+
+  try {
+    results = await env.DB.batch(statements);
+  } catch (error) {
+    // Determine whether the failure was caused by reserve or spin availability.
+    if (WHEEL_USES_FAUCET_RESERVE) {
+      const reserve = await env.DB.prepare(`
+        SELECT available_koinu, payouts_enabled
+        FROM faucet_reserve
+        WHERE id = 1
+      `).first();
+
+      if (
+        !reserve ||
+        Number(reserve.payouts_enabled) !== 1 ||
+        Number(reserve.available_koinu) < amount
+      ) {
+        throw new HttpError(
+          503,
+          "Wheel temporarily unavailable. Insufficient faucet reserve."
+        );
+      }
+    }
+
+    const after = await getWheelData(env, uid, plan);
+
+    if (
+      spinType === "free" &&
+      after.spins.free_remaining <= before.spins.free_remaining
+    ) {
+      throw new HttpError(409, "Free spin is no longer available");
+    }
+
+    if (
+      spinType === "paid" &&
+      after.spins.paid_remaining <= 0
+    ) {
+      throw new HttpError(409, "No paid spins remaining");
+    }
+
+    throw new HttpError(
+      409,
+      "Spin could not be completed. Please try again."
+    );
+  }
+
+  const spinId = results[statements.length - 4]?.meta?.last_row_id;
+
+  const savedSpin = await env.DB.prepare(`
+    SELECT id, spin_type, prize_key, prize_koinu, created_at
+    FROM wheel_spins
+    WHERE uid = ? AND request_id = ?
+  `).bind(uid, requestId).first();
+
+  if (!savedSpin) {
+    throw new HttpError(500, "Spin record could not be confirmed");
+  }
+
+  const after = await getWheelData(env, uid, plan);
+
+  return {
+    success: true,
+    replayed: false,
+    spin: {
+      id: savedSpin.id,
+      spin_type: savedSpin.spin_type,
+      prize_key: savedSpin.prize_key,
+      amount_koinu: Number(savedSpin.prize_koinu),
+      created_at: savedSpin.created_at
+    },
+    ...after
+  };
+}
+
+async function handleWheelBuy(env, uid, body) {
+  const requestId = getRequestId(body);
+  const packId = String(body.pack_id || "");
+
+  const existing = await getExistingPurchase(env, uid, requestId);
+
+  if (existing) {
+    const plan = await getUserPlan(env, uid);
+    const data = await getWheelData(env, uid, plan);
+
+    return {
+      success: true,
+      replayed: true,
+      purchase: {
+        id: existing.id,
+        spins: Number(existing.package_spins),
+        price_koinu: Number(existing.cost_koinu),
+        created_at: existing.created_at
+      },
+      ...data
+    };
+  }
+
+  const pack = WHEEL_PACKAGES.find(p => p.id === packId);
+
+  if (!pack) {
+    throw new HttpError(400, "Invalid spin package");
+  }
+
+  const statements = [];
+
+  // Debit the user's balance only if the reserve exists.
+  statements.push(
+    env.DB.prepare(`
+      UPDATE users
+      SET balance_koinu = balance_koinu - ?
+      WHERE uid = ?
+        AND balance_koinu >= ?
+        AND (
+          ? = 0
+          OR EXISTS (
+            SELECT 1
+            FROM faucet_reserve
+            WHERE id = 1
+          )
+        )
+    `).bind(
+      pack.price_koinu,
+      uid,
+      pack.price_koinu,
+      WHEEL_USES_FAUCET_RESERVE ? 1 : 0
+    )
+  );
+
+  // Record the purchase only after a successful debit.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO wheel_purchases (
+        uid,
+        request_id,
+        package_spins,
+        cost_koinu
+      )
+      SELECT ?, ?, ?, ?
+      WHERE changes() = 1
+    `).bind(
+      uid,
+      requestId,
+      pack.spins,
+      pack.price_koinu
+    )
+  );
+
+  // Add paid spins only after purchase insertion.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO wheel_spin_inventory (
+        uid,
+        paid_spins,
+        updated_at
+      )
+      SELECT ?, ?, CURRENT_TIMESTAMP
+      WHERE changes() = 1
+      ON CONFLICT(uid)
+      DO UPDATE SET
+        paid_spins = wheel_spin_inventory.paid_spins + excluded.paid_spins,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(uid, pack.spins)
+  );
+
+  // Purchased DOGE funds the reserve.
+  if (WHEEL_USES_FAUCET_RESERVE) {
+    statements.push(
+      env.DB.prepare(`
+        UPDATE faucet_reserve
+        SET
+          available_koinu = available_koinu + ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+          AND changes() = 1
+      `).bind(pack.price_koinu)
+    );
+  }
+
+  // Force rollback if any required step did not happen.
+  statements.push(
+    env.DB.prepare(`
+      INSERT INTO wheel_purchases (
+        uid,
+        request_id,
+        package_spins,
+        cost_koinu
+      )
+      SELECT NULL, NULL, NULL, NULL
+      WHERE changes() != 1
+    `)
+  );
+
+  try {
+    await env.DB.batch(statements);
+  } catch {
+    const account = await env.DB.prepare(`
+      SELECT balance_koinu
+      FROM users
+      WHERE uid = ?
+    `).bind(uid).first();
+
+    if (!account) {
+      throw new HttpError(404, "User not found");
+    }
+
+    if (Number(account.balance_koinu) < pack.price_koinu) {
+      throw new HttpError(400, "Insufficient balance");
+    }
+
+    if (WHEEL_USES_FAUCET_RESERVE) {
+      const reserve = await env.DB.prepare(`
+        SELECT id
+        FROM faucet_reserve
+        WHERE id = 1
+      `).first();
+
+      if (!reserve) {
+        throw new HttpError(503, "Wheel reserve is not configured");
+      }
+    }
+
+    throw new HttpError(
+      409,
+      "Purchase could not be completed. Please try again."
+    );
+  }
+
+  const purchase = await getExistingPurchase(env, uid, requestId);
+
+  if (!purchase) {
+    throw new HttpError(500, "Purchase could not be confirmed");
+  }
+
+  const plan = await getUserPlan(env, uid);
+  const data = await getWheelData(env, uid, plan);
+
+  return {
+    success: true,
+    replayed: false,
+    purchase: {
+      id: purchase.id,
+      spins: Number(purchase.package_spins),
+      price_koinu: Number(purchase.cost_koinu),
+      created_at: purchase.created_at
+    },
+    ...data
+  };
+}
+
+async function handleWheelHistory(env, uid) {
+  const [spins, purchases] = await Promise.all([
+    env.DB.prepare(`
+      SELECT
+        id,
+        prize_koinu AS amount_koinu,
+        spin_type AS source,
+        created_at
+      FROM wheel_spins
+      WHERE uid = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).bind(uid).all(),
+
+    env.DB.prepare(`
+      SELECT
+        id,
+        package_spins AS spins,
+        cost_koinu AS price_koinu,
+        created_at
+      FROM wheel_purchases
+      WHERE uid = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).bind(uid).all()
+  ]);
+
+  return {
+    success: true,
+    spins: spins.results || [],
+    purchases: purchases.results || []
+  };
+}
+
+// ==========================================
+// MAIN API ROUTES
+// ==========================================
+
 async function handleRequest(request, env, json) {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -525,6 +1149,44 @@ async function handleRequest(request, env, json) {
       referred_by: account.referred_by,
       invited_count: invitedCount
     });
+  }
+
+  // ==========================================
+  // LUCKY WHEEL ROUTES
+  // ==========================================
+
+  if (path === "/api/wheel/state" && method === "GET") {
+    const user = await authenticate(request);
+
+    return json(
+      await handleWheelState(env, user.sub)
+    );
+  }
+
+  if (path === "/api/wheel/spin" && method === "POST") {
+    const user = await authenticate(request);
+    const body = await readJson(request);
+
+    return json(
+      await handleWheelSpin(env, user.sub, body)
+    );
+  }
+
+  if (path === "/api/wheel/buy" && method === "POST") {
+    const user = await authenticate(request);
+    const body = await readJson(request);
+
+    return json(
+      await handleWheelBuy(env, user.sub, body)
+    );
+  }
+
+  if (path === "/api/wheel/history" && method === "GET") {
+    const user = await authenticate(request);
+
+    return json(
+      await handleWheelHistory(env, user.sub)
+    );
   }
 
   // CLAIM
