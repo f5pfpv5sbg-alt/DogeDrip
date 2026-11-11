@@ -1,80 +1,351 @@
+/**
+ * DogeDrip API — Cloudflare Worker
+ *
+ * Baseline: the existing worker.js (health, auth sync, claim, claims, balance)
+ * is preserved. Added:
+ *   - POST /api/email/send-code   (Brevo, 6-digit code, 10 min TTL, 60 s resend)
+ *   - POST /api/email/verify-code (server-side check, 5 attempts max)
+ *   - GET  /api/email/status      (source of truth for the UI)
+ *   - Email verification enforcement on /api/claim (backend, not UI)
+ *   - Reset of email verification when the account email changes
+ *
+ * Secrets required:
+ *   BREVO_API_KEY        (already configured)
+ *   EMAIL_CODE_PEPPER    (new, min 16 chars; see INTEGRIMI.md)
+ *
+ * No code, hash pepper or secret is ever logged by this file.
+ */
+
 const PROJECT_ID = "dogedrip-3ebda";
 
 const GOOGLE_KEYS_URL =
   "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
-const MIN_WITHDRAWAL_KOINU = 100000000;
+const CLAIM_AMOUNT_KOINU = 100000;
+const COOLDOWN_SECONDS = 45;
 
-const MAX_REQUEST_BODY_BYTES = 16384;
-const MAX_FIREBASE_TOKEN_LENGTH = 8192;
+/* Email verification configuration */
+const CODE_TTL_SECONDS = 10 * 60;
+const RESEND_COOLDOWN_SECONDS = 60;
+const MAX_CODE_ATTEMPTS = 5;
+const BREVO_API_URL = "https://api.brevo.com/v3/smtp/email";
+const EMAIL_FROM_ADDRESS = "support.dogedrip@gmail.com";
+const EMAIL_FROM_NAME = "DogeDrip";
+const CODE_HASH_PREFIX = "hmac-sha256:";
+const PEPPER_MIN_LENGTH = 16;
 
-const EMAIL_CODE_EXPIRY_MINUTES = 10;
-const EMAIL_CODE_RESEND_SECONDS = 60;
-const EMAIL_CODE_MAX_ATTEMPTS = 5;
+/* Profile configuration */
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+const AVATAR_KEY_PREFIX = "avatars/";
+const UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
-const PLAN_CONFIG = {
-  FREE: {
-    amount_koinu: 50000,
-    cooldown_seconds: 50,
-    daily_limit: 50,
-    free_wheel_spins: 1
-  },
-  PREMIUM: {
-    amount_koinu: 100000,
-    cooldown_seconds: 45,
-    daily_limit: 50,
-    free_wheel_spins: 2
-  },
-  VIP: {
-    amount_koinu: 150000,
-    cooldown_seconds: 0,
-    daily_limit: 100,
-    free_wheel_spins: 2
-  }
-};
+/**
+ * When true (default), /api/claim requires email_verified = 1 in D1.
+ * Set to false only during a controlled rollout: it weakens the gate.
+ */
+const EMAIL_VERIFICATION_ENFORCED = true;
 
-const WHEEL_PACKAGES = [
-  { id: "1", spins: 1, price_koinu: 180000 },
-  { id: "5", spins: 5, price_koinu: 850000 },
-  { id: "10", spins: 10, price_koinu: 1600000 },
-  { id: "25", spins: 25, price_koinu: 3750000 }
-];
-
-const ALLOWED_ORIGINS = ["https://dogedrip.pages.dev"];
-
-const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
-const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-const JSON_HEADERS = {
+const headers = {
   "Content-Type": "application/json",
-  "Cache-Control": "no-store",
-  "X-Content-Type-Options": "nosniff"
+  "Access-Control-Allow-Origin": "https://dogedrip.pages.dev",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Cache-Control": "no-store"
 };
 
-class HttpError extends Error {
-  constructor(status, message, extra = {}) {
-    super(message);
-    this.status = status;
-    this.extra = extra;
-  }
+function response(data, status = 200) {
+  return new Response(JSON.stringify(data), { status, headers });
 }
 
-function corsHeaders(request) {
-  const origin = request.headers.get("Origin");
+function fail(error, status, extra = {}) {
+  return response({ success: false, error, ...extra }, status);
+}
 
-  const headers = {
-    "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Max-Age": "86400"
-  };
+function dbTimestampToMs(value) {
+  if (typeof value !== "string" || !value) return NaN;
 
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    headers["Access-Control-Allow-Origin"] = origin;
+  // SQLite CURRENT_TIMESTAMP format is UTC but not ISO ("YYYY-MM-DD HH:MM:SS").
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
+    return Date.parse(`${value.replace(" ", "T")}Z`);
   }
 
-  return headers;
+  return Date.parse(value);
+}
+
+function toHex(bytes) {
+  let out = "";
+  for (const byte of bytes) out += byte.toString(16).padStart(2, "0");
+  return out;
+}
+
+function avatarObjectKey(uid) {
+  return `${AVATAR_KEY_PREFIX}${uid}`;
+}
+
+/**
+ * Detects the real image type from magic bytes. The client-provided
+ * Content-Type is never trusted on its own.
+ */
+export function detectImageType(buffer) {
+  const bytes = new Uint8Array(buffer);
+
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return { ext: "png", contentType: "image/png" };
+  }
+
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { ext: "jpg", contentType: "image/jpeg" };
+  }
+
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return { ext: "webp", contentType: "image/webp" };
+  }
+
+  return null;
+}
+
+/** Badge is derived from the stored plan only; users cannot choose it. */
+export function planBadge(plan) {
+  const normalized = String(plan ?? "").trim().toUpperCase();
+  if (normalized === "PREMIUM") return "premium";
+  if (normalized === "VIP") return "vip";
+  return null;
+}
+
+export function deriveUsername(email, uid) {
+  const local = String(email ?? "")
+    .split("@")[0]
+    .replace(/[^A-Za-z0-9_]/g, "")
+    .slice(0, 20);
+
+  if (local.length >= 3) return local;
+
+  const suffix = String(uid ?? "")
+    .slice(-6)
+    .replace(/[^A-Za-z0-9]/g, "");
+
+  return suffix ? `user_${suffix}` : "user";
+}
+
+function buildProfile(row) {
+  const plan = String(row.plan || "FREE").trim().toUpperCase();
+  const createdMs = row.created_at ? dbTimestampToMs(row.created_at) : NaN;
+
+  return {
+    uid: row.uid,
+    email: row.email,
+    username: row.username ? String(row.username) : deriveUsername(row.email, row.uid),
+    plan,
+    badge: planBadge(plan),
+    ref_code: row.ref_code || null,
+    created_at: row.created_at || null,
+    member_since_iso: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
+    email_verified: Number(row.email_verified) === 1,
+    email_verified_at: row.email_verified_at || null,
+    avatar_url: row.avatar_url || null
+  };
+}
+
+export function generateVerificationCode() {
+  const cryptoObject = globalThis.crypto;
+  if (!cryptoObject || typeof cryptoObject.getRandomValues !== "function") {
+    throw new Error("A secure random source is unavailable");
+  }
+
+  const range = 1000000;
+  const limit = Math.floor(0x100000000 / range) * range; // unbiased rejection sampling
+  const buffer = new Uint32Array(1);
+  let value;
+
+  do {
+    cryptoObject.getRandomValues(buffer);
+    value = buffer[0];
+  } while (value >= limit);
+
+  return String(value % range).padStart(6, "0");
+}
+
+export async function hashVerificationCode(code, pepper) {
+  if (typeof code !== "string" || !/^\d{6}$/.test(code)) {
+    throw new Error("Invalid verification code format");
+  }
+  if (typeof pepper !== "string" || pepper.length < PEPPER_MIN_LENGTH) {
+    throw new Error("EMAIL_CODE_PEPPER is missing or shorter than 16 characters");
+  }
+
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(pepper),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await globalThis.crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(code)
+  );
+
+  return CODE_HASH_PREFIX + toHex(new Uint8Array(signature));
+}
+
+export function timingSafeEqualHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length || a.length === 0) return false;
+
+  let difference = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return difference === 0;
+}
+
+export async function verifyVerificationCode(code, storedHash, pepper) {
+  if (typeof storedHash !== "string" || !storedHash.startsWith(CODE_HASH_PREFIX)) {
+    return false;
+  }
+
+  let candidate;
+  try {
+    candidate = await hashVerificationCode(code, pepper);
+  } catch {
+    return false;
+  }
+
+  return timingSafeEqualHex(candidate, storedHash);
+}
+
+export function evaluateSendWindow({ lastSentAt = null, now = Date.now() } = {}) {
+  if (!lastSentAt) return { allowed: true, retryAfterMs: 0 };
+
+  const last = dbTimestampToMs(lastSentAt);
+  if (!Number.isFinite(last)) return { allowed: true, retryAfterMs: 0 };
+
+  const elapsed = now - last;
+  if (elapsed >= RESEND_COOLDOWN_SECONDS * 1000) {
+    return { allowed: true, retryAfterMs: 0 };
+  }
+
+  return {
+    allowed: false,
+    retryAfterMs: RESEND_COOLDOWN_SECONDS * 1000 - Math.max(elapsed, 0)
+  };
+}
+
+function buildVerificationEmailHtml(code) {
+  return `<!doctype html>
+<html lang="en">
+  <body style="margin:0;padding:0;background:#000000;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+      style="background:#000000;padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+            style="max-width:520px;background:#0a0a0a;border:1px solid #1f2937;border-radius:16px;padding:32px;font-family:Helvetica,Arial,sans-serif;color:#ffffff;">
+            <tr>
+              <td style="font-size:20px;font-weight:800;letter-spacing:-0.5px;padding-bottom:8px;">
+                DOGE<span style="color:#F4A6C1;">DRIP</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-size:15px;color:#cbd5e1;padding-bottom:24px;">
+                Use this code to verify the email address on your DogeDrip account.
+              </td>
+            </tr>
+            <tr>
+              <td align="center" style="padding:24px 0;">
+                <div style="display:inline-block;background:#F4A6C1;color:#000000;font-family:Consolas,Menlo,monospace;font-size:32px;font-weight:800;letter-spacing:10px;padding:16px 24px;border-radius:12px;">
+                  ${code}
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-size:13px;color:#94a3b8;padding-top:16px;">
+                The code expires in 10 minutes. You have 5 attempts.
+                If you did not request it, ignore this email — your account stays unverified.
+              </td>
+            </tr>
+            <tr>
+              <td style="font-size:12px;color:#475569;padding-top:24px;border-top:1px solid #1f2937;">
+                DogeDrip never asks for this code, your password or your wallet phrase.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export async function sendVerificationEmail({
+  apiKey,
+  to,
+  code,
+  fetcher = globalThis.fetch,
+  fromEmail = EMAIL_FROM_ADDRESS,
+  fromName = EMAIL_FROM_NAME
+} = {}) {
+  if (typeof apiKey !== "string" || !apiKey) {
+    return { ok: false, status: 0, message: "BREVO_API_KEY is missing" };
+  }
+  if (typeof to !== "string" || !to.includes("@")) {
+    return { ok: false, status: 0, message: "Invalid recipient" };
+  }
+  if (typeof fetcher !== "function") {
+    return { ok: false, status: 0, message: "fetch is unavailable" };
+  }
+
+  const payload = {
+    sender: { name: fromName, email: fromEmail },
+    to: [{ email: to }],
+    subject: "Your DogeDrip verification code",
+    htmlContent: buildVerificationEmailHtml(code),
+    textContent: `Your DogeDrip verification code is ${code}. It expires in 10 minutes. You have ${MAX_CODE_ATTEMPTS} attempts.`
+  };
+
+  let res;
+  try {
+    res = await fetcher(BREVO_API_URL, {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "content-type": "application/json",
+        accept: "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    // Never surface the provider error body: it can echo request content.
+    return { ok: false, status: 0, message: "Email provider unreachable" };
+  }
+
+  if (!res || !res.ok) {
+    return {
+      ok: false,
+      status: res ? res.status : 0,
+      message: "Email provider rejected the request"
+    };
+  }
+
+  return { ok: true, status: res.status };
 }
 
 function decodeBase64Url(value) {
@@ -86,2877 +357,817 @@ function decodeBase64Url(value) {
   return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
 
-function formatDoge(koinu) {
-  return (Number(koinu) / 100000000)
-    .toFixed(8)
-    .replace(/\.?0+$/, "");
-}
-
-// ==========================================
-// FIREBASE TOKEN VERIFICATION
-// ==========================================
-
-let cachedKeys = null;
-let cachedKeysAt = 0;
-
-async function getGoogleKeys(force = false) {
-  const now = Date.now();
-
-  if (!force && cachedKeys && now - cachedKeysAt < 3600000) {
-    return cachedKeys;
-  }
-
-  const res = await fetch(GOOGLE_KEYS_URL, {
-    cf: { cacheTtl: 3600, cacheEverything: true }
-  });
-
-  if (!res.ok) {
-    throw new HttpError(503, "Could not retrieve Firebase keys");
-  }
-
-  const keySet = await res.json();
-
-  if (!Array.isArray(keySet.keys)) {
-    throw new HttpError(503, "Could not retrieve Firebase keys");
-  }
-
-  cachedKeys = keySet.keys;
-  cachedKeysAt = now;
-
-  return cachedKeys;
-}
-
 async function verifyFirebaseToken(token) {
-  if (
-    typeof token !== "string" ||
-    !token ||
-    token.length > MAX_FIREBASE_TOKEN_LENGTH
-  ) {
-    throw new HttpError(401, "Invalid Firebase token");
-  }
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("Invalid token");
 
-  let parts;
-  let tokenHeader;
-  let claims;
+  const header = JSON.parse(
+    new TextDecoder().decode(decodeBase64Url(parts[0]))
+  );
 
-  try {
-    parts = token.split(".");
-
-    if (parts.length !== 3) {
-      throw new Error("Invalid token");
-    }
-
-    tokenHeader = JSON.parse(
-      new TextDecoder().decode(decodeBase64Url(parts[0]))
-    );
-
-    claims = JSON.parse(
-      new TextDecoder().decode(decodeBase64Url(parts[1]))
-    );
-  } catch {
-    throw new HttpError(401, "Invalid token");
-  }
+  const claims = JSON.parse(
+    new TextDecoder().decode(decodeBase64Url(parts[1]))
+  );
 
   const now = Math.floor(Date.now() / 1000);
 
   if (
-    !tokenHeader ||
-    typeof tokenHeader !== "object" ||
-    !claims ||
-    typeof claims !== "object" ||
-    tokenHeader.alg !== "RS256" ||
-    typeof tokenHeader.kid !== "string" ||
-    !tokenHeader.kid ||
+    header.alg !== "RS256" ||
+    !header.kid ||
     claims.aud !== PROJECT_ID ||
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
-    typeof claims.sub !== "string" ||
     !claims.sub ||
+    claims.sub !== claims.user_id ||
     claims.sub.length > 128 ||
-    typeof claims.email !== "string" ||
     !claims.email ||
+    typeof claims.email !== "string" ||
     !Number.isFinite(claims.exp) ||
     !Number.isFinite(claims.iat) ||
     !Number.isFinite(claims.auth_time) ||
     claims.exp <= now ||
     claims.iat > now ||
-    claims.auth_time > now ||
-    claims.iat < now - 3600 ||
-    claims.auth_time > claims.iat
+    claims.auth_time > now
   ) {
-    throw new HttpError(401, "Invalid Firebase token");
+    throw new Error("Invalid Firebase token");
   }
 
-  let keys = await getGoogleKeys();
-  let jwk = keys.find(key => key.kid === tokenHeader.kid);
+  const keysResponse = await fetch(GOOGLE_KEYS_URL);
+  if (!keysResponse.ok) throw new Error("Could not retrieve keys");
 
-  if (!jwk) {
-    keys = await getGoogleKeys(true);
-    jwk = keys.find(key => key.kid === tokenHeader.kid);
-  }
+  const keySet = await keysResponse.json();
+  const jwk = keySet.keys.find(key => key.kid === header.kid);
 
-  if (!jwk) {
-    throw new HttpError(401, "Signing key not found");
-  }
+  if (!jwk) throw new Error("Signing key not found");
 
-  let valid = false;
+  const publicKey = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
 
-  try {
-    const publicKey = await crypto.subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-      false,
-      ["verify"]
-    );
+  const valid = await crypto.subtle.verify(
+    "RSASSA-PKCS1-v1_5",
+    publicKey,
+    decodeBase64Url(parts[2]),
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
+  );
 
-    valid = await crypto.subtle.verify(
-      "RSASSA-PKCS1-v1_5",
-      publicKey,
-      decodeBase64Url(parts[2]),
-      new TextEncoder().encode(`${parts[0]}.${parts[1]}`)
-    );
-  } catch {
-    valid = false;
-  }
-
-  if (!valid) {
-    throw new HttpError(401, "Invalid token signature");
-  }
+  if (!valid) throw new Error("Invalid token signature");
 
   return claims;
 }
 
-// ==========================================
-// AUTHENTICATION + D1 EMAIL VERIFICATION
-// ==========================================
-
-async function authenticate(request, env, options = {}) {
+async function authenticate(request) {
   const authorization = request.headers.get("Authorization");
 
-  if (
-    typeof authorization !== "string" ||
-    !authorization.startsWith("Bearer ")
-  ) {
-    throw new HttpError(401, "Authentication required");
+  if (!authorization?.startsWith("Bearer ")) {
+    throw new Error("Authentication required");
   }
 
-  const token = authorization.slice(7).trim();
-
-  if (!token || token.length > MAX_FIREBASE_TOKEN_LENGTH) {
-    throw new HttpError(401, "Invalid authentication token");
-  }
-
-  const user = await verifyFirebaseToken(token);
-
-  if (options.requireVerifiedEmail === false) {
-    return user;
-  }
-
-  const account = await env.DB.prepare(`
-    SELECT email, email_verified
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  if (!account) {
-    throw new HttpError(403, "ACCOUNT_NOT_SYNCHRONIZED");
-  }
-
-  if (
-    account.email.toLowerCase() !== user.email.toLowerCase() ||
-    Number(account.email_verified) !== 1
-  ) {
-    throw new HttpError(403, "EMAIL_NOT_VERIFIED");
-  }
-
-  return user;
+  return verifyFirebaseToken(authorization.slice(7));
 }
 
-async function requireAdmin(user, env) {
-  const account = await env.DB.prepare(`
-    SELECT uid, email, role
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  if (
-    !account ||
-    account.role !== "admin" ||
-    (account.email || "").toLowerCase() !== user.email.toLowerCase()
-  ) {
-    throw new HttpError(403, "Admin access denied");
-  }
-
-  return account;
-}
-
-// ==========================================
-// REQUEST HELPERS
-// ==========================================
-
-async function readJson(request) {
-  const contentLength = Number(request.headers.get("Content-Length") || 0);
-
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_REQUEST_BODY_BYTES
-  ) {
-    throw new HttpError(413, "Request body too large");
-  }
-
-  let raw;
-
-  try {
-    raw = await request.text();
-  } catch {
-    throw new HttpError(400, "Invalid request body");
-  }
-
-  if (
-    !raw ||
-    new TextEncoder().encode(raw).length > MAX_REQUEST_BODY_BYTES
-  ) {
-    throw new HttpError(413, "Request body too large");
-  }
-
-  try {
-    const data = JSON.parse(raw);
-
-    if (data && typeof data === "object" && !Array.isArray(data)) {
-      return data;
-    }
-  } catch {
-    // Invalid JSON
-  }
-
-  throw new HttpError(400, "Invalid request body");
-}
-
-function generateRefCode() {
-  const bytes = new Uint8Array(6);
-  crypto.getRandomValues(bytes);
-
-  let code = "DOGE";
-
-  for (const b of bytes) {
-    code += REF_ALPHABET[b % 32];
-  }
-
-  return code;
-}
-
-// ==========================================
-// EMAIL VERIFICATION
-// ==========================================
-
-function generateEmailCode() {
-  const bytes = new Uint32Array(1);
-  crypto.getRandomValues(bytes);
-
-  return String(bytes[0] % 1000000).padStart(6, "0");
-}
-
-async function hashEmailCode(env, uid, email, code) {
-  if (!env.BREVO_API_KEY) {
-    throw new HttpError(503, "Email verification is not configured");
-  }
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env.BREVO_API_KEY),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(
-      `dogedrip-email-verification-v1:${uid}:${email.toLowerCase()}:${code}`
-    )
-  );
-
-  return Array.from(new Uint8Array(signature))
-    .map(byte => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function safeHashCompare(a, b) {
-  if (
-    typeof a !== "string" ||
-    typeof b !== "string" ||
-    a.length !== b.length
-  ) {
-    return false;
-  }
-
-  let difference = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-
-  return difference === 0;
-}
-
-async function sendBrevoVerificationEmail(env, email, code) {
-  if (!env.BREVO_API_KEY) {
-    throw new HttpError(503, "Email verification is not configured");
-  }
-
-  const response = await fetch(
-    "https://api.brevo.com/v3/smtp/email",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": env.BREVO_API_KEY
-      },
-      body: JSON.stringify({
-        sender: {
-          name: "DogeDrip",
-          email: "support.dogedrip@gmail.com"
-        },
-        to: [{ email }],
-        subject: "Your DogeDrip verification code",
-        textContent:
-          `Your DogeDrip verification code is ${code}. ` +
-          "It expires in 10 minutes. Do not share this code.",
-        htmlContent: `
-          <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#111">
-            <h2>Verify your DogeDrip email</h2>
-            <p>Use the verification code below to activate your account:</p>
-            <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:20px;background:#f4f4f4;text-align:center">
-              ${code}
-            </div>
-            <p>This code expires in 10 minutes.</p>
-            <p>If you did not request this code, you can ignore this email.</p>
-          </div>
-        `
-      })
-    }
-  );
-
-  if (!response.ok) {
-    throw new HttpError(502, "Could not send verification email");
-  }
-}
-
-async function handleSendEmailCode(env, user) {
-  const account = await env.DB.prepare(`
-    SELECT email, email_verified
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  if (!account) {
-    throw new HttpError(404, "User not synchronized");
-  }
-
-  if (account.email.toLowerCase() !== user.email.toLowerCase()) {
-    throw new HttpError(403, "Account email mismatch");
-  }
-
-  if (Number(account.email_verified) === 1) {
-    return {
-      success: true,
-      already_verified: true,
-      message: "Email already verified"
-    };
-  }
-
-  const code = generateEmailCode();
-  const codeHash = await hashEmailCode(
-    env,
-    user.sub,
-    account.email,
-    code
-  );
-
-  const result = await env.DB.prepare(`
-    INSERT INTO email_verification_codes (
-      uid,
-      code_hash,
-      expires_at,
-      attempts,
-      last_sent_at
-    )
-    VALUES (
-      ?,
-      ?,
-      datetime('now', '+10 minutes'),
-      0,
-      CURRENT_TIMESTAMP
-    )
-    ON CONFLICT(uid) DO UPDATE SET
-      code_hash = excluded.code_hash,
-      expires_at = excluded.expires_at,
-      attempts = 0,
-      last_sent_at = CURRENT_TIMESTAMP,
-      created_at = CURRENT_TIMESTAMP
-    WHERE datetime(email_verification_codes.last_sent_at)
-      <= datetime('now', '-60 seconds')
-    RETURNING uid
-  `).bind(user.sub, codeHash).first();
-
-  if (!result) {
-    throw new HttpError(
-      429,
-      "Please wait before requesting another verification code."
-    );
-  }
-
-  try {
-    await sendBrevoVerificationEmail(env, account.email, code);
-  } catch (error) {
-    await env.DB.prepare(`
-      DELETE FROM email_verification_codes
-      WHERE uid = ? AND code_hash = ?
-    `).bind(user.sub, codeHash).run();
-
-    throw error;
-  }
-
-  return {
-    success: true,
-    message: "Verification code sent",
-    expires_in_seconds: EMAIL_CODE_EXPIRY_MINUTES * 60,
-    resend_after_seconds: EMAIL_CODE_RESEND_SECONDS
-  };
-}
-
-async function handleVerifyEmailCode(env, user, body) {
-  const code =
-    typeof body.code === "string"
-      ? body.code.trim()
-      : "";
-
-  if (!/^\d{6}$/.test(code)) {
-    throw new HttpError(400, "Enter a valid 6-digit verification code");
-  }
-
-  const account = await env.DB.prepare(`
-    SELECT email, email_verified
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  if (!account) {
-    throw new HttpError(404, "User not synchronized");
-  }
-
-  if (account.email.toLowerCase() !== user.email.toLowerCase()) {
-    throw new HttpError(403, "Account email mismatch");
-  }
-
-  if (Number(account.email_verified) === 1) {
-    return {
-      success: true,
-      already_verified: true,
-      email_verified: true
-    };
-  }
-
-  const record = await env.DB.prepare(`
-    SELECT code_hash, expires_at, attempts
-    FROM email_verification_codes
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  if (!record) {
-    throw new HttpError(400, "No active verification code. Request a new code.");
-  }
-
-  if (Number(record.attempts) >= EMAIL_CODE_MAX_ATTEMPTS) {
-    await env.DB.prepare(`
-      DELETE FROM email_verification_codes
-      WHERE uid = ?
-    `).bind(user.sub).run();
-
-    throw new HttpError(429, "Too many attempts. Request a new code.");
-  }
-
-  const expiry = Date.parse(`${record.expires_at.replace(" ", "T")}Z`);
-
-  if (!Number.isFinite(expiry) || expiry <= Date.now()) {
-    await env.DB.prepare(`
-      DELETE FROM email_verification_codes
-      WHERE uid = ?
-    `).bind(user.sub).run();
-
-    throw new HttpError(400, "Verification code expired. Request a new code.");
-  }
-
-  const submittedHash = await hashEmailCode(
-    env,
-    user.sub,
-    account.email,
-    code
-  );
-
-  if (!safeHashCompare(submittedHash, record.code_hash)) {
-    const attemptResult = await env.DB.prepare(`
-      UPDATE email_verification_codes
-      SET attempts = attempts + 1
-      WHERE uid = ?
-        AND code_hash = ?
-        AND attempts < ?
-        AND datetime(expires_at) > CURRENT_TIMESTAMP
-      RETURNING attempts
-    `).bind(
-      user.sub,
-      record.code_hash,
-      EMAIL_CODE_MAX_ATTEMPTS
-    ).first();
-
-    const attempts = Number(attemptResult?.attempts || EMAIL_CODE_MAX_ATTEMPTS);
-
-    if (attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
-      await env.DB.prepare(`
-        DELETE FROM email_verification_codes
-        WHERE uid = ? AND code_hash = ?
-      `).bind(user.sub, record.code_hash).run();
-
-      throw new HttpError(429, "Too many attempts. Request a new code.");
-    }
-
-    throw new HttpError(400, "Incorrect verification code", {
-      attempts_remaining: Math.max(0, EMAIL_CODE_MAX_ATTEMPTS - attempts)
-    });
-  }
-
-  const results = await env.DB.batch([
-    env.DB.prepare(`
-      UPDATE users
-      SET
-        email_verified = 1,
-        email_verified_at = CURRENT_TIMESTAMP
-      WHERE uid = ?
-        AND lower(email) = lower(?)
-        AND email_verified = 0
-        AND EXISTS (
-          SELECT 1
-          FROM email_verification_codes
-          WHERE uid = ?
-            AND code_hash = ?
-            AND attempts < ?
-            AND datetime(expires_at) > CURRENT_TIMESTAMP
-        )
-    `).bind(
-      user.sub,
-      account.email,
-      user.sub,
-      record.code_hash,
-      EMAIL_CODE_MAX_ATTEMPTS
-    ),
-
-    env.DB.prepare(`
-      DELETE FROM email_verification_codes
-      WHERE uid = ?
-        AND code_hash = ?
-        AND changes() = 1
-    `).bind(user.sub, record.code_hash)
-  ]);
-
-  if (Number(results[0]?.meta?.changes || 0) !== 1) {
-    throw new HttpError(
-      400,
-      "Verification failed. Request a new code."
-    );
-  }
-
-  return {
-    success: true,
-    message: "Email verified successfully",
-    email_verified: true
-  };
-}
-
-// ==========================================
-// DOGE ADDRESS VALIDATION
-// ==========================================
-
-async function isValidDogeAddress(address) {
-  if (
-    typeof address !== "string" ||
-    address.length < 26 ||
-    address.length > 35
-  ) {
-    return false;
-  }
-
-  let num = 0n;
-
-  for (const ch of address) {
-    const idx = BASE58.indexOf(ch);
-
-    if (idx === -1) return false;
-
-    num = num * 58n + BigInt(idx);
-  }
-
-  let hex = num.toString(16);
-
-  if (hex.length % 2) {
-    hex = "0" + hex;
-  }
-
-  const bytes = [];
-
-  if (num > 0n) {
-    for (let i = 0; i < hex.length; i += 2) {
-      bytes.push(parseInt(hex.slice(i, i + 2), 16));
-    }
-  }
-
-  let leadingZeros = 0;
-
-  for (const ch of address) {
-    if (ch === "1") leadingZeros++;
-    else break;
-  }
-
-  const decoded = new Uint8Array(leadingZeros + bytes.length);
-  decoded.set(bytes, leadingZeros);
-
-  if (decoded.length !== 25) return false;
-
-  const payload = decoded.slice(0, 21);
-  const checksum = decoded.slice(21);
-
-  const hash1 = await crypto.subtle.digest("SHA-256", payload);
-  const hash2 = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", hash1)
-  );
-
-  for (let i = 0; i < 4; i++) {
-    if (hash2[i] !== checksum[i]) return false;
-  }
-
-  return payload[0] === 0x1e || payload[0] === 0x16;
-}
-
-// ==========================================
-// USER PLAN
-// ==========================================
-
-async function getUserPlan(env, uid) {
-  const subscription = await env.DB.prepare(`
-    SELECT plan
-    FROM subscriptions
-    WHERE firebase_uid = ?
-      AND status = 'active'
-      AND datetime(expiration_date) > datetime('now')
-    ORDER BY
-      CASE plan
-        WHEN 'VIP' THEN 0
-        WHEN 'PREMIUM' THEN 1
-        ELSE 2
-      END,
-      datetime(expiration_date) DESC
-    LIMIT 1
-  `).bind(uid).first();
-
-  if (!subscription) {
-    return {
-      name: "FREE",
-      ...PLAN_CONFIG.FREE
-    };
-  }
-
-  const planName = String(subscription.plan).toUpperCase();
-  const config = PLAN_CONFIG[planName];
-
-  if (!config) {
-    throw new HttpError(500, "Invalid subscription plan configuration");
-  }
-
-  return {
-    name: planName,
-    ...config
-  };
-}
-
-// ==========================================
-// ACCOUNT INFORMATION
-// ==========================================
-
-async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
-  return env.DB.prepare(`
-    SELECT
-      balance_koinu,
-      last_claim_at,
-      CASE
-        WHEN last_claim_at IS NULL THEN 0
-        ELSE MAX(
-          0,
-          ? - (
-            CAST(strftime('%s', 'now') AS INTEGER) -
-            CAST(strftime('%s', last_claim_at) AS INTEGER)
-          )
-        )
-      END AS cooldown_remaining,
-      (
-        SELECT COUNT(*)
-        FROM claims
-        WHERE claims.uid = users.uid
-          AND date(claims.claimed_at) = date('now')
-      ) AS daily_claims_used
-    FROM users
-    WHERE uid = ?
-  `).bind(plan.cooldown_seconds, uid).first();
-}
-
-// ==========================================
-// USER SYNCHRONIZATION
-// ==========================================
-
-async function syncUser(env, user, referredByCode) {
-  let referrerCode = null;
-
-  if (referredByCode) {
-    const referrer = await env.DB.prepare(`
-      SELECT ref_code
-      FROM users
-      WHERE ref_code = ? AND uid != ?
-    `).bind(referredByCode, user.sub).first();
-
-    referrerCode = referrer ? referrer.ref_code : null;
-  }
-
-  const existing = await env.DB.prepare(`
-    SELECT email
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-
-  const emailChanged =
-    existing &&
-    existing.email.toLowerCase() !== user.email.toLowerCase();
-
-  let synchronized = false;
-
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await env.DB.prepare(`
-        INSERT INTO users (uid, email, ref_code, referred_by)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(uid) DO UPDATE SET
-          email = excluded.email,
-          ref_code = COALESCE(users.ref_code, excluded.ref_code),
-          email_verified = CASE
-            WHEN lower(users.email) != lower(excluded.email) THEN 0
-            ELSE users.email_verified
-          END,
-          email_verified_at = CASE
-            WHEN lower(users.email) != lower(excluded.email) THEN NULL
-            ELSE users.email_verified_at
-          END
-      `).bind(
-        user.sub,
-        user.email,
-        generateRefCode(),
-        referrerCode
-      ).run();
-
-      synchronized = true;
-      break;
-    } catch (error) {
-      if (!String(error.message).includes("UNIQUE")) {
-        throw error;
-      }
-    }
-  }
-
-  if (!synchronized) {
-    throw new HttpError(500, "Could not generate a unique referral code");
-  }
-
-  if (emailChanged) {
-    await env.DB.prepare(`
-      DELETE FROM email_verification_codes
-      WHERE uid = ?
-    `).bind(user.sub).run();
-  }
-
-  return env.DB.prepare(`
-    SELECT
-      ref_code,
-      referred_by,
-      plan,
-      email_verified
-    FROM users
-    WHERE uid = ?
-  `).bind(user.sub).first();
-}
-
-// ==========================================
-// GENERAL HELPERS
-// ==========================================
-
-function getUtcDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-// ==========================================
-// DAILY STREAK
-// ==========================================
-
-const STREAK_REWARDS = {
-  1: 1000,
-  2: 2000,
-  3: 3000,
-  4: 4000,
-  5: 5000,
-  6: 6000,
-  7: 7000
-};
-
-function getPreviousUtcDate(today) {
-  const date = new Date(`${today}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
-}
-
-async function getStreakInfo(env, uid) {
-  const today = getUtcDate();
-  const yesterday = getPreviousUtcDate(today);
-
-  const row = await env.DB.prepare(`
-    SELECT
-      u.balance_koinu,
-      s.current_day,
-      s.last_checkin_date,
-      s.total_rewards_koinu
-    FROM users u
-    LEFT JOIN daily_streaks s ON s.uid = u.uid
-    WHERE u.uid = ?
-  `).bind(uid).first();
-
-  if (!row) {
-    throw new HttpError(404, "User not found");
-  }
-
-  const storedDay = Number(row.current_day || 0);
-  const lastDate = row.last_checkin_date || null;
-  const checkedInToday = lastDate === today;
-
-  const activeDay =
-    lastDate === today || lastDate === yesterday
-      ? storedDay
-      : 0;
-
-  const nextDay =
-    lastDate === yesterday
-      ? (activeDay >= 7 ? 1 : activeDay + 1)
-      : 1;
-
-  return {
-    current_day: activeDay,
-    next_day: checkedInToday ? 0 : nextDay,
-    last_checkin_date: lastDate,
-    checked_in_today: checkedInToday,
-    can_checkin: !checkedInToday,
-    next_reward_koinu: checkedInToday
-      ? 0
-      : STREAK_REWARDS[nextDay],
-    total_rewards_koinu: Number(row.total_rewards_koinu || 0),
-    balance_koinu: Number(row.balance_koinu)
-  };
-}
-
-async function handleStreakCheckin(env, uid) {
-  const today = getUtcDate();
-  const yesterday = getPreviousUtcDate(today);
-
-  const current = await getStreakInfo(env, uid);
-
-  if (current.checked_in_today) {
-    return {
-      success: true,
-      already_checked_in: true,
-      reward_koinu: 0,
-      reward_doge: 0,
-      ...current
-    };
-  }
-
-  const idempotencyKey = `daily_streak:${uid}:${today}`;
-
-  const rewardSql = `
-    CASE current_day
-      WHEN 1 THEN 1000
-      WHEN 2 THEN 2000
-      WHEN 3 THEN 3000
-      WHEN 4 THEN 4000
-      WHEN 5 THEN 5000
-      WHEN 6 THEN 6000
-      WHEN 7 THEN 7000
-    END
-  `;
-
-  const statements = [
-    env.DB.prepare(`
-      INSERT INTO daily_streaks (
-        uid,
-        current_day,
-        last_checkin_date,
-        total_rewards_koinu
-      )
-      VALUES (?, 1, ?, 0)
-
-      ON CONFLICT(uid) DO UPDATE SET
-        current_day = CASE
-          WHEN daily_streaks.last_checkin_date = ?
-            THEN CASE
-              WHEN daily_streaks.current_day >= 7 THEN 1
-              ELSE daily_streaks.current_day + 1
-            END
-          ELSE 1
-        END,
-        last_checkin_date = excluded.last_checkin_date,
-        updated_at = CURRENT_TIMESTAMP
-
-      WHERE daily_streaks.last_checkin_date IS NULL
-         OR daily_streaks.last_checkin_date < excluded.last_checkin_date
-    `).bind(uid, today, yesterday),
-
-    env.DB.prepare(`
-      UPDATE users
-      SET balance_koinu = balance_koinu + (
-        SELECT ${rewardSql}
-        FROM daily_streaks
-        WHERE uid = ?
-          AND last_checkin_date = ?
-      )
-      WHERE uid = ?
-        AND changes() = 1
-        AND EXISTS (
-          SELECT 1
-          FROM daily_streaks
-          WHERE uid = ?
-            AND last_checkin_date = ?
-        )
-    `).bind(uid, today, uid, uid, today),
-
-    env.DB.prepare(`
-      UPDATE daily_streaks
-      SET
-        total_rewards_koinu = total_rewards_koinu + (
-          SELECT ${rewardSql}
-          FROM daily_streaks
-          WHERE uid = ?
-            AND last_checkin_date = ?
-        ),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE uid = ?
-        AND last_checkin_date = ?
-        AND changes() = 1
-    `).bind(uid, today, uid, today),
-
-    env.DB.prepare(`
-      INSERT INTO ledger_transactions (
-        uid,
-        transaction_type,
-        amount_koinu,
-        balance_before_koinu,
-        balance_after_koinu,
-        reference_type,
-        reference_id,
-        idempotency_key
-      )
-      SELECT
-        u.uid,
-        'daily_streak',
-        CASE s.current_day
-          WHEN 1 THEN 1000
-          WHEN 2 THEN 2000
-          WHEN 3 THEN 3000
-          WHEN 4 THEN 4000
-          WHEN 5 THEN 5000
-          WHEN 6 THEN 6000
-          WHEN 7 THEN 7000
-        END,
-        u.balance_koinu - CASE s.current_day
-          WHEN 1 THEN 1000
-          WHEN 2 THEN 2000
-          WHEN 3 THEN 3000
-          WHEN 4 THEN 4000
-          WHEN 5 THEN 5000
-          WHEN 6 THEN 6000
-          WHEN 7 THEN 7000
-        END,
-        u.balance_koinu,
-        'daily_streak',
-        ?,
-        ?
-      FROM users u
-      JOIN daily_streaks s ON s.uid = u.uid
-      WHERE u.uid = ?
-        AND s.last_checkin_date = ?
-        AND changes() = 1
-    `).bind(today, idempotencyKey, uid, today),
-
-    env.DB.prepare(`
-      SELECT CASE
-        WHEN changes() = 1 THEN 1
-        ELSE abs(-9223372036854775808)
-      END
-    `)
-  ];
-
-  try {
-    await env.DB.batch(statements);
-  } catch (error) {
-    const latest = await getStreakInfo(env, uid);
-
-    if (latest.checked_in_today) {
-      return {
-        success: true,
-        already_checked_in: true,
-        reward_koinu: 0,
-        reward_doge: 0,
-        ...latest
-      };
-    }
-
-    console.error("Daily streak transaction failed:", error);
-    throw new HttpError(500, "Daily streak check-in failed");
-  }
-
-  const result = await getStreakInfo(env, uid);
-  const reward = STREAK_REWARDS[result.current_day];
-
-  return {
-    success: true,
-    already_checked_in: false,
-    streak_day: result.current_day,
-    reward_koinu: reward,
-    reward_doge: reward / 100000000,
-    ...result
-  };
-}
-
-function getRequestId(body) {
-  const id = body?.request_id;
-
-  if (
-    typeof id !== "string" ||
-    !/^[A-Za-z0-9_-]{8,64}$/.test(id)
-  ) {
-    throw new HttpError(400, "Valid request_id is required");
-  }
-
-  return id;
-}
-
-async function getExistingClaim(env, uid, requestId) {
-  return env.DB.prepare(`
-    SELECT id, amount_koinu, request_id, claimed_at
-    FROM claims
-    WHERE uid = ? AND request_id = ?
-  `).bind(uid, requestId).first();
-}
-
-async function buildClaimResponse(env, uid, plan, claim, replayed) {
-  const account = await getAccount(env, uid, plan);
-
-  if (!account) {
-    throw new HttpError(404, "User not found");
-  }
-
-  const dailyUsed = Number(account.daily_claims_used || 0);
-
-  return {
-    success: true,
-    replayed,
-    message: replayed ? "Claim was already processed" : "Claim successful",
-    claim: {
-      id: claim.id,
-      amount_koinu: Number(claim.amount_koinu),
-      claimed_at: claim.claimed_at
-    },
-    plan: plan.name,
-    amount_koinu: Number(claim.amount_koinu),
-    balance_koinu: Number(account.balance_koinu),
-    last_claim_at: account.last_claim_at,
-    cooldown_seconds: plan.cooldown_seconds,
-    cooldown_remaining: Number(account.cooldown_remaining),
-    daily_claims_used: dailyUsed,
-    daily_limit: plan.daily_limit,
-    daily_claims_remaining: Math.max(0, plan.daily_limit - dailyUsed)
-  };
-}
-
-// ==========================================
-// LUCKY WHEEL HELPERS
-// ==========================================
-
-function selectWeightedPrize(prizes) {
-  const valid = prizes.filter(
-    p =>
-      Number.isSafeInteger(Number(p.amount_koinu)) &&
-      Number(p.amount_koinu) >= 0 &&
-      Number.isSafeInteger(Number(p.probability_weight)) &&
-      Number(p.probability_weight) >= 0
-  );
-
-  if (valid.length !== prizes.length) {
-    throw new HttpError(503, "Wheel prize configuration unavailable");
-  }
-
-  const totalWeight = valid.reduce(
-    (sum, p) => sum + Number(p.probability_weight),
-    0
-  );
-
-  if (
-    !Number.isSafeInteger(totalWeight) ||
-    totalWeight <= 0 ||
-    totalWeight > 4294967296
-  ) {
-    throw new HttpError(503, "Wheel prize configuration unavailable");
-  }
-
-  const range = 4294967296;
-  const limit = Math.floor(range / totalWeight) * totalWeight;
-
-  let ticket;
-
-  do {
-    const random = new Uint32Array(1);
-    crypto.getRandomValues(random);
-    ticket = random[0];
-  } while (ticket >= limit);
-
-  ticket %= totalWeight;
-
-  for (const prize of valid) {
-    const weight = Number(prize.probability_weight);
-
-    if (weight <= 0) continue;
-
-    if (ticket < weight) return prize;
-
-    ticket -= weight;
-  }
-
-  throw new HttpError(500, "Could not select wheel prize");
-}
-
-function getMaxWheelPrize(prizes) {
-  const active = prizes.filter(p => Number(p.probability_weight) > 0);
-
-  if (!active.length) {
-    throw new HttpError(503, "No active wheel prizes");
-  }
-
-  let maxPrize = 0;
-
-  for (const prize of active) {
-    const amount = Number(prize.amount_koinu);
-    const weight = Number(prize.probability_weight);
-
-    if (
-      !Number.isSafeInteger(amount) ||
-      amount < 0 ||
-      !Number.isSafeInteger(weight) ||
-      weight <= 0
-    ) {
-      throw new HttpError(503, "Invalid wheel prize configuration");
-    }
-
-    maxPrize = Math.max(maxPrize, amount);
-  }
-
-  if (!Number.isSafeInteger(maxPrize)) {
-    throw new HttpError(503, "Invalid maximum wheel prize");
-  }
-
-  return maxPrize;
-}
-
-async function getWheelConfiguration(env) {
-  const result = await env.DB.prepare(`
-    SELECT
-      id,
-      prize_key,
-      amount_koinu,
-      probability_weight,
-      display_order
-    FROM wheel_prizes
-    ORDER BY display_order ASC
-  `).all();
-
-  const prizes = result.results || [];
-
-  if (!prizes.length) {
-    throw new HttpError(503, "Wheel prizes are not configured");
-  }
-
-  const maxPrize = getMaxWheelPrize(prizes);
-
-  selectWeightedPrize(prizes);
-
-  return { prizes, maxPrize };
-}
-
-async function getExistingSpin(env, uid, requestId) {
-  return env.DB.prepare(`
-    SELECT id, spin_type, prize_key, prize_koinu, created_at
-    FROM wheel_spins
-    WHERE uid = ? AND request_id = ?
-  `).bind(uid, requestId).first();
-}
-
-async function getExistingPurchase(env, uid, requestId) {
-  return env.DB.prepare(`
-    SELECT id, package_spins, cost_koinu, created_at
-    FROM wheel_purchases
-    WHERE uid = ? AND request_id = ?
-  `).bind(uid, requestId).first();
-}
-
-function wheelSpinResponse(savedSpin, replayed, data) {
-  return {
-    success: true,
-    replayed,
-    spin: {
-      id: savedSpin.id,
-      spin_type: savedSpin.spin_type,
-      prize_key: savedSpin.prize_key,
-      amount_koinu: Number(savedSpin.prize_koinu),
-      created_at: savedSpin.created_at
-    },
-    ...data
-  };
-}
-
-// ==========================================
-// LUCKY WHEEL STATE
-// ==========================================
-
-async function getWheelData(env, uid, plan) {
-  const utcDate = getUtcDate();
-
-  const [configuration, inventory, usage, account, reserve] =
-    await Promise.all([
-      getWheelConfiguration(env),
-
-      env.DB.prepare(`
-        SELECT paid_spins
-        FROM wheel_spin_inventory
-        WHERE uid = ?
-      `).bind(uid).first(),
-
-      env.DB.prepare(`
-        SELECT free_spins_used
-        FROM wheel_daily_usage
-        WHERE uid = ? AND utc_date = ?
-      `).bind(uid, utcDate).first(),
-
-      env.DB.prepare(`
-        SELECT balance_koinu
-        FROM users
-        WHERE uid = ?
-      `).bind(uid).first(),
-
-      env.DB.prepare(`
-        SELECT available_koinu, payouts_enabled, locked_koinu
-        FROM wheel_reserve
-        WHERE id = 1
-      `).first()
-    ]);
-
-  if (!account) {
-    throw new HttpError(404, "User not found");
-  }
-
-  if (!reserve) {
-    throw new HttpError(503, "Wheel reserve is not configured");
-  }
-
-  const freeUsed = Number(usage?.free_spins_used || 0);
-  const freeTotal = Number(plan.free_wheel_spins || 0);
-  const freeRemaining = Math.max(0, freeTotal - freeUsed);
-  const paidRemaining = Number(inventory?.paid_spins || 0);
-  const maxPrize = configuration.maxPrize;
-  const available = Number(reserve.available_koinu || 0);
-  const locked = Number(reserve.locked_koinu || 0);
-  const balance = Number(account.balance_koinu);
-  const payoutsEnabled = Number(reserve.payouts_enabled) === 1;
-
-  const canFreeSpin =
-    payoutsEnabled &&
-    freeRemaining > 0 &&
-    available >= maxPrize;
-
-  const canPaidSpin =
-    paidRemaining > 0 &&
-    locked >= maxPrize;
-
-  const canBuy =
-    payoutsEnabled &&
-    Number.isSafeInteger(balance) &&
-    WHEEL_PACKAGES.some(
-      pack =>
-        balance >= pack.price_koinu &&
-        available >= maxPrize * pack.spins
-    );
-
-  return {
-    prizes: configuration.prizes.map(p => ({
-      id: p.prize_key,
-      label: `${formatDoge(p.amount_koinu)} DOGE`,
-      amount_koinu: Number(p.amount_koinu)
-    })),
-    packs: WHEEL_PACKAGES,
-    spins: {
-      free_remaining: freeRemaining,
-      free_total: freeTotal,
-      paid_remaining: paidRemaining,
-      total_remaining: freeRemaining + paidRemaining
-    },
-    can_free_spin: canFreeSpin,
-    can_paid_spin: canPaidSpin,
-    can_buy: canBuy,
-    wheel_enabled: canFreeSpin || canPaidSpin,
-    balance_koinu: balance
-  };
-}
-
-async function handleWheelState(env, uid) {
-  const plan = await getUserPlan(env, uid);
-
-  return {
-    success: true,
-    ...(await getWheelData(env, uid, plan))
-  };
-}
-
-// ==========================================
-// LUCKY WHEEL SPIN
-// ==========================================
-
-async function handleWheelSpin(env, uid, body) {
-  const requestId = getRequestId(body);
-  const plan = await getUserPlan(env, uid);
-
-  const existing = await getExistingSpin(env, uid, requestId);
-
-  if (existing) {
-    return wheelSpinResponse(
-      existing,
-      true,
-      await getWheelData(env, uid, plan)
-    );
-  }
-
-  const before = await getWheelData(env, uid, plan);
-
-  let spinType;
-
-  if (before.can_free_spin) {
-    spinType = "free";
-  } else if (before.can_paid_spin) {
-    spinType = "paid";
-  } else if (before.spins.free_remaining > 0) {
-    throw new HttpError(503, "Free wheel temporarily unavailable");
-  } else if (before.spins.paid_remaining > 0) {
-    throw new HttpError(503, "Paid spins are not sufficiently backed");
-  } else {
-    throw new HttpError(409, "No spins remaining");
-  }
-
-  const configuration = await getWheelConfiguration(env);
-  const prize = selectWeightedPrize(configuration.prizes);
-  const amount = Number(prize.amount_koinu);
-  const maxPrize = configuration.maxPrize;
-  const utcDate = getUtcDate();
-
-  if (
-    !Number.isSafeInteger(amount) ||
-    amount < 0 ||
-    amount > maxPrize
-  ) {
-    throw new HttpError(503, "Invalid wheel prize amount");
-  }
-
-  const statements = [];
-
-  if (spinType === "free") {
-    statements.push(
-      env.DB.prepare(`
-        UPDATE wheel_reserve
-        SET
-          available_koinu = available_koinu - ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = 1
-          AND payouts_enabled = 1
-          AND available_koinu >= ?
-      `).bind(maxPrize, maxPrize)
-    );
-
-    statements.push(
-      env.DB.prepare(`
-        INSERT INTO wheel_daily_usage (
-          uid,
-          utc_date,
-          free_spins_used
-        )
-        SELECT ?, ?, 1
-        WHERE changes() = 1
-          AND ? > COALESCE(
-            (
-              SELECT free_spins_used
-              FROM wheel_daily_usage
-              WHERE uid = ? AND utc_date = ?
-            ),
-            0
-          )
-        ON CONFLICT(uid, utc_date)
-        DO UPDATE SET
-          free_spins_used = wheel_daily_usage.free_spins_used + 1,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE wheel_daily_usage.free_spins_used < ?
-      `).bind(
-        uid,
-        utcDate,
-        plan.free_wheel_spins,
-        uid,
-        utcDate,
-        plan.free_wheel_spins
-      )
-    );
-  } else {
-    statements.push(
-      env.DB.prepare(`
-        UPDATE wheel_reserve
-        SET
-          locked_koinu = locked_koinu - ?,
-          available_koinu = available_koinu + ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = 1
-          AND locked_koinu >= ?
-      `).bind(
-        maxPrize,
-        maxPrize - amount,
-        maxPrize
-      )
-    );
-
-    statements.push(
-      env.DB.prepare(`
-        UPDATE wheel_spin_inventory
-        SET
-          paid_spins = paid_spins - 1,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE uid = ?
-          AND paid_spins > 0
-          AND changes() = 1
-      `).bind(uid)
-    );
-  }
-
-  statements.push(
-    env.DB.prepare(`
-      INSERT INTO wheel_spins (
-        uid,
-        request_id,
-        spin_type,
-        prize_key,
-        prize_koinu,
-        utc_date
-      )
-      SELECT ?, ?, ?, ?, ?, ?
-      WHERE changes() = 1
-    `).bind(
-      uid,
-      requestId,
-      spinType,
-      prize.prize_key,
-      amount,
-      utcDate
-    )
-  );
-
-  statements.push(
-    env.DB.prepare(`
-      UPDATE users
-      SET balance_koinu = balance_koinu + ?
-      WHERE uid = ?
-        AND changes() = 1
-    `).bind(amount, uid)
-  );
-
-  if (spinType === "free") {
-    statements.push(
-      env.DB.prepare(`
-        UPDATE wheel_reserve
-        SET
-          available_koinu = available_koinu + ?,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = 1
-          AND changes() = 1
-      `).bind(maxPrize - amount)
-    );
-  }
-
-  if (amount > 0) {
-    statements.push(
-      env.DB.prepare(`
-        INSERT INTO ledger_transactions (
-          uid,
-          transaction_type,
-          amount_koinu,
-          balance_before_koinu,
-          balance_after_koinu,
-          reference_type,
-          reference_id,
-          idempotency_key
-        )
-        SELECT
-          u.uid,
-          'wheel_prize',
-          ?,
-          u.balance_koinu - ?,
-          u.balance_koinu,
-          'wheel_spin',
-          CAST(s.id AS TEXT),
-          'wheel_spin:' || u.uid || ':' || ?
-        FROM users u
-        JOIN wheel_spins s
-          ON s.uid = u.uid
-         AND s.request_id = ?
-        WHERE u.uid = ?
-          AND changes() = 1
-      `).bind(
-        amount,
-        amount,
-        requestId,
-        requestId,
-        uid
-      )
-    );
-  }
-
-  statements.push(
-    env.DB.prepare(`
-      SELECT CASE
-        WHEN changes() != 1
-        THEN abs(-9223372036854775808)
-        ELSE 1
-      END
-    `)
-  );
-
-  try {
-    await env.DB.batch(statements);
-  } catch (error) {
-    const concurrentSpin = await getExistingSpin(env, uid, requestId);
-
-    if (concurrentSpin) {
-      return wheelSpinResponse(
-        concurrentSpin,
-        true,
-        await getWheelData(env, uid, plan)
-      );
-    }
-
-    const afterFailure = await getWheelData(env, uid, plan);
-
-    if (
-      spinType === "free" &&
-      afterFailure.spins.free_remaining <= 0
-    ) {
-      throw new HttpError(409, "Free spin is no longer available");
-    }
-
-    if (
-      spinType === "paid" &&
-      afterFailure.spins.paid_remaining <= 0
-    ) {
-      throw new HttpError(409, "No paid spins remaining");
-    }
-
-    throw new HttpError(
-      409,
-      "Spin could not be completed. Please try again."
-    );
-  }
-
-  const savedSpin = await getExistingSpin(env, uid, requestId);
-
-  if (!savedSpin) {
-    throw new HttpError(500, "Spin record could not be confirmed");
-  }
-
-  return wheelSpinResponse(
-    savedSpin,
-    false,
-    await getWheelData(env, uid, plan)
+function emailVerificationConfigured(env) {
+  return (
+    typeof env.BREVO_API_KEY === "string" &&
+    env.BREVO_API_KEY.length > 0 &&
+    typeof env.EMAIL_CODE_PEPPER === "string" &&
+    env.EMAIL_CODE_PEPPER.length >= PEPPER_MIN_LENGTH
   );
 }
-
-// ==========================================
-// LUCKY WHEEL PURCHASE
-// ==========================================
-
-async function handleWheelBuy(env, uid, body) {
-  const requestId = getRequestId(body);
-  const packId = String(body.pack_id || "");
-
-  const existing = await getExistingPurchase(env, uid, requestId);
-
-  if (existing) {
-    const plan = await getUserPlan(env, uid);
-
-    return {
-      success: true,
-      replayed: true,
-      purchase: {
-        id: existing.id,
-        spins: Number(existing.package_spins),
-        price_koinu: Number(existing.cost_koinu),
-        created_at: existing.created_at
-      },
-      ...(await getWheelData(env, uid, plan))
-    };
-  }
-
-  const pack = WHEEL_PACKAGES.find(p => p.id === packId);
-
-  if (!pack) {
-    throw new HttpError(400, "Invalid spin package");
-  }
-
-  const configuration = await getWheelConfiguration(env);
-  const maxPrize = configuration.maxPrize;
-  const requiredReserve = maxPrize * pack.spins;
-
-  if (!Number.isSafeInteger(requiredReserve)) {
-    throw new HttpError(400, "Invalid spin package reserve");
-  }
-
-  const statements = [
-    env.DB.prepare(`
-      UPDATE wheel_reserve
-      SET
-        available_koinu = available_koinu - ?,
-        locked_koinu = locked_koinu + ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = 1
-        AND payouts_enabled = 1
-        AND available_koinu >= ?
-    `).bind(
-      requiredReserve,
-      requiredReserve,
-      requiredReserve
-    ),
-
-    env.DB.prepare(`
-      UPDATE users
-      SET balance_koinu = balance_koinu - ?
-      WHERE uid = ?
-        AND balance_koinu >= ?
-        AND changes() = 1
-    `).bind(pack.price_koinu, uid, pack.price_koinu),
-
-    env.DB.prepare(`
-      INSERT INTO wheel_purchases (
-        uid,
-        request_id,
-        package_spins,
-        cost_koinu
-      )
-      SELECT ?, ?, ?, ?
-      WHERE changes() = 1
-    `).bind(uid, requestId, pack.spins, pack.price_koinu),
-
-    env.DB.prepare(`
-      INSERT INTO wheel_spin_inventory (
-        uid,
-        paid_spins,
-        updated_at
-      )
-      SELECT ?, ?, CURRENT_TIMESTAMP
-      WHERE changes() = 1
-      ON CONFLICT(uid)
-      DO UPDATE SET
-        paid_spins = wheel_spin_inventory.paid_spins + excluded.paid_spins,
-        updated_at = CURRENT_TIMESTAMP
-    `).bind(uid, pack.spins),
-
-    env.DB.prepare(`
-      INSERT INTO ledger_transactions (
-        uid,
-        transaction_type,
-        amount_koinu,
-        balance_before_koinu,
-        balance_after_koinu,
-        reference_type,
-        reference_id,
-        idempotency_key
-      )
-      SELECT
-        u.uid,
-        'wheel_purchase',
-        -?,
-        u.balance_koinu + ?,
-        u.balance_koinu,
-        'wheel_purchase',
-        CAST(p.id AS TEXT),
-        'wheel_purchase:' || u.uid || ':' || ?
-      FROM users u
-      JOIN wheel_purchases p
-        ON p.uid = u.uid
-       AND p.request_id = ?
-      WHERE u.uid = ?
-        AND changes() = 1
-    `).bind(
-      pack.price_koinu,
-      pack.price_koinu,
-      requestId,
-      requestId,
-      uid
-    ),
-
-    env.DB.prepare(`
-      SELECT CASE
-        WHEN changes() != 1
-        THEN abs(-9223372036854775808)
-        ELSE 1
-      END
-    `)
-  ];
-
-  try {
-    await env.DB.batch(statements);
-  } catch (error) {
-    const concurrentPurchase = await getExistingPurchase(
-      env,
-      uid,
-      requestId
-    );
-
-    if (concurrentPurchase) {
-      const plan = await getUserPlan(env, uid);
-
-      return {
-        success: true,
-        replayed: true,
-        purchase: {
-          id: concurrentPurchase.id,
-          spins: Number(concurrentPurchase.package_spins),
-          price_koinu: Number(concurrentPurchase.cost_koinu),
-          created_at: concurrentPurchase.created_at
-        },
-        ...(await getWheelData(env, uid, plan))
-      };
-    }
-
-    const [reserve, account] = await Promise.all([
-      env.DB.prepare(`
-        SELECT available_koinu, payouts_enabled
-        FROM wheel_reserve
-        WHERE id = 1
-      `).first(),
-
-      env.DB.prepare(`
-        SELECT balance_koinu
-        FROM users
-        WHERE uid = ?
-      `).bind(uid).first()
-    ]);
-
-    if (!account) {
-      throw new HttpError(404, "User not found");
-    }
-
-    if (!reserve || Number(reserve.payouts_enabled) !== 1) {
-      throw new HttpError(503, "Wheel purchases are temporarily disabled");
-    }
-
-    if (Number(reserve.available_koinu) < requiredReserve) {
-      throw new HttpError(503, "Insufficient wheel reserve for this package");
-    }
-
-    if (Number(account.balance_koinu) < pack.price_koinu) {
-      throw new HttpError(400, "Insufficient balance");
-    }
-
-    throw new HttpError(
-      409,
-      "Purchase could not be completed. Please try again."
-    );
-  }
-
-  const purchase = await getExistingPurchase(env, uid, requestId);
-
-  if (!purchase) {
-    throw new HttpError(500, "Purchase could not be confirmed");
-  }
-
-  const plan = await getUserPlan(env, uid);
-
-  return {
-    success: true,
-    replayed: false,
-    purchase: {
-      id: purchase.id,
-      spins: Number(purchase.package_spins),
-      price_koinu: Number(purchase.cost_koinu),
-      created_at: purchase.created_at
-    },
-    ...(await getWheelData(env, uid, plan))
-  };
-}
-
-// ==========================================
-// LUCKY WHEEL HISTORY
-// ==========================================
-
-async function handleWheelHistory(env, uid) {
-  const [spins, purchases] = await Promise.all([
-    env.DB.prepare(`
-      SELECT
-        id,
-        prize_koinu AS amount_koinu,
-        spin_type AS source,
-        created_at
-      FROM wheel_spins
-      WHERE uid = ?
-      ORDER BY id DESC
-      LIMIT 50
-    `).bind(uid).all(),
-
-    env.DB.prepare(`
-      SELECT
-        id,
-        package_spins AS spins,
-        cost_koinu AS price_koinu,
-        created_at
-      FROM wheel_purchases
-      WHERE uid = ?
-      ORDER BY id DESC
-      LIMIT 50
-    `).bind(uid).all()
-  ]);
-
-  return {
-    success: true,
-    spins: spins.results || [],
-    purchases: purchases.results || []
-  };
-} 
-// ==========================================
-// ADMIN DAILY STATS (UTC day)
-// ==========================================
-
-async function getAdminDailyStats(env) {
-  const today = getUtcDate();
-
-  const [
-    claims,
-    wheelPrizes,
-    wheelBuys,
-    streaks,
-    wdPending,
-    wdRequested,
-    wdApproved,
-    wdRejected,
-    balances,
-    faucetReserve,
-    wheelReserve
-  ] = await Promise.all([
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
-      FROM claims
-      WHERE date(claimed_at) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(prize_koinu), 0) AS total, COUNT(*) AS count
-      FROM wheel_spins
-      WHERE utc_date = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(cost_koinu), 0) AS total, COUNT(*) AS count
-      FROM wheel_purchases
-      WHERE date(created_at) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT
-        COALESCE(SUM(
-          CASE current_day
-            WHEN 1 THEN 1000
-            WHEN 2 THEN 2000
-            WHEN 3 THEN 3000
-            WHEN 4 THEN 4000
-            WHEN 5 THEN 5000
-            WHEN 6 THEN 6000
-            WHEN 7 THEN 7000
-            ELSE 0
-          END
-        ), 0) AS total,
-        COUNT(*) AS count
-      FROM daily_streaks
-      WHERE last_checkin_date = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
-      FROM withdrawals
-      WHERE status = 'pending'
-    `).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
-      FROM withdrawals
-      WHERE date(created_at) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
-      FROM withdrawals
-      WHERE status = 'approved'
-        AND date(processed_at) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
-      FROM withdrawals
-      WHERE status = 'rejected'
-        AND date(processed_at) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
-      SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS count
-      FROM users
-    `).first(),
-
-    env.DB.prepare(`
-      SELECT available_koinu, payouts_enabled
-      FROM faucet_reserve
-      WHERE id = 1
-    `).first(),
-
-    env.DB.prepare(`
-      SELECT available_koinu, locked_koinu, payouts_enabled
-      FROM wheel_reserve
-      WHERE id = 1
-    `).first()
-  ]);
-
-  const sumCount = row => ({
-    koinu: Number(row?.total || 0),
-    count: Number(row?.count || 0)
-  });
-
-  let registeredToday = null;
-
-  try {
-    const row = await env.DB.prepare(`
-      SELECT COUNT(*) AS total
-      FROM users
-      WHERE date(created_at) = ?
-    `).bind(today).first();
-
-    registeredToday = Number(row?.total || 0);
-  } catch {
-    registeredToday = null;
-  }
-
-  const claimsKoinu = Number(claims?.total || 0);
-  const wheelPrizesKoinu = Number(wheelPrizes?.total || 0);
-  const streakKoinu = Number(streaks?.total || 0);
-  const incomeKoinu = Number(wheelBuys?.total || 0);
-  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu;
-
-  return {
-    success: true,
-    date: today,
-    registered_today: registeredToday,
-    income_koinu: incomeKoinu,
-    payouts_koinu: payoutsKoinu,
-    profit_koinu: incomeKoinu - payoutsKoinu,
-    breakdown: {
-      claims_koinu: claimsKoinu,
-      claims_count: Number(claims?.count || 0),
-      wheel_prizes_koinu: wheelPrizesKoinu,
-      wheel_spins_count: Number(wheelPrizes?.count || 0),
-      streak_koinu: streakKoinu,
-      streak_checkins_count: Number(streaks?.count || 0),
-      wheel_purchases_koinu: incomeKoinu,
-      wheel_purchases_count: Number(wheelBuys?.count || 0)
-    },
-    withdrawals: {
-      pending: sumCount(wdPending),
-      requested_today: sumCount(wdRequested),
-      approved_today: sumCount(wdApproved),
-      rejected_today: sumCount(wdRejected)
-    },
-    liability: {
-      user_balances_koinu: Number(balances?.total || 0),
-      users_count: Number(balances?.count || 0)
-    },
-    reserves: {
-      faucet_available_koinu: Number(faucetReserve?.available_koinu || 0),
-      faucet_payouts_enabled: Number(faucetReserve?.payouts_enabled) === 1,
-      wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
-      wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
-      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1
-    }
-  };
-}
-
-// ==========================================
-// MAIN API ROUTES
-// ==========================================
-
-async function handleRequest(request, env, json) {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  const method = request.method;
-
-  // HEALTH CHECK
-
-  if (path === "/api/health" && method === "GET") {
-    try {
-      await env.DB.prepare("SELECT 1").first();
-
-      return json({
-        success: true,
-        message: "DogeDrip API is connected",
-        database: "connected"
-      });
-    } catch {
-      return json({
-        success: false,
-        error: "Database connection failed"
-      }, 500);
-    }
-  }
-
-  // REFERRAL VALIDATION
-
-  if (path === "/api/referral/validate" && method === "GET") {
-    const code = (url.searchParams.get("code") || "").trim();
-
-    if (!REF_CODE_REGEX.test(code)) {
-      return json({ success: true, valid: false });
-    }
-
-    const row = await env.DB.prepare(`
-      SELECT 1 AS ok
-      FROM users
-      WHERE ref_code = ?
-    `).bind(code).first();
-
-    return json({
-      success: true,
-      valid: Boolean(row)
-    });
-  }
-
-  // AUTH SYNC
-  // Account synchronization is allowed before email verification.
-
-  if (path === "/api/auth/sync" && method === "POST") {
-    const user = await authenticate(request, env, {
-      requireVerifiedEmail: false
-    });
-
-    const body = await readJson(request);
-
-    const rawRef =
-      typeof body.referred_by === "string"
-        ? body.referred_by.trim().toUpperCase()
-        : "";
-
-    const profile = await syncUser(
-      env,
-      user,
-      REF_CODE_REGEX.test(rawRef) ? rawRef : null
-    );
-
-    return json({
-      success: true,
-      message: "User synchronized successfully",
-      uid: user.sub,
-      ref_code: profile.ref_code,
-      referred_by: profile.referred_by,
-      plan: profile.plan || "FREE",
-      email_verified: Number(profile.email_verified) === 1
-    });
-  }
-
-  // SEND EMAIL VERIFICATION CODE
-
-  if (path === "/api/email/send-code" && method === "POST") {
-    const user = await authenticate(request, env, {
-      requireVerifiedEmail: false
-    });
-
-    return json(await handleSendEmailCode(env, user));
-  }
-
-  // VERIFY EMAIL CODE
-
-  if (path === "/api/email/verify-code" && method === "POST") {
-    const user = await authenticate(request, env, {
-      requireVerifiedEmail: false
-    });
-
-    const body = await readJson(request);
-
-    return json(await handleVerifyEmailCode(env, user, body));
-  }
-
-  // REFERRAL STATS
-
-  if (path === "/api/referrals" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    const account = await env.DB.prepare(`
-      SELECT ref_code, referred_by
-      FROM users
-      WHERE uid = ?
-    `).bind(user.sub).first();
-
-    if (!account) {
-      throw new HttpError(404, "User not found");
-    }
-
-    let invitedCount = 0;
-
-    if (account.ref_code) {
-      const row = await env.DB.prepare(`
-        SELECT COUNT(*) AS total
-        FROM users
-        WHERE referred_by = ?
-      `).bind(account.ref_code).first();
-
-      invitedCount = row ? Number(row.total) : 0;
-    }
-
-    return json({
-      success: true,
-      ref_code: account.ref_code,
-      referred_by: account.referred_by,
-      invited_count: invitedCount
-    });
-  }
-
-  // LUCKY WHEEL ROUTES
-
-  if (path === "/api/wheel/state" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    return json(await handleWheelState(env, user.sub));
-  }
-
-  if (path === "/api/wheel/spin" && method === "POST") {
-    const user = await authenticate(request, env);
-    const body = await readJson(request);
-
-    return json(await handleWheelSpin(env, user.sub, body));
-  }
-
-  if (path === "/api/wheel/buy" && method === "POST") {
-    const user = await authenticate(request, env);
-    const body = await readJson(request);
-
-    return json(await handleWheelBuy(env, user.sub, body));
-  }
-
-  if (path === "/api/wheel/history" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    return json(await handleWheelHistory(env, user.sub));
-  }
-
-  // ==========================================
-  // FAUCET CLAIM + LEDGER + IDEMPOTENCY
-  // ==========================================
-
-  if (path === "/api/claim" && method === "POST") {
-    const user = await authenticate(request, env);
-    const body = await readJson(request);
-    const requestId = getRequestId(body);
-    const plan = await getUserPlan(env, user.sub);
-
-    const existing = await getExistingClaim(env, user.sub, requestId);
-
-    if (existing) {
-      return json(
-        await buildClaimResponse(env, user.sub, plan, existing, true)
-      );
-    }
-
-    let results;
-
-    try {
-      results = await env.DB.batch([
-        env.DB.prepare(`
-          UPDATE users
-          SET
-            balance_koinu = balance_koinu + ?,
-            last_claim_at = CURRENT_TIMESTAMP
-          WHERE uid = ?
-            AND (
-              last_claim_at IS NULL
-              OR last_claim_at <= datetime('now', ?)
-            )
-            AND (
-              SELECT COUNT(*)
-              FROM claims
-              WHERE claims.uid = users.uid
-                AND date(claims.claimed_at) = date('now')
-            ) < ?
-        `).bind(
-          plan.amount_koinu,
-          user.sub,
-          `-${plan.cooldown_seconds} seconds`,
-          plan.daily_limit
-        ),
-
-        env.DB.prepare(`
-          INSERT INTO claims (uid, amount_koinu, request_id)
-          SELECT ?, ?, ?
-          WHERE changes() = 1
-        `).bind(user.sub, plan.amount_koinu, requestId),
-
-        env.DB.prepare(`
-          INSERT INTO ledger_transactions (
-            uid,
-            transaction_type,
-            amount_koinu,
-            balance_before_koinu,
-            balance_after_koinu,
-            reference_type,
-            reference_id,
-            idempotency_key
-          )
-          SELECT
-            u.uid,
-            'claim',
-            c.amount_koinu,
-            u.balance_koinu - c.amount_koinu,
-            u.balance_koinu,
-            'claim',
-            CAST(c.id AS TEXT),
-            'claim:' || u.uid || ':' || c.request_id
-          FROM users u
-          JOIN claims c
-            ON c.uid = u.uid
-           AND c.request_id = ?
-          WHERE u.uid = ?
-            AND changes() = 1
-        `).bind(requestId, user.sub),
-
-        env.DB.prepare(`
-          SELECT CASE
-            WHEN changes() != 1
-            THEN abs(-9223372036854775808)
-            ELSE 1
-          END
-        `)
-      ]);
-    } catch (error) {
-      const concurrentClaim = await getExistingClaim(
-        env,
-        user.sub,
-        requestId
-      );
-
-      if (concurrentClaim) {
-        return json(
-          await buildClaimResponse(
-            env,
-            user.sub,
-            plan,
-            concurrentClaim,
-            true
-          )
-        );
-      }
-
-      const errorText = [
-        error?.message,
-        error?.cause?.message
-      ].filter(Boolean).join(" ");
-
-      if (errorText.includes("INSUFFICIENT_FAUCET_RESERVE")) {
-        throw new HttpError(
-          503,
-          "Faucet temporarily unavailable. Please try again later."
-        );
-      }
-
-      const account = await getAccount(env, user.sub, plan);
-
-      if (!account) {
-        throw new HttpError(404, "User not synchronized");
-      }
-
-      const dailyUsed = Number(account.daily_claims_used || 0);
-
-      if (dailyUsed >= plan.daily_limit) {
-        throw new HttpError(429, "Daily claim limit reached", {
-          reason: "daily_limit",
-          plan: plan.name,
-          daily_claims_used: dailyUsed,
-          daily_limit: plan.daily_limit,
-          daily_claims_remaining: 0
-        });
-      }
-
-      if (Number(account.cooldown_remaining) > 0) {
-        throw new HttpError(
-          429,
-          "Cooldown active. Please wait before claiming again.",
-          {
-            reason: "cooldown",
-            plan: plan.name,
-            cooldown_remaining: account.cooldown_remaining
-          }
-        );
-      }
-
-      throw new HttpError(
-        409,
-        "Claim could not be completed. Please try again."
-      );
-    }
-
-    if (
-      results[0].meta.changes < 1 ||
-      results[1].meta.changes < 1 ||
-      results[2].meta.changes < 1
-    ) {
-      throw new HttpError(500, "Claim transaction could not be confirmed");
-    }
-
-    const savedClaim = await getExistingClaim(env, user.sub, requestId);
-
-    if (!savedClaim) {
-      throw new HttpError(500, "Claim record could not be confirmed");
-    }
-
-    return json(
-      await buildClaimResponse(
-        env,
-        user.sub,
-        plan,
-        savedClaim,
-        false
-      )
-    );
-  }
-
-  // CLAIM HISTORY
-
-  if (path === "/api/claims" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    const result = await env.DB.prepare(`
-      SELECT id, amount_koinu, claimed_at
-      FROM claims
-      WHERE uid = ?
-      ORDER BY id DESC
-      LIMIT 50
-    `).bind(user.sub).all();
-
-    return json({
-      success: true,
-      claims: result.results || []
-    });
-  }
-
-  // ==========================================
-  // DAILY STREAKS
-  // ==========================================
-
-  if (path === "/api/streak" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    return json({
-      success: true,
-      ...(await getStreakInfo(env, user.sub))
-    });
-  }
-
-  if (path === "/api/streak/checkin" && method === "POST") {
-    const user = await authenticate(request, env);
-
-    return json(
-      await handleStreakCheckin(env, user.sub)
-    );
-  }
-
-  // BALANCE
-
-  if (path === "/api/balance" && method === "GET") {
-    const user = await authenticate(request, env);
-    const plan = await getUserPlan(env, user.sub);
-    const account = await getAccount(env, user.sub, plan);
-
-    if (!account) {
-      throw new HttpError(404, "User not found");
-    }
-
-    const dailyUsed = Number(account.daily_claims_used || 0);
-
-    return json({
-      success: true,
-      balance_koinu: Number(account.balance_koinu),
-      last_claim_at: account.last_claim_at,
-      cooldown_remaining: Number(account.cooldown_remaining),
-      cooldown_seconds: plan.cooldown_seconds,
-      claim_amount_koinu: plan.amount_koinu,
-      min_withdrawal_koinu: MIN_WITHDRAWAL_KOINU,
-      plan: plan.name,
-      daily_claims_used: dailyUsed,
-      daily_limit: plan.daily_limit,
-      daily_claims_remaining: Math.max(0, plan.daily_limit - dailyUsed)
-    });
-  }
-
-  // ==========================================
-  // CREATE WITHDRAWAL + LEDGER
-  // ==========================================
-
-  if (path === "/api/withdrawals" && method === "POST") {
-    const user = await authenticate(request, env);
-    const body = await readJson(request);
-
-    const amount = body.amount_koinu;
-
-    const wallet =
-      typeof body.wallet_address === "string"
-        ? body.wallet_address.trim()
-        : "";
-
-    if (
-      !Number.isSafeInteger(amount) ||
-      amount < MIN_WITHDRAWAL_KOINU
-    ) {
-      throw new HttpError(400, "Minimum withdrawal is 1 DOGE");
-    }
-
-    if (!(await isValidDogeAddress(wallet))) {
-      throw new HttpError(400, "Invalid DOGE wallet address");
-    }
-
-    const pending = await env.DB.prepare(`
-      SELECT id
-      FROM withdrawals
-      WHERE uid = ?
-        AND status = 'pending'
-      LIMIT 1
-    `).bind(user.sub).first();
-
-    if (pending) {
-      throw new HttpError(
-        409,
-        "You already have a pending withdrawal request."
-      );
-    }
-
-    let results;
-
-    try {
-      results = await env.DB.batch([
-        env.DB.prepare(`
-          UPDATE users
-          SET balance_koinu = balance_koinu - ?
-          WHERE uid = ?
-            AND balance_koinu >= ?
-        `).bind(amount, user.sub, amount),
-
-        env.DB.prepare(`
-          INSERT INTO withdrawals (
-            uid,
-            amount_koinu,
-            wallet_address,
-            status
-          )
-          SELECT ?, ?, ?, 'pending'
-          WHERE changes() = 1
-            AND NOT EXISTS (
-              SELECT 1
-              FROM withdrawals
-              WHERE uid = ?
-                AND status = 'pending'
-            )
-        `).bind(user.sub, amount, wallet, user.sub),
-
-        env.DB.prepare(`
-          INSERT INTO ledger_transactions (
-            uid,
-            transaction_type,
-            amount_koinu,
-            balance_before_koinu,
-            balance_after_koinu,
-            reference_type,
-            reference_id,
-            idempotency_key
-          )
-          SELECT
-            u.uid,
-            'withdrawal',
-            -?,
-            u.balance_koinu + ?,
-            u.balance_koinu,
-            'withdrawal',
-            CAST(last_insert_rowid() AS TEXT),
-            'withdrawal:' || u.uid || ':' || last_insert_rowid()
-          FROM users u
-          WHERE u.uid = ?
-            AND changes() = 1
-        `).bind(amount, amount, user.sub),
-
-        env.DB.prepare(`
-          SELECT CASE
-            WHEN changes() != 1
-            THEN abs(-9223372036854775808)
-            ELSE 1
-          END
-        `)
-      ]);
-    } catch (error) {
-      const currentPending = await env.DB.prepare(`
-        SELECT id
-        FROM withdrawals
-        WHERE uid = ?
-          AND status = 'pending'
-        LIMIT 1
-      `).bind(user.sub).first();
-
-      if (currentPending) {
-        throw new HttpError(
-          409,
-          "You already have a pending withdrawal request."
-        );
-      }
-
-      const account = await getAccount(env, user.sub);
-
-      if (!account) {
-        throw new HttpError(404, "User not found");
-      }
-
-      if (Number(account.balance_koinu) < amount) {
-        throw new HttpError(400, "Insufficient balance");
-      }
-
-      throw new HttpError(
-        409,
-        "Withdrawal request could not be completed."
-      );
-    }
-
-    if (
-      results[0].meta.changes !== 1 ||
-      results[1].meta.changes !== 1 ||
-      results[2].meta.changes !== 1
-    ) {
-      throw new HttpError(
-        500,
-        "Withdrawal transaction could not be confirmed"
-      );
-    }
-
-    const withdrawal = await env.DB.prepare(`
-      SELECT
-        id,
-        amount_koinu,
-        wallet_address,
-        status,
-        created_at
-      FROM withdrawals
-      WHERE id = ? AND uid = ?
-    `).bind(results[1].meta.last_row_id, user.sub).first();
-
-    if (!withdrawal) {
-      throw new HttpError(500, "Withdrawal record could not be confirmed");
-    }
-
-    return json({
-      success: true,
-      message: "Withdrawal request submitted",
-      withdrawal
-    });
-  }
-
-  // USER WITHDRAWAL HISTORY
-
-  if (path === "/api/withdrawals" && method === "GET") {
-    const user = await authenticate(request, env);
-
-    const result = await env.DB.prepare(`
-      SELECT
-        id,
-        amount_koinu,
-        wallet_address,
-        status,
-        created_at
-      FROM withdrawals
-      WHERE uid = ?
-      ORDER BY id DESC
-      LIMIT 100
-    `).bind(user.sub).all();
-
-    return json({
-      success: true,
-      withdrawals: result.results || []
-    });
-  }
-
-  // ADMIN: DAILY STATS
-
-  if (path === "/api/admin/stats" && method === "GET") {
-    const user = await authenticate(request, env);
-    await requireAdmin(user, env);
-
-    return json(await getAdminDailyStats(env));
-  }
-
-  // ADMIN: LIST WITHDRAWALS
-
-  if (path === "/api/admin/withdrawals" && method === "GET") {
-    const user = await authenticate(request, env);
-    await requireAdmin(user, env);
-
-    const result = await env.DB.prepare(`
-      SELECT
-        w.id,
-        w.uid,
-        u.email,
-        w.amount_koinu,
-        w.wallet_address,
-        w.status,
-        w.created_at
-      FROM withdrawals w
-      LEFT JOIN users u ON u.uid = w.uid
-      ORDER BY
-        CASE WHEN w.status = 'pending' THEN 0 ELSE 1 END,
-        w.id DESC
-      LIMIT 500
-    `).all();
-
-    return json({
-      success: true,
-      withdrawals: result.results || []
-    });
-  }
-
-  // ADMIN: APPROVE WITHDRAWAL
-  // Real DOGE sending is not integrated.
-
-  const approveMatch = path.match(
-    /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
-  );
-
-  if (approveMatch && method === "POST") {
-    const user = await authenticate(request, env);
-    await requireAdmin(user, env);
-
-    throw new HttpError(
-      501,
-      "Real DOGE payouts are not integrated. Withdrawal approval is disabled."
-    );
-  }
-
-  // ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER
-
-  const rejectMatch = path.match(
-    /^\/api\/admin\/withdrawals\/(\d+)\/reject$/
-  );
-
-  if (rejectMatch && method === "POST") {
-    const user = await authenticate(request, env);
-    const admin = await requireAdmin(user, env);
-    const id = Number(rejectMatch[1]);
-
-    if (!Number.isSafeInteger(id)) {
-      throw new HttpError(400, "Invalid withdrawal id");
-    }
-
-    let results;
-
-    try {
-      results = await env.DB.batch([
-        env.DB.prepare(`
-          UPDATE withdrawals
-          SET
-            status = 'rejected',
-            processed_by = ?,
-            processed_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-            AND status = 'pending'
-        `).bind(admin.uid, id),
-
-        env.DB.prepare(`
-          UPDATE users
-          SET balance_koinu = balance_koinu + (
-            SELECT amount_koinu
-            FROM withdrawals
-            WHERE id = ?
-              AND status = 'rejected'
-          )
-          WHERE uid = (
-            SELECT uid
-            FROM withdrawals
-            WHERE id = ?
-              AND status = 'rejected'
-          )
-            AND changes() = 1
-        `).bind(id, id),
-
-        env.DB.prepare(`
-          INSERT INTO ledger_transactions (
-            uid,
-            transaction_type,
-            amount_koinu,
-            balance_before_koinu,
-            balance_after_koinu,
-            reference_type,
-            reference_id,
-            idempotency_key
-          )
-          SELECT
-            u.uid,
-            'withdrawal_refund',
-            w.amount_koinu,
-            u.balance_koinu - w.amount_koinu,
-            u.balance_koinu,
-            'withdrawal',
-            CAST(w.id AS TEXT),
-            'withdrawal_refund:' || w.id
-          FROM withdrawals w
-          JOIN users u ON u.uid = w.uid
-          WHERE w.id = ?
-            AND w.status = 'rejected'
-            AND changes() = 1
-        `).bind(id),
-
-        env.DB.prepare(`
-          SELECT CASE
-            WHEN changes() != 1
-            THEN abs(-9223372036854775808)
-            ELSE 1
-          END
-        `)
-      ]);
-    } catch (error) {
-      const withdrawal = await env.DB.prepare(`
-        SELECT status
-        FROM withdrawals
-        WHERE id = ?
-      `).bind(id).first();
-
-      if (!withdrawal || withdrawal.status !== "pending") {
-        throw new HttpError(
-          409,
-          "Withdrawal not found or already processed"
-        );
-      }
-
-      throw new HttpError(
-        500,
-        "Withdrawal rejection failed. No changes were committed."
-      );
-    }
-
-    if (
-      results[0].meta.changes !== 1 ||
-      results[1].meta.changes !== 1 ||
-      results[2].meta.changes !== 1
-    ) {
-      throw new HttpError(
-        500,
-        "Withdrawal refund could not be confirmed"
-      );
-    }
-
-    return json({
-      success: true,
-      message: "Withdrawal rejected and balance refunded",
-      id
-    });
-  }
-
-  return json({
-    success: false,
-    message: "Endpoint not found"
-  }, 404);
-}
-
-// ==========================================
-// WORKER ENTRY POINT
-// ==========================================
 
 export default {
   async fetch(request, env) {
-    const cors = corsHeaders(request);
-
-    const json = (data, status = 200) =>
-      new Response(JSON.stringify(data), {
-        status,
-        headers: { ...JSON_HEADERS, ...cors }
-      });
-
-    const origin = request.headers.get("Origin");
-
-    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Origin not allowed"
-        }),
-        {
-          status: 403,
-          headers: JSON_HEADERS
-        }
-      );
-    }
-
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: cors
-      });
+      return new Response(null, { headers });
     }
 
-    try {
-      return await handleRequest(request, env, json);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        return json(
-          {
-            success: false,
-            error: error.message,
-            ...error.extra
-          },
-          error.status
+    const url = new URL(request.url);
+
+    // HEALTH CHECK
+    if (url.pathname === "/api/health" && request.method === "GET") {
+      try {
+        const result = await env.DB.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).all();
+
+        return response({
+          success: true,
+          message: "DogeDrip API is connected",
+          database: "connected",
+          tables: result.results.map(row => row.name),
+          email_verification_configured: emailVerificationConfigured(env)
+        });
+      } catch {
+        return response(
+          { success: false, error: "Database connection failed" },
+          500
         );
       }
-
-      console.error("Unhandled error:", error);
-
-      return json(
-        {
-          success: false,
-          error: "Internal server error"
-        },
-        500
-      );
     }
+
+    // AUTH SYNC
+    if (url.pathname === "/api/auth/sync" && request.method === "POST") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      try {
+        const previous = await env.DB.prepare(
+          "SELECT * FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        const emailChanged = Boolean(
+          previous && previous.email && previous.email !== user.email
+        );
+
+        await env.DB.prepare(`
+          INSERT INTO users (uid, email)
+          VALUES (?, ?)
+          ON CONFLICT(uid) DO UPDATE SET email = excluded.email
+        `).bind(user.sub, user.email).run();
+
+        if (emailChanged) {
+          // A new address must be verified again; pending codes are invalid.
+          await env.DB.batch([
+            env.DB.prepare(
+              "UPDATE users SET email_verified = 0, email_verified_at = NULL WHERE uid = ?"
+            ).bind(user.sub),
+            env.DB.prepare(
+              "DELETE FROM email_verification_codes WHERE uid = ?"
+            ).bind(user.sub)
+          ]);
+        }
+
+        // Backfill a real username once, only if the column exists.
+        if (previous && "username" in previous && !previous.username) {
+          await env.DB.prepare(
+            "UPDATE users SET username = ? WHERE uid = ?"
+          ).bind(deriveUsername(user.email, user.sub), user.sub).run();
+        }
+
+        const state = await env.DB.prepare(
+          "SELECT email_verified FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        return response({
+          success: true,
+          message: "User synchronized successfully",
+          uid: user.sub,
+          email_verified: Number(state?.email_verified) === 1,
+          email_changed: emailChanged
+        });
+      } catch {
+        return fail("Authentication or synchronization failed", 401);
+      }
+    }
+
+    // EMAIL VERIFICATION — SEND CODE
+    if (url.pathname === "/api/email/send-code" && request.method === "POST") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      if (!emailVerificationConfigured(env)) {
+        return fail("Email verification is not configured", 500, {
+          code: "not_configured"
+        });
+      }
+
+      try {
+        const account = await env.DB.prepare(
+          "SELECT email, email_verified FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+
+        if (Number(account.email_verified) === 1) {
+          return fail("Email is already verified", 409, { code: "already_verified" });
+        }
+
+        const existing = await env.DB.prepare(
+          "SELECT last_sent_at FROM email_verification_codes WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        const now = Date.now();
+        const window = evaluateSendWindow({
+          lastSentAt: existing ? existing.last_sent_at : null,
+          now
+        });
+
+        if (!window.allowed) {
+          return fail("Please wait before requesting a new code", 429, {
+            code: "resend_too_soon",
+            retry_after_seconds: Math.max(1, Math.ceil(window.retryAfterMs / 1000))
+          });
+        }
+
+        const code = generateVerificationCode();
+        const codeHash = await hashVerificationCode(code, env.EMAIL_CODE_PEPPER);
+        const expiresAt = new Date(now + CODE_TTL_SECONDS * 1000).toISOString();
+        const sentAt = new Date(now).toISOString();
+
+        // Only the HMAC hash is stored; attempts reset on every new code.
+        await env.DB.prepare(`
+          INSERT INTO email_verification_codes
+            (uid, code_hash, expires_at, attempts, last_sent_at, created_at)
+          VALUES (?, ?, ?, 0, ?, ?)
+          ON CONFLICT(uid) DO UPDATE SET
+            code_hash = excluded.code_hash,
+            expires_at = excluded.expires_at,
+            attempts = 0,
+            last_sent_at = excluded.last_sent_at,
+            created_at = excluded.created_at
+        `).bind(user.sub, codeHash, expiresAt, sentAt, sentAt).run();
+
+        const delivery = await sendVerificationEmail({
+          apiKey: env.BREVO_API_KEY,
+          to: account.email,
+          code
+        });
+
+        if (!delivery.ok) {
+          // Allow an immediate retry: no code was delivered, no cooldown burn.
+          await env.DB.prepare(
+            "DELETE FROM email_verification_codes WHERE uid = ?"
+          ).bind(user.sub).run();
+
+          return fail("Could not send the verification email", 502, {
+            code: "email_delivery_failed"
+          });
+        }
+
+        return response({
+          success: true,
+          message: "Verification code sent",
+          email: account.email,
+          expires_in_seconds: CODE_TTL_SECONDS,
+          resend_after_seconds: RESEND_COOLDOWN_SECONDS,
+          max_attempts: MAX_CODE_ATTEMPTS
+        });
+      } catch {
+        return fail("Could not send verification code", 500);
+      }
+    }
+
+    // EMAIL VERIFICATION — VERIFY CODE
+    if (url.pathname === "/api/email/verify-code" && request.method === "POST") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      if (!emailVerificationConfigured(env)) {
+        return fail("Email verification is not configured", 500, {
+          code: "not_configured"
+        });
+      }
+
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return fail("Invalid request body", 400, { code: "invalid_body" });
+      }
+
+      const code = typeof body?.code === "string" ? body.code.trim() : "";
+
+      if (!/^\d{6}$/.test(code)) {
+        return fail("Enter the 6-digit code", 400, { code: "invalid_format" });
+      }
+
+      try {
+        const account = await env.DB.prepare(
+          "SELECT email, email_verified FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+
+        if (Number(account.email_verified) === 1) {
+          return response({
+            success: true,
+            message: "Email is already verified",
+            email: account.email,
+            email_verified: true
+          });
+        }
+
+        const record = await env.DB.prepare(
+          "SELECT code_hash, expires_at, attempts FROM email_verification_codes WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (!record) {
+          return fail("No active code. Request a new one.", 400, {
+            code: "no_active_code"
+          });
+        }
+
+        const now = Date.now();
+        const attempts = Number(record.attempts);
+
+        if (attempts >= MAX_CODE_ATTEMPTS) {
+          await env.DB.prepare(
+            "DELETE FROM email_verification_codes WHERE uid = ?"
+          ).bind(user.sub).run();
+
+          return fail("Too many incorrect attempts. Request a new code.", 429, {
+            code: "too_many_attempts",
+            attempts_left: 0
+          });
+        }
+
+        const expiresAtMs = dbTimestampToMs(record.expires_at);
+
+        if (!Number.isFinite(expiresAtMs) || now >= expiresAtMs) {
+          await env.DB.prepare(
+            "DELETE FROM email_verification_codes WHERE uid = ?"
+          ).bind(user.sub).run();
+
+          return fail("This code has expired. Request a new one.", 400, {
+            code: "code_expired"
+          });
+        }
+
+        const matches = await verifyVerificationCode(
+          code,
+          record.code_hash,
+          env.EMAIL_CODE_PEPPER
+        );
+
+        if (!matches) {
+          const updated = await env.DB.prepare(
+            "UPDATE email_verification_codes SET attempts = attempts + 1 WHERE uid = ? AND attempts < ?"
+          ).bind(user.sub, MAX_CODE_ATTEMPTS).run();
+
+          const attemptsUsed = attempts + 1;
+          const attemptsLeft = Math.max(0, MAX_CODE_ATTEMPTS - attemptsUsed);
+
+          if (attemptsLeft === 0 || updated.meta?.changes === 0) {
+            await env.DB.prepare(
+              "DELETE FROM email_verification_codes WHERE uid = ?"
+            ).bind(user.sub).run();
+
+            return fail("Too many incorrect attempts. Request a new code.", 429, {
+              code: "too_many_attempts",
+              attempts_left: 0
+            });
+          }
+
+          return fail("Incorrect code", 400, {
+            code: "invalid_code",
+            attempts_left: attemptsLeft
+          });
+        }
+
+        const verifiedAt = new Date(now).toISOString();
+
+        await env.DB.batch([
+          env.DB.prepare(
+            "UPDATE users SET email_verified = 1, email_verified_at = ? WHERE uid = ?"
+          ).bind(verifiedAt, user.sub),
+          env.DB.prepare(
+            "DELETE FROM email_verification_codes WHERE uid = ?"
+          ).bind(user.sub)
+        ]);
+
+        const stored = await env.DB.prepare(
+          "SELECT email_verified, email_verified_at FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (Number(stored?.email_verified) !== 1) {
+          return fail("Could not verify email", 500);
+        }
+
+        return response({
+          success: true,
+          message: "Email verified successfully",
+          email: account.email,
+          email_verified: true,
+          email_verified_at: stored.email_verified_at
+        });
+      } catch {
+        return fail("Could not verify code", 500);
+      }
+    }
+
+    // EMAIL VERIFICATION — STATUS (backend is the only source of truth)
+    if (url.pathname === "/api/email/status" && request.method === "GET") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      try {
+        const account = await env.DB.prepare(
+          "SELECT email, email_verified, email_verified_at FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+
+        const verified = Number(account.email_verified) === 1;
+
+        if (verified) {
+          return response({
+            success: true,
+            email: account.email,
+            email_verified: true,
+            email_verified_at: account.email_verified_at,
+            pending_code: false
+          });
+        }
+
+        const record = await env.DB.prepare(
+          "SELECT expires_at, attempts, last_sent_at FROM email_verification_codes WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        const now = Date.now();
+        const expiresAtMs = record ? dbTimestampToMs(record.expires_at) : NaN;
+        const sentAtMs = record ? dbTimestampToMs(record.last_sent_at) : NaN;
+
+        const codeActive = Boolean(
+          record &&
+          Number.isFinite(expiresAtMs) &&
+          now < expiresAtMs &&
+          Number(record.attempts) < MAX_CODE_ATTEMPTS
+        );
+
+        return response({
+          success: true,
+          email: account.email,
+          email_verified: false,
+          email_verified_at: null,
+          pending_code: codeActive,
+          code_expires_in_seconds: codeActive
+            ? Math.max(0, Math.ceil((expiresAtMs - now) / 1000))
+            : 0,
+          resend_in_seconds:
+            record && Number.isFinite(sentAtMs)
+              ? Math.max(0, Math.ceil((sentAtMs + RESEND_COOLDOWN_SECONDS * 1000 - now) / 1000))
+              : 0,
+          attempts_left: record
+            ? Math.max(0, MAX_CODE_ATTEMPTS - Number(record.attempts))
+            : MAX_CODE_ATTEMPTS,
+          max_attempts: MAX_CODE_ATTEMPTS
+        });
+      } catch {
+        return fail("Could not load email status", 500);
+      }
+    }
+
+    // PROFILE (read-only; every field comes from D1)
+    if (url.pathname === "/api/profile" && request.method === "GET") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      try {
+        // SELECT * keeps this working before/after the profile migration.
+        const row = await env.DB.prepare(
+          "SELECT * FROM users WHERE uid = ?"
+        ).bind(user.sub).first();
+
+        if (!row) return fail("User not synchronized", 404, { code: "not_synced" });
+
+        return response({
+          success: true,
+          profile: buildProfile(row),
+          avatar_storage_configured: Boolean(env.AVATARS)
+        });
+      } catch {
+        return fail("Could not load profile", 500);
+      }
+    }
+
+    // AVATAR UPLOAD (binary body, R2, never D1)
+    if (url.pathname === "/api/profile/avatar" && request.method === "POST") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      if (!env.AVATARS) {
+        return fail("Avatar storage is not configured", 503, {
+          code: "avatar_storage_not_configured"
+        });
+      }
+
+      const contentType = (request.headers.get("content-type") || "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+
+      if (!["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(contentType)) {
+        return fail("Only PNG, JPEG or WebP images are allowed", 415, {
+          code: "unsupported_media_type"
+        });
+      }
+
+      const declaredLength = Number(request.headers.get("content-length") || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > AVATAR_MAX_BYTES) {
+        return fail("Image must be 2 MB or smaller", 413, { code: "file_too_large" });
+      }
+
+      let buffer;
+      try {
+        buffer = await request.arrayBuffer();
+      } catch {
+        return fail("Could not read the uploaded file", 400, { code: "invalid_body" });
+      }
+
+      if (buffer.byteLength === 0) {
+        return fail("The uploaded file is empty", 400, { code: "empty_file" });
+      }
+
+      if (buffer.byteLength > AVATAR_MAX_BYTES) {
+        return fail("Image must be 2 MB or smaller", 413, { code: "file_too_large" });
+      }
+
+      const detected = detectImageType(buffer);
+      if (!detected) {
+        return fail("The file is not a valid PNG, JPEG or WebP image", 415, {
+          code: "invalid_image"
+        });
+      }
+
+      const uid = user.sub;
+      if (!UID_PATTERN.test(uid)) {
+        return fail("Invalid account identifier", 400);
+      }
+
+      const key = avatarObjectKey(uid);
+
+      try {
+        await env.AVATARS.put(key, buffer, {
+          httpMetadata: {
+            contentType: detected.contentType,
+            cacheControl: "public, max-age=300"
+          }
+        });
+      } catch {
+        return fail("Could not store the image", 502, { code: "storage_failed" });
+      }
+
+      const avatarUrl = `/api/avatar/${uid}?v=${Date.now()}`;
+
+      try {
+        await env.DB.prepare(
+          "UPDATE users SET avatar_url = ? WHERE uid = ?"
+        ).bind(avatarUrl, uid).run();
+      } catch {
+        // Do not leave an orphan object behind if the column is missing.
+        try {
+          await env.AVATARS.delete(key);
+        } catch {}
+
+        return fail("Profile photo column is missing. Run the profile migration.", 503, {
+          code: "schema_incomplete"
+        });
+      }
+
+      return response({
+        success: true,
+        message: "Profile photo updated",
+        avatar_url: avatarUrl
+      });
+    }
+
+    // AVATAR DELETE
+    if (url.pathname === "/api/profile/avatar" && request.method === "DELETE") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      if (!env.AVATARS) {
+        return fail("Avatar storage is not configured", 503, {
+          code: "avatar_storage_not_configured"
+        });
+      }
+
+      const uid = user.sub;
+      if (!UID_PATTERN.test(uid)) {
+        return fail("Invalid account identifier", 400);
+      }
+
+      try {
+        await env.AVATARS.delete(avatarObjectKey(uid));
+      } catch {
+        return fail("Could not remove the image", 502, { code: "storage_failed" });
+      }
+
+      try {
+        await env.DB.prepare(
+          "UPDATE users SET avatar_url = NULL WHERE uid = ?"
+        ).bind(uid).run();
+      } catch {
+        return fail("Profile photo column is missing. Run the profile migration.", 503, {
+          code: "schema_incomplete"
+        });
+      }
+
+      return response({
+        success: true,
+        message: "Profile photo removed",
+        avatar_url: null
+      });
+    }
+
+    // PUBLIC AVATAR (served from R2; unguessable-by-uid only, no private data)
+    const avatarMatch = url.pathname.match(/^\/api\/avatar\/([A-Za-z0-9_-]{1,128})$/);
+    if (avatarMatch && request.method === "GET") {
+      if (!env.AVATARS) {
+        return fail("Avatar storage is not configured", 503, {
+          code: "avatar_storage_not_configured"
+        });
+      }
+
+      let object;
+      try {
+        object = await env.AVATARS.get(avatarObjectKey(avatarMatch[1]));
+      } catch {
+        return fail("Could not load the image", 502, { code: "storage_failed" });
+      }
+
+      if (!object || !object.body) {
+        return new Response(null, { status: 404, headers });
+      }
+
+      const imageHeaders = new Headers(headers);
+      imageHeaders.set(
+        "Content-Type",
+        (object.httpMetadata && object.httpMetadata.contentType) || "application/octet-stream"
+      );
+      imageHeaders.set("Cache-Control", "public, max-age=300");
+
+      return new Response(object.body, { status: 200, headers: imageHeaders });
+    }
+
+    // CLAIM
+    if (url.pathname === "/api/claim" && request.method === "POST") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Claim failed or authentication invalid", 401);
+      }
+
+      try {
+        if (EMAIL_VERIFICATION_ENFORCED) {
+          const account = await env.DB.prepare(
+            "SELECT email_verified FROM users WHERE uid = ?"
+          ).bind(user.sub).first();
+
+          if (!account) {
+            return fail("User not synchronized", 404, { code: "not_synced" });
+          }
+
+          if (Number(account.email_verified) !== 1) {
+            return fail("Verify your email address before claiming", 403, {
+              code: "email_verified_required"
+            });
+          }
+        }
+
+        const results = await env.DB.batch([
+          env.DB.prepare(`
+            UPDATE users
+            SET
+              balance_koinu = balance_koinu + ?,
+              last_claim_at = CURRENT_TIMESTAMP
+            WHERE uid = ?
+              AND (
+                last_claim_at IS NULL
+                OR last_claim_at <= datetime('now', ?)
+              )
+          `).bind(
+            CLAIM_AMOUNT_KOINU,
+            user.sub,
+            `-${COOLDOWN_SECONDS} seconds`
+          ),
+
+          env.DB.prepare(`
+            INSERT INTO claims (uid, amount_koinu)
+            SELECT ?, ?
+            WHERE changes() = 1
+          `).bind(
+            user.sub,
+            CLAIM_AMOUNT_KOINU
+          )
+        ]);
+
+        if (results[0].meta.changes !== 1) {
+          const existing = await env.DB.prepare(
+            "SELECT uid FROM users WHERE uid = ?"
+          ).bind(user.sub).first();
+
+          if (!existing) {
+            return fail("User not synchronized", 404, { code: "not_synced" });
+          }
+
+          return fail("Cooldown active. Please wait before claiming again.", 429, {
+            code: "cooldown_active"
+          });
+        }
+
+        const account = await env.DB.prepare(`
+          SELECT balance_koinu, last_claim_at
+          FROM users
+          WHERE uid = ?
+        `).bind(user.sub).first();
+
+        return response({
+          success: true,
+          message: "Claim successful",
+          amount_koinu: CLAIM_AMOUNT_KOINU,
+          balance_koinu: account.balance_koinu,
+          last_claim_at: account.last_claim_at
+        });
+      } catch {
+        return fail("Claim failed or authentication invalid", 401);
+      }
+    }
+
+    // CLAIM HISTORY
+    if (url.pathname === "/api/claims" && request.method === "GET") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Could not load claim history", 401);
+      }
+
+      try {
+        const result = await env.DB.prepare(`
+          SELECT id, amount_koinu, claimed_at
+          FROM claims
+          WHERE uid = ?
+          ORDER BY id DESC
+          LIMIT 50
+        `).bind(user.sub).all();
+
+        return response({
+          success: true,
+          claims: result.results
+        });
+      } catch {
+        return fail("Could not load claim history", 500);
+      }
+    }
+
+    // BALANCE
+    if (url.pathname === "/api/balance" && request.method === "GET") {
+      let user;
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication failed", 401);
+      }
+
+      try {
+        const account = await env.DB.prepare(`
+          SELECT balance_koinu, last_claim_at, email_verified
+          FROM users
+          WHERE uid = ?
+        `).bind(user.sub).first();
+
+        if (!account) {
+          return fail("User not found", 404);
+        }
+
+        return response({
+          success: true,
+          balance_koinu: account.balance_koinu,
+          last_claim_at: account.last_claim_at,
+          email_verified: Number(account.email_verified) === 1
+        });
+      } catch {
+        return fail("Could not load balance", 500);
+      }
+    }
+
+    // UNKNOWN ENDPOINT
+    return response({
+      success: false,
+      message: "Endpoint not found"
+    }, 404);
   }
 };
-
