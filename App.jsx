@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
@@ -19,7 +18,8 @@ import {
   Zap,
   Gift,
   Sparkles,
-  Ticket
+  Ticket,
+  CalendarCheck
 } from 'lucide-react';
 
 // FIREBASE
@@ -80,6 +80,18 @@ const PRIMARY_BTN =
 const WHEEL_SPIN_MS = 5200;
 const WHEEL_EXTRA_TURNS = 6;
 const WHEEL_SLICE_FILLS = ['#050505', '#1c0f15'];
+
+// DAILY STREAK (DISPLAY ONLY: the Worker decides and pays the real reward)
+const STREAK_CYCLE_DAYS = [1, 2, 3, 4, 5, 6, 7];
+const STREAK_REWARD_KOINU = {
+  1: 1000,
+  2: 2000,
+  3: 3000,
+  4: 4000,
+  5: 5000,
+  6: 6000,
+  7: 7000
+};
 
 // PLAN CATALOG (DISPLAY ONLY)
 const PLAN_CATALOG = [
@@ -397,6 +409,16 @@ export default function App() {
   const spinInFlightRef = useRef(false);
   const spinTimerRef = useRef(null);
   const wheelRotationRef = useRef(0);
+  const wheelSpinRequestIdRef = useRef(null);
+  const wheelBuyRequestRef = useRef(null);
+
+  const [streakInfo, setStreakInfo] = useState(null);
+  const [streakLoading, setStreakLoading] = useState(false);
+  const [streakError, setStreakError] = useState('');
+  const [streakMsg, setStreakMsg] = useState('');
+  const [streakMsgIsError, setStreakMsgIsError] = useState(false);
+  const [isCheckingIn, setIsCheckingIn] = useState(false);
+  const streakInFlightRef = useRef(false);
 
   const [adminWithdrawals, setAdminWithdrawals] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -556,6 +578,25 @@ export default function App() {
     applyAccountData(data);
   }, [applyWheelSpins, applyAccountData]);
 
+  const applyStreakData = useCallback((data) => {
+    if (!data || typeof data !== 'object') return;
+    if (!isNum(data.current_day)) return;
+
+    setStreakInfo({
+      currentDay: Number(data.current_day),
+      nextDay: isNum(data.next_day) ? Number(data.next_day) : 0,
+      lastCheckinDate: data.last_checkin_date || null,
+      checkedInToday: data.checked_in_today === true,
+      canCheckin: data.can_checkin === true,
+      nextRewardKoinu: isNum(data.next_reward_koinu)
+        ? Number(data.next_reward_koinu)
+        : 0,
+      totalRewardsKoinu: isNum(data.total_rewards_koinu)
+        ? Number(data.total_rewards_koinu)
+        : 0
+    });
+  }, []);
+
   useEffect(() => {
     if (activeTab === 'admin' && !isDemoAdmin) {
       setActiveTab('faucet');
@@ -603,7 +644,16 @@ export default function App() {
       setWheelAnimating(false);
       setIsSpinning(false);
       setBuyingPackId(null);
+      setStreakInfo(null);
+      setStreakLoading(false);
+      setStreakError('');
+      setStreakMsg('');
+      setStreakMsgIsError(false);
+      setIsCheckingIn(false);
+      streakInFlightRef.current = false;
       spinInFlightRef.current = false;
+      wheelSpinRequestIdRef.current = null;
+      wheelBuyRequestRef.current = null;
       claimRequestIdRef.current = null;
 
       if (spinTimerRef.current) {
@@ -763,7 +813,7 @@ export default function App() {
         if (!cancelled) {
           setClaimsError(error.message);
         }
-      } font-bold {
+      } finally {
         if (!cancelled) {
           setClaimsLoading(false);
         }
@@ -907,6 +957,42 @@ export default function App() {
       cancelled = true;
     };
   }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyWheelState]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady) {
+      setStreakInfo(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadStreak = async () => {
+      setStreakLoading(true);
+      setStreakError('');
+
+      try {
+        const data = await apiRequest('/api/streak');
+
+        if (!cancelled) {
+          applyStreakData(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setStreakError(error.message || 'Could not load your daily streak.');
+        }
+      } finally {
+        if (!cancelled) {
+          setStreakLoading(false);
+        }
+      }
+    };
+
+    loadStreak();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady, accountSyncTick, apiRequest, applyStreakData]);
 
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin) {
@@ -1299,11 +1385,23 @@ export default function App() {
     setWheelMsg('');
     setWheelMsgIsError(false);
 
+    if (!wheelSpinRequestIdRef.current) {
+      wheelSpinRequestIdRef.current = newRequestId();
+    }
+
     let data;
 
     try {
-      data = await apiRequest('/api/wheel/spin', { method: 'POST' });
+      data = await apiRequest('/api/wheel/spin', {
+        method: 'POST',
+        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current })
+      });
+      wheelSpinRequestIdRef.current = null;
     } catch (error) {
+      if (typeof error.status === 'number') {
+        wheelSpinRequestIdRef.current = null;
+      }
+
       if (error.status === 404) {
         setWheelBackendMissing(true);
       } else {
@@ -1317,7 +1415,14 @@ export default function App() {
       return;
     }
 
-    const prize = data?.prize;
+    const spinData = data?.spin;
+    const prize = spinData
+      ? { id: spinData.prize_key, amount_koinu: spinData.amount_koinu }
+      : null;
+    const spinSource =
+      spinData && typeof spinData.spin_type === 'string'
+        ? spinData.spin_type
+        : '';
     const prizeIndex = prize
       ? wheelPrizes.findIndex(p => String(p.id) === String(prize.id))
       : -1;
@@ -1330,7 +1435,7 @@ export default function App() {
       setWheelAnimating(false);
       setWheelResult({
         prize,
-        source: typeof data.source === 'string' ? data.source : ''
+        source: spinSource
       });
 
       applyAccountData(data);
@@ -1389,11 +1494,26 @@ export default function App() {
     setWheelMsg('');
     setWheelMsgIsError(false);
 
+    if (
+      !wheelBuyRequestRef.current ||
+      wheelBuyRequestRef.current.packId !== pack.id
+    ) {
+      wheelBuyRequestRef.current = {
+        packId: pack.id,
+        requestId: newRequestId()
+      };
+    }
+
     try {
       const data = await apiRequest('/api/wheel/buy', {
         method: 'POST',
-        body: JSON.stringify({ pack_id: pack.id })
+        body: JSON.stringify({
+          pack_id: pack.id,
+          request_id: wheelBuyRequestRef.current.requestId
+        })
       });
+
+      wheelBuyRequestRef.current = null;
 
       applyAccountData(data);
       applyWheelSpins(data.spins);
@@ -1405,6 +1525,10 @@ export default function App() {
 
       await refreshWheelData();
     } catch (error) {
+      if (typeof error.status === 'number') {
+        wheelBuyRequestRef.current = null;
+      }
+
       if (error.status === 404) {
         setWheelBackendMissing(true);
       } else {
@@ -1413,6 +1537,75 @@ export default function App() {
       }
     } finally {
       setBuyingPackId(null);
+    }
+  };
+
+  const showStreakMessage = (message, isError) => {
+    setStreakMsgIsError(isError);
+    setStreakMsg(message);
+  };
+
+  const refreshStreak = async (session) => {
+    try {
+      const data = await apiRequest('/api/streak');
+
+      if (session !== authEventRef.current) return;
+
+      applyStreakData(data);
+      setStreakError('');
+    } catch (error) {
+      if (session !== authEventRef.current) return;
+
+      setStreakError(error.message || 'Could not refresh your daily streak.');
+    }
+  };
+
+  const handleStreakCheckin = async () => {
+    if (streakInFlightRef.current || isCheckingIn) return;
+
+    if (!firebaseUser || !apiReady) {
+      showStreakMessage('Database is not ready. Please try again.', true);
+      return;
+    }
+
+    if (!streakInfo || !streakInfo.canCheckin) return;
+
+    streakInFlightRef.current = true;
+    setIsCheckingIn(true);
+    setStreakMsg('');
+    setStreakMsgIsError(false);
+
+    const streakSession = authEventRef.current;
+
+    try {
+      const data = await apiRequest('/api/streak/checkin', { method: 'POST' });
+
+      if (streakSession !== authEventRef.current) return;
+
+      applyStreakData(data);
+      applyAccountData(data);
+
+      if (data.already_checked_in) {
+        showStreakMessage(
+          'You have already checked in today. Come back after 00:00 UTC.',
+          false
+        );
+      } else {
+        showStreakMessage(
+          `Check-in successful! ${isNum(data.streak_day) ? `Day ${Number(data.streak_day)} reward: ` : ''}+${formatDoge(data.reward_koinu)} DOGE`,
+          false
+        );
+      }
+
+      await refreshStreak(streakSession);
+    } catch (error) {
+      if (streakSession !== authEventRef.current) return;
+
+      showStreakMessage(error.message || 'Could not complete check-in.', true);
+      await refreshStreak(streakSession);
+    } finally {
+      streakInFlightRef.current = false;
+      setIsCheckingIn(false);
     }
   };
 
@@ -1605,7 +1798,7 @@ export default function App() {
                   setAuthError('');
                   setAuthSuccess('');
                 }}
-                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all font-[#Space_Grotesk',sans-serif] ${
+                className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all font-['Space_Grotesk',sans-serif] ${
                   authMode === 'register'
                     ? 'bg-[#F4A6C1] text-black shadow-lg shadow-[#F4A6C1]/20'
                     : 'text-slate-400 hover:text-white'
@@ -1871,6 +2064,31 @@ export default function App() {
             ? 'No Spins Left'
             : 'Spin Now';
 
+  const streakCheckedToday = streakInfo ? streakInfo.checkedInToday : false;
+  const streakCompletedDays = streakInfo
+    ? (!streakInfo.checkedInToday && streakInfo.currentDay >= 7
+        ? 0
+        : streakInfo.currentDay)
+    : 0;
+  const streakNextDay =
+    streakInfo && streakInfo.canCheckin ? streakInfo.nextDay : 0;
+
+  const canStreakCheckin =
+    apiReady &&
+    streakInfo !== null &&
+    streakInfo.canCheckin &&
+    !isCheckingIn;
+
+  const streakButtonLabel = isCheckingIn
+    ? 'Processing Check-in...'
+    : !apiReady
+      ? 'Connecting...'
+      : streakInfo === null
+        ? (streakLoading ? 'Loading streak...' : 'Streak Unavailable')
+        : streakCheckedToday
+          ? 'Already Checked In Today'
+          : `Check In (+${formatDoge(streakInfo.nextRewardKoinu)} DOGE)`;
+
   return (
     <div className="min-h-screen bg-black text-white flex flex-col font-sans">
       <style>{`
@@ -2020,6 +2238,15 @@ export default function App() {
             >
               <RefreshCw className="w-4 h-4" />
               <span>Doge Faucet</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('streak')}
+              className={tabBtnCls('streak')}
+            >
+              <CalendarCheck className="w-4 h-4" />
+              <span>Daily Check-in</span>
             </button>
 
             <button
@@ -2341,6 +2568,148 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'streak' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
+                  Daily Check-in <span className="text-[#F4A6C1]">(DEMO)</span>
+                </h2>
+                <p className="text-sm text-slate-400">
+                  Check in once per day (UTC) to build a 7-day streak. Rewards grow each day and are added to your DEMO balance by the server.
+                </p>
+              </div>
+
+              {streakError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{streakError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatTile
+                  label="Current Streak"
+                  value={
+                    streakInfo
+                      ? `Day ${streakCompletedDays} / 7`
+                      : (streakLoading ? '...' : 'N/A')
+                  }
+                  valueCls="text-[#F4A6C1]"
+                />
+                <StatTile
+                  label={streakCheckedToday ? "Today's Reward" : 'Next Reward'}
+                  value={
+                    streakInfo
+                      ? (streakCheckedToday
+                          ? 'Claimed'
+                          : `${formatDoge(streakInfo.nextRewardKoinu)} DOGE`)
+                      : (streakLoading ? '...' : 'N/A')
+                  }
+                  sub={streakInfo && !streakCheckedToday && streakNextDay > 0 ? `Day ${streakNextDay}` : undefined}
+                />
+                <StatTile
+                  label="Total Earned"
+                  value={
+                    streakInfo
+                      ? formatDoge(streakInfo.totalRewardsKoinu)
+                      : (streakLoading ? '...' : 'N/A')
+                  }
+                  sub="DOGE (demo)"
+                />
+                <StatTile
+                  label="Balance"
+                  value={demoBalance.toFixed(6)}
+                  sub="DOGE (demo)"
+                />
+              </div>
+
+              <PinkDivider />
+
+              <div className="grid grid-cols-4 md:grid-cols-7 gap-3">
+                {STREAK_CYCLE_DAYS.map(day => {
+                  const isDone = day <= streakCompletedDays;
+                  const isNext = streakNextDay === day;
+
+                  return (
+                    <div
+                      key={day}
+                      className={`bg-black rounded-xl p-3 text-center border-2 transition-all ${
+                        isNext
+                          ? 'border-[#F4A6C1] shadow-lg shadow-[#F4A6C1]/20'
+                          : isDone
+                            ? 'border-emerald-500/40'
+                            : 'border-slate-800'
+                      }`}
+                    >
+                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-mono font-bold">
+                        Day {day}
+                      </span>
+
+                      <div className="flex justify-center my-2">
+                        {isDone ? (
+                          <CheckCircle className="w-5 h-5 text-emerald-400" />
+                        ) : isNext ? (
+                          <Gift className="w-5 h-5 text-[#F4A6C1]" />
+                        ) : (
+                          <Lock className="w-5 h-5 text-slate-600" />
+                        )}
+                      </div>
+
+                      <span className={`block text-[11px] font-black font-mono break-words ${
+                        isDone
+                          ? 'text-emerald-400'
+                          : isNext
+                            ? 'text-[#F4A6C1]'
+                            : 'text-slate-400'
+                      }`}>
+                        +{formatDoge(STREAK_REWARD_KOINU[day])}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-col items-center space-y-4">
+                {streakCheckedToday && (
+                  <div className="w-full max-w-sm bg-black border border-slate-800 p-4 rounded-xl text-center space-y-1">
+                    <div className="flex items-center justify-center space-x-2 text-emerald-400 text-sm font-bold">
+                      <CheckCircle className="w-4 h-4" />
+                      <span>You have checked in today</span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Next check-in available in {formatDuration(resetSeconds)} (00:00 UTC).
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleStreakCheckin}
+                  disabled={!canStreakCheckin}
+                  className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
+                >
+                  {isCheckingIn || (streakLoading && streakInfo === null)
+                    ? <RefreshCw className="w-5 h-5 animate-spin" />
+                    : <CalendarCheck className="w-5 h-5" />
+                  }
+                  <span>{streakButtonLabel}</span>
+                </button>
+
+                {streakMsg && (
+                  <p className={`text-sm font-bold font-['Space_Grotesk',sans-serif] text-center ${
+                    streakMsgIsError ? 'text-red-400' : 'text-emerald-400'
+                  }`}>
+                    {streakMsg}
+                  </p>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-500 text-center">
+                DEMO ledger only. No real DOGE is paid out. Streak progress and rewards are controlled by the server. The streak resets if you miss a day.
+              </p>
             </div>
           )}
 
@@ -3284,4 +3653,3 @@ export default function App() {
     </div>
   );
 }
-
