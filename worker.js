@@ -1571,6 +1571,171 @@ async function handleWheelHistory(env, uid) {
 }
 
 // ==========================================
+// ADMIN DAILY STATS (UTC day)
+// ==========================================
+
+async function getAdminDailyStats(env) {
+  const today = getUtcDate();
+
+  const [
+    claims,
+    wheelPrizes,
+    wheelBuys,
+    streaks,
+    wdPending,
+    wdRequested,
+    wdApproved,
+    wdRejected,
+    balances,
+    faucetReserve,
+    wheelReserve
+  ] = await Promise.all([
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM claims
+      WHERE date(claimed_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(prize_koinu), 0) AS total, COUNT(*) AS count
+      FROM wheel_spins
+      WHERE utc_date = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(cost_koinu), 0) AS total, COUNT(*) AS count
+      FROM wheel_purchases
+      WHERE date(created_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(
+          CASE current_day
+            WHEN 1 THEN 1000
+            WHEN 2 THEN 2000
+            WHEN 3 THEN 3000
+            WHEN 4 THEN 4000
+            WHEN 5 THEN 5000
+            WHEN 6 THEN 6000
+            WHEN 7 THEN 7000
+            ELSE 0
+          END
+        ), 0) AS total,
+        COUNT(*) AS count
+      FROM daily_streaks
+      WHERE last_checkin_date = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM withdrawals
+      WHERE status = 'pending'
+    `).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM withdrawals
+      WHERE date(created_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM withdrawals
+      WHERE status = 'approved'
+        AND date(processed_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM withdrawals
+      WHERE status = 'rejected'
+        AND date(processed_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS count
+      FROM users
+    `).first(),
+
+    env.DB.prepare(`
+      SELECT available_koinu, payouts_enabled
+      FROM faucet_reserve
+      WHERE id = 1
+    `).first(),
+
+    env.DB.prepare(`
+      SELECT available_koinu, locked_koinu, payouts_enabled
+      FROM wheel_reserve
+      WHERE id = 1
+    `).first()
+  ]);
+
+  const sumCount = row => ({
+    koinu: Number(row?.total || 0),
+    count: Number(row?.count || 0)
+  });
+
+  // Requires users.created_at. If the column does not exist yet,
+  // the value is returned as null instead of failing the whole request.
+  let registeredToday = null;
+
+  try {
+    const row = await env.DB.prepare(`
+      SELECT COUNT(*) AS total
+      FROM users
+      WHERE date(created_at) = ?
+    `).bind(today).first();
+
+    registeredToday = Number(row?.total || 0);
+  } catch {
+    registeredToday = null;
+  }
+
+  const claimsKoinu = Number(claims?.total || 0);
+  const wheelPrizesKoinu = Number(wheelPrizes?.total || 0);
+  const streakKoinu = Number(streaks?.total || 0);
+  const incomeKoinu = Number(wheelBuys?.total || 0);
+  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu;
+
+  return {
+    success: true,
+    date: today,
+    registered_today: registeredToday,
+    income_koinu: incomeKoinu,
+    payouts_koinu: payoutsKoinu,
+    profit_koinu: incomeKoinu - payoutsKoinu,
+    breakdown: {
+      claims_koinu: claimsKoinu,
+      claims_count: Number(claims?.count || 0),
+      wheel_prizes_koinu: wheelPrizesKoinu,
+      wheel_spins_count: Number(wheelPrizes?.count || 0),
+      streak_koinu: streakKoinu,
+      streak_checkins_count: Number(streaks?.count || 0),
+      wheel_purchases_koinu: incomeKoinu,
+      wheel_purchases_count: Number(wheelBuys?.count || 0)
+    },
+    withdrawals: {
+      pending: sumCount(wdPending),
+      requested_today: sumCount(wdRequested),
+      approved_today: sumCount(wdApproved),
+      rejected_today: sumCount(wdRejected)
+    },
+    liability: {
+      user_balances_koinu: Number(balances?.total || 0),
+      users_count: Number(balances?.count || 0)
+    },
+    reserves: {
+      faucet_available_koinu: Number(faucetReserve?.available_koinu || 0),
+      faucet_payouts_enabled: Number(faucetReserve?.payouts_enabled) === 1,
+      wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
+      wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
+      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1
+    }
+  };
+}
+
+// ==========================================
 // MAIN API ROUTES
 // ==========================================
 
@@ -2155,6 +2320,15 @@ async function handleRequest(request, env, json) {
       success: true,
       withdrawals: result.results || []
     });
+  }
+
+  // ADMIN: DAILY STATS
+
+  if (path === "/api/admin/stats" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+
+    return json(await getAdminDailyStats(env));
   }
 
   // ADMIN: LIST WITHDRAWALS
