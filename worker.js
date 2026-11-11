@@ -8,6 +8,10 @@ const MIN_WITHDRAWAL_KOINU = 100000000;
 const MAX_REQUEST_BODY_BYTES = 16384;
 const MAX_FIREBASE_TOKEN_LENGTH = 8192;
 
+const EMAIL_CODE_EXPIRY_MINUTES = 10;
+const EMAIL_CODE_RESEND_SECONDS = 60;
+const EMAIL_CODE_MAX_ATTEMPTS = 5;
+
 const PLAN_CONFIG = {
   FREE: {
     amount_koinu: 50000,
@@ -222,9 +226,11 @@ async function verifyFirebaseToken(token) {
   return claims;
 }
 
-// By default, every authenticated API route requires verified email.
-// Only /api/auth/sync is allowed to work before email verification.
-async function authenticate(request, options = {}) {
+// ==========================================
+// AUTHENTICATION + D1 EMAIL VERIFICATION
+// ==========================================
+
+async function authenticate(request, env, options = {}) {
   const authorization = request.headers.get("Authorization");
 
   if (
@@ -242,9 +248,23 @@ async function authenticate(request, options = {}) {
 
   const user = await verifyFirebaseToken(token);
 
+  if (options.requireVerifiedEmail === false) {
+    return user;
+  }
+
+  const account = await env.DB.prepare(`
+    SELECT email, email_verified
+    FROM users
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  if (!account) {
+    throw new HttpError(403, "ACCOUNT_NOT_SYNCHRONIZED");
+  }
+
   if (
-    options.requireVerifiedEmail !== false &&
-    user.email_verified !== true
+    account.email.toLowerCase() !== user.email.toLowerCase() ||
+    Number(account.email_verified) !== 1
   ) {
     throw new HttpError(403, "EMAIL_NOT_VERIFIED");
   }
@@ -269,6 +289,10 @@ async function requireAdmin(user, env) {
 
   return account;
 }
+
+// ==========================================
+// REQUEST HELPERS
+// ==========================================
 
 async function readJson(request) {
   const contentLength = Number(request.headers.get("Content-Length") || 0);
@@ -319,6 +343,334 @@ function generateRefCode() {
   }
 
   return code;
+}
+
+// ==========================================
+// EMAIL VERIFICATION
+// ==========================================
+
+function generateEmailCode() {
+  const bytes = new Uint32Array(1);
+  crypto.getRandomValues(bytes);
+
+  return String(bytes[0] % 1000000).padStart(6, "0");
+}
+
+async function hashEmailCode(env, uid, email, code) {
+  if (!env.BREVO_API_KEY) {
+    throw new HttpError(503, "Email verification is not configured");
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.BREVO_API_KEY),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(
+      `dogedrip-email-verification-v1:${uid}:${email.toLowerCase()}:${code}`
+    )
+  );
+
+  return Array.from(new Uint8Array(signature))
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function safeHashCompare(a, b) {
+  if (
+    typeof a !== "string" ||
+    typeof b !== "string" ||
+    a.length !== b.length
+  ) {
+    return false;
+  }
+
+  let difference = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+
+  return difference === 0;
+}
+
+async function sendBrevoVerificationEmail(env, email, code) {
+  if (!env.BREVO_API_KEY) {
+    throw new HttpError(503, "Email verification is not configured");
+  }
+
+  const response = await fetch(
+    "https://api.brevo.com/v3/smtp/email",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": env.BREVO_API_KEY
+      },
+      body: JSON.stringify({
+        sender: {
+          name: "DogeDrip",
+          email: "support.dogedrip@gmail.com"
+        },
+        to: [{ email }],
+        subject: "Your DogeDrip verification code",
+        textContent:
+          `Your DogeDrip verification code is ${code}. ` +
+          "It expires in 10 minutes. Do not share this code.",
+        htmlContent: `
+          <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#111">
+            <h2>Verify your DogeDrip email</h2>
+            <p>Use the verification code below to activate your account:</p>
+            <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:20px;background:#f4f4f4;text-align:center">
+              ${code}
+            </div>
+            <p>This code expires in 10 minutes.</p>
+            <p>If you did not request this code, you can ignore this email.</p>
+          </div>
+        `
+      })
+    }
+  );
+
+  if (!response.ok) {
+    throw new HttpError(502, "Could not send verification email");
+  }
+}
+
+async function handleSendEmailCode(env, user) {
+  const account = await env.DB.prepare(`
+    SELECT email, email_verified
+    FROM users
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  if (!account) {
+    throw new HttpError(404, "User not synchronized");
+  }
+
+  if (account.email.toLowerCase() !== user.email.toLowerCase()) {
+    throw new HttpError(403, "Account email mismatch");
+  }
+
+  if (Number(account.email_verified) === 1) {
+    return {
+      success: true,
+      already_verified: true,
+      message: "Email already verified"
+    };
+  }
+
+  const code = generateEmailCode();
+  const codeHash = await hashEmailCode(
+    env,
+    user.sub,
+    account.email,
+    code
+  );
+
+  const result = await env.DB.prepare(`
+    INSERT INTO email_verification_codes (
+      uid,
+      code_hash,
+      expires_at,
+      attempts,
+      last_sent_at
+    )
+    VALUES (
+      ?,
+      ?,
+      datetime('now', '+10 minutes'),
+      0,
+      CURRENT_TIMESTAMP
+    )
+    ON CONFLICT(uid) DO UPDATE SET
+      code_hash = excluded.code_hash,
+      expires_at = excluded.expires_at,
+      attempts = 0,
+      last_sent_at = CURRENT_TIMESTAMP,
+      created_at = CURRENT_TIMESTAMP
+    WHERE datetime(email_verification_codes.last_sent_at)
+      <= datetime('now', '-60 seconds')
+    RETURNING uid
+  `).bind(user.sub, codeHash).first();
+
+  if (!result) {
+    throw new HttpError(
+      429,
+      "Please wait before requesting another verification code."
+    );
+  }
+
+  try {
+    await sendBrevoVerificationEmail(env, account.email, code);
+  } catch (error) {
+    await env.DB.prepare(`
+      DELETE FROM email_verification_codes
+      WHERE uid = ? AND code_hash = ?
+    `).bind(user.sub, codeHash).run();
+
+    throw error;
+  }
+
+  return {
+    success: true,
+    message: "Verification code sent",
+    expires_in_seconds: EMAIL_CODE_EXPIRY_MINUTES * 60,
+    resend_after_seconds: EMAIL_CODE_RESEND_SECONDS
+  };
+}
+
+async function handleVerifyEmailCode(env, user, body) {
+  const code =
+    typeof body.code === "string"
+      ? body.code.trim()
+      : "";
+
+  if (!/^\d{6}$/.test(code)) {
+    throw new HttpError(400, "Enter a valid 6-digit verification code");
+  }
+
+  const account = await env.DB.prepare(`
+    SELECT email, email_verified
+    FROM users
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  if (!account) {
+    throw new HttpError(404, "User not synchronized");
+  }
+
+  if (account.email.toLowerCase() !== user.email.toLowerCase()) {
+    throw new HttpError(403, "Account email mismatch");
+  }
+
+  if (Number(account.email_verified) === 1) {
+    return {
+      success: true,
+      already_verified: true,
+      email_verified: true
+    };
+  }
+
+  const record = await env.DB.prepare(`
+    SELECT code_hash, expires_at, attempts
+    FROM email_verification_codes
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  if (!record) {
+    throw new HttpError(400, "No active verification code. Request a new code.");
+  }
+
+  if (Number(record.attempts) >= EMAIL_CODE_MAX_ATTEMPTS) {
+    await env.DB.prepare(`
+      DELETE FROM email_verification_codes
+      WHERE uid = ?
+    `).bind(user.sub).run();
+
+    throw new HttpError(429, "Too many attempts. Request a new code.");
+  }
+
+  const expiry = Date.parse(`${record.expires_at.replace(" ", "T")}Z`);
+
+  if (!Number.isFinite(expiry) || expiry <= Date.now()) {
+    await env.DB.prepare(`
+      DELETE FROM email_verification_codes
+      WHERE uid = ?
+    `).bind(user.sub).run();
+
+    throw new HttpError(400, "Verification code expired. Request a new code.");
+  }
+
+  const submittedHash = await hashEmailCode(
+    env,
+    user.sub,
+    account.email,
+    code
+  );
+
+  if (!safeHashCompare(submittedHash, record.code_hash)) {
+    const attemptResult = await env.DB.prepare(`
+      UPDATE email_verification_codes
+      SET attempts = attempts + 1
+      WHERE uid = ?
+        AND code_hash = ?
+        AND attempts < ?
+        AND datetime(expires_at) > CURRENT_TIMESTAMP
+      RETURNING attempts
+    `).bind(
+      user.sub,
+      record.code_hash,
+      EMAIL_CODE_MAX_ATTEMPTS
+    ).first();
+
+    const attempts = Number(attemptResult?.attempts || EMAIL_CODE_MAX_ATTEMPTS);
+
+    if (attempts >= EMAIL_CODE_MAX_ATTEMPTS) {
+      await env.DB.prepare(`
+        DELETE FROM email_verification_codes
+        WHERE uid = ? AND code_hash = ?
+      `).bind(user.sub, record.code_hash).run();
+
+      throw new HttpError(429, "Too many attempts. Request a new code.");
+    }
+
+    throw new HttpError(400, "Incorrect verification code", {
+      attempts_remaining: Math.max(0, EMAIL_CODE_MAX_ATTEMPTS - attempts)
+    });
+  }
+
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE users
+      SET
+        email_verified = 1,
+        email_verified_at = CURRENT_TIMESTAMP
+      WHERE uid = ?
+        AND lower(email) = lower(?)
+        AND email_verified = 0
+        AND EXISTS (
+          SELECT 1
+          FROM email_verification_codes
+          WHERE uid = ?
+            AND code_hash = ?
+            AND attempts < ?
+            AND datetime(expires_at) > CURRENT_TIMESTAMP
+        )
+    `).bind(
+      user.sub,
+      account.email,
+      user.sub,
+      record.code_hash,
+      EMAIL_CODE_MAX_ATTEMPTS
+    ),
+
+    env.DB.prepare(`
+      DELETE FROM email_verification_codes
+      WHERE uid = ?
+        AND code_hash = ?
+        AND changes() = 1
+    `).bind(user.sub, record.code_hash)
+  ]);
+
+  if (Number(results[0]?.meta?.changes || 0) !== 1) {
+    throw new HttpError(
+      400,
+      "Verification failed. Request a new code."
+    );
+  }
+
+  return {
+    success: true,
+    message: "Email verified successfully",
+    email_verified: true
+  };
 }
 
 // ==========================================
@@ -473,6 +825,16 @@ async function syncUser(env, user, referredByCode) {
     referrerCode = referrer ? referrer.ref_code : null;
   }
 
+  const existing = await env.DB.prepare(`
+    SELECT email
+    FROM users
+    WHERE uid = ?
+  `).bind(user.sub).first();
+
+  const emailChanged =
+    existing &&
+    existing.email.toLowerCase() !== user.email.toLowerCase();
+
   let synchronized = false;
 
   for (let attempt = 0; attempt < 5; attempt++) {
@@ -482,7 +844,15 @@ async function syncUser(env, user, referredByCode) {
         VALUES (?, ?, ?, ?)
         ON CONFLICT(uid) DO UPDATE SET
           email = excluded.email,
-          ref_code = COALESCE(users.ref_code, excluded.ref_code)
+          ref_code = COALESCE(users.ref_code, excluded.ref_code),
+          email_verified = CASE
+            WHEN lower(users.email) != lower(excluded.email) THEN 0
+            ELSE users.email_verified
+          END,
+          email_verified_at = CASE
+            WHEN lower(users.email) != lower(excluded.email) THEN NULL
+            ELSE users.email_verified_at
+          END
       `).bind(
         user.sub,
         user.email,
@@ -503,8 +873,19 @@ async function syncUser(env, user, referredByCode) {
     throw new HttpError(500, "Could not generate a unique referral code");
   }
 
+  if (emailChanged) {
+    await env.DB.prepare(`
+      DELETE FROM email_verification_codes
+      WHERE uid = ?
+    `).bind(user.sub).run();
+  }
+
   return env.DB.prepare(`
-    SELECT ref_code, referred_by, plan
+    SELECT
+      ref_code,
+      referred_by,
+      plan,
+      email_verified
     FROM users
     WHERE uid = ?
   `).bind(user.sub).first();
@@ -1568,8 +1949,7 @@ async function handleWheelHistory(env, uid) {
     spins: spins.results || [],
     purchases: purchases.results || []
   };
-}
-
+} 
 // ==========================================
 // ADMIN DAILY STATS (UTC day)
 // ==========================================
@@ -1676,8 +2056,6 @@ async function getAdminDailyStats(env) {
     count: Number(row?.count || 0)
   });
 
-  // Requires users.created_at. If the column does not exist yet,
-  // the value is returned as null instead of failing the whole request.
   let registeredToday = null;
 
   try {
@@ -1785,11 +2163,10 @@ async function handleRequest(request, env, json) {
   }
 
   // AUTH SYNC
-  // Unverified users may synchronize their account only.
-  // All benefit-related routes still require verified email.
+  // Account synchronization is allowed before email verification.
 
   if (path === "/api/auth/sync" && method === "POST") {
-    const user = await authenticate(request, {
+    const user = await authenticate(request, env, {
       requireVerifiedEmail: false
     });
 
@@ -1813,14 +2190,36 @@ async function handleRequest(request, env, json) {
       ref_code: profile.ref_code,
       referred_by: profile.referred_by,
       plan: profile.plan || "FREE",
-      email_verified: user.email_verified === true
+      email_verified: Number(profile.email_verified) === 1
     });
+  }
+
+  // SEND EMAIL VERIFICATION CODE
+
+  if (path === "/api/email/send-code" && method === "POST") {
+    const user = await authenticate(request, env, {
+      requireVerifiedEmail: false
+    });
+
+    return json(await handleSendEmailCode(env, user));
+  }
+
+  // VERIFY EMAIL CODE
+
+  if (path === "/api/email/verify-code" && method === "POST") {
+    const user = await authenticate(request, env, {
+      requireVerifiedEmail: false
+    });
+
+    const body = await readJson(request);
+
+    return json(await handleVerifyEmailCode(env, user, body));
   }
 
   // REFERRAL STATS
 
   if (path === "/api/referrals" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     const account = await env.DB.prepare(`
       SELECT ref_code, referred_by
@@ -1855,27 +2254,27 @@ async function handleRequest(request, env, json) {
   // LUCKY WHEEL ROUTES
 
   if (path === "/api/wheel/state" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     return json(await handleWheelState(env, user.sub));
   }
 
   if (path === "/api/wheel/spin" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const body = await readJson(request);
 
     return json(await handleWheelSpin(env, user.sub, body));
   }
 
   if (path === "/api/wheel/buy" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const body = await readJson(request);
 
     return json(await handleWheelBuy(env, user.sub, body));
   }
 
   if (path === "/api/wheel/history" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     return json(await handleWheelHistory(env, user.sub));
   }
@@ -1885,7 +2284,7 @@ async function handleRequest(request, env, json) {
   // ==========================================
 
   if (path === "/api/claim" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const body = await readJson(request);
     const requestId = getRequestId(body);
     const plan = await getUserPlan(env, user.sub);
@@ -2034,10 +2433,6 @@ async function handleRequest(request, env, json) {
       );
     }
 
-    // The batch is atomic and its last statement aborts it unless every step
-    // changed exactly one row. D1 also counts rows changed by triggers (e.g. the
-    // faucet_reserve deduction on claims), so meta.changes can legitimately be
-    // greater than 1 here. Only treat "no row changed" as a failure.
     if (
       results[0].meta.changes < 1 ||
       results[1].meta.changes < 1 ||
@@ -2066,7 +2461,7 @@ async function handleRequest(request, env, json) {
   // CLAIM HISTORY
 
   if (path === "/api/claims" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     const result = await env.DB.prepare(`
       SELECT id, amount_koinu, claimed_at
@@ -2087,7 +2482,7 @@ async function handleRequest(request, env, json) {
   // ==========================================
 
   if (path === "/api/streak" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     return json({
       success: true,
@@ -2096,7 +2491,7 @@ async function handleRequest(request, env, json) {
   }
 
   if (path === "/api/streak/checkin" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     return json(
       await handleStreakCheckin(env, user.sub)
@@ -2106,7 +2501,7 @@ async function handleRequest(request, env, json) {
   // BALANCE
 
   if (path === "/api/balance" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const plan = await getUserPlan(env, user.sub);
     const account = await getAccount(env, user.sub, plan);
 
@@ -2136,7 +2531,7 @@ async function handleRequest(request, env, json) {
   // ==========================================
 
   if (path === "/api/withdrawals" && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const body = await readJson(request);
 
     const amount = body.amount_koinu;
@@ -2301,7 +2696,7 @@ async function handleRequest(request, env, json) {
   // USER WITHDRAWAL HISTORY
 
   if (path === "/api/withdrawals" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
 
     const result = await env.DB.prepare(`
       SELECT
@@ -2325,7 +2720,7 @@ async function handleRequest(request, env, json) {
   // ADMIN: DAILY STATS
 
   if (path === "/api/admin/stats" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     await requireAdmin(user, env);
 
     return json(await getAdminDailyStats(env));
@@ -2334,7 +2729,7 @@ async function handleRequest(request, env, json) {
   // ADMIN: LIST WITHDRAWALS
 
   if (path === "/api/admin/withdrawals" && method === "GET") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     await requireAdmin(user, env);
 
     const result = await env.DB.prepare(`
@@ -2368,7 +2763,7 @@ async function handleRequest(request, env, json) {
   );
 
   if (approveMatch && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     await requireAdmin(user, env);
 
     throw new HttpError(
@@ -2384,7 +2779,7 @@ async function handleRequest(request, env, json) {
   );
 
   if (rejectMatch && method === "POST") {
-    const user = await authenticate(request);
+    const user = await authenticate(request, env);
     const admin = await requireAdmin(user, env);
     const id = Number(rejectMatch[1]);
 
@@ -2564,3 +2959,4 @@ export default {
     }
   }
 };
+
