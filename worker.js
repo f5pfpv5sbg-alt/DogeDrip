@@ -1,19 +1,15 @@
 /**
  * DogeDrip API — Cloudflare Worker
  *
- * Baseline: the existing worker.js (health, auth sync, claim, claims, balance)
- * is preserved. Added:
- *   - POST /api/email/send-code   (Brevo, 6-digit code, 10 min TTL, 60 s resend)
- *   - POST /api/email/verify-code (server-side check, 5 attempts max)
- *   - GET  /api/email/status      (source of truth for the UI)
- *   - Email verification enforcement on /api/claim (backend, not UI)
- *   - Reset of email verification when the account email changes
+ * Baseline: health, auth sync, email verification, profile, claim,
+ * claims and balance.
+ * Added:
+ *   - GET /api/referrals
+ *   - Claim errors are logged safely and returned as HTTP 500.
  *
  * Secrets required:
- *   BREVO_API_KEY        (already configured)
- *   EMAIL_CODE_PEPPER    (new, min 16 chars; see INTEGRIMI.md)
- *
- * No code, hash pepper or secret is ever logged by this file.
+ *   BREVO_API_KEY
+ *   EMAIL_CODE_PEPPER (minimum 16 characters)
  */
 
 const PROJECT_ID = "dogedrip-3ebda";
@@ -24,7 +20,6 @@ const GOOGLE_KEYS_URL =
 const CLAIM_AMOUNT_KOINU = 100000;
 const COOLDOWN_SECONDS = 45;
 
-/* Email verification configuration */
 const CODE_TTL_SECONDS = 10 * 60;
 const RESEND_COOLDOWN_SECONDS = 60;
 const MAX_CODE_ATTEMPTS = 5;
@@ -34,15 +29,10 @@ const EMAIL_FROM_NAME = "DogeDrip";
 const CODE_HASH_PREFIX = "hmac-sha256:";
 const PEPPER_MIN_LENGTH = 16;
 
-/* Profile configuration */
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 const AVATAR_KEY_PREFIX = "avatars/";
 const UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
-/**
- * When true (default), /api/claim requires email_verified = 1 in D1.
- * Set to false only during a controlled rollout: it weakens the gate.
- */
 const EMAIL_VERIFICATION_ENFORCED = true;
 
 const headers = {
@@ -64,7 +54,6 @@ function fail(error, status, extra = {}) {
 function dbTimestampToMs(value) {
   if (typeof value !== "string" || !value) return NaN;
 
-  // SQLite CURRENT_TIMESTAMP format is UTC but not ISO ("YYYY-MM-DD HH:MM:SS").
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
     return Date.parse(`${value.replace(" ", "T")}Z`);
   }
@@ -82,10 +71,6 @@ function avatarObjectKey(uid) {
   return `${AVATAR_KEY_PREFIX}${uid}`;
 }
 
-/**
- * Detects the real image type from magic bytes. The client-provided
- * Content-Type is never trusted on its own.
- */
 export function detectImageType(buffer) {
   const bytes = new Uint8Array(buffer);
 
@@ -99,7 +84,12 @@ export function detectImageType(buffer) {
     return { ext: "png", contentType: "image/png" };
   }
 
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
     return { ext: "jpg", contentType: "image/jpeg" };
   }
 
@@ -120,7 +110,6 @@ export function detectImageType(buffer) {
   return null;
 }
 
-/** Badge is derived from the stored plan only; users cannot choose it. */
 export function planBadge(plan) {
   const normalized = String(plan ?? "").trim().toUpperCase();
   if (normalized === "PREMIUM") return "premium";
@@ -150,12 +139,16 @@ function buildProfile(row) {
   return {
     uid: row.uid,
     email: row.email,
-    username: row.username ? String(row.username) : deriveUsername(row.email, row.uid),
+    username: row.username
+      ? String(row.username)
+      : deriveUsername(row.email, row.uid),
     plan,
     badge: planBadge(plan),
     ref_code: row.ref_code || null,
     created_at: row.created_at || null,
-    member_since_iso: Number.isFinite(createdMs) ? new Date(createdMs).toISOString() : null,
+    member_since_iso: Number.isFinite(createdMs)
+      ? new Date(createdMs).toISOString()
+      : null,
     email_verified: Number(row.email_verified) === 1,
     email_verified_at: row.email_verified_at || null,
     avatar_url: row.avatar_url || null
@@ -164,12 +157,16 @@ function buildProfile(row) {
 
 export function generateVerificationCode() {
   const cryptoObject = globalThis.crypto;
-  if (!cryptoObject || typeof cryptoObject.getRandomValues !== "function") {
+
+  if (
+    !cryptoObject ||
+    typeof cryptoObject.getRandomValues !== "function"
+  ) {
     throw new Error("A secure random source is unavailable");
   }
 
   const range = 1000000;
-  const limit = Math.floor(0x100000000 / range) * range; // unbiased rejection sampling
+  const limit = Math.floor(0x100000000 / range) * range;
   const buffer = new Uint32Array(1);
   let value;
 
@@ -185,8 +182,14 @@ export async function hashVerificationCode(code, pepper) {
   if (typeof code !== "string" || !/^\d{6}$/.test(code)) {
     throw new Error("Invalid verification code format");
   }
-  if (typeof pepper !== "string" || pepper.length < PEPPER_MIN_LENGTH) {
-    throw new Error("EMAIL_CODE_PEPPER is missing or shorter than 16 characters");
+
+  if (
+    typeof pepper !== "string" ||
+    pepper.length < PEPPER_MIN_LENGTH
+  ) {
+    throw new Error(
+      "EMAIL_CODE_PEPPER is missing or shorter than 16 characters"
+    );
   }
 
   const key = await globalThis.crypto.subtle.importKey(
@@ -214,15 +217,20 @@ export function timingSafeEqualHex(a, b) {
   for (let i = 0; i < a.length; i += 1) {
     difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
+
   return difference === 0;
 }
 
 export async function verifyVerificationCode(code, storedHash, pepper) {
-  if (typeof storedHash !== "string" || !storedHash.startsWith(CODE_HASH_PREFIX)) {
+  if (
+    typeof storedHash !== "string" ||
+    !storedHash.startsWith(CODE_HASH_PREFIX)
+  ) {
     return false;
   }
 
   let candidate;
+
   try {
     candidate = await hashVerificationCode(code, pepper);
   } catch {
@@ -232,20 +240,29 @@ export async function verifyVerificationCode(code, storedHash, pepper) {
   return timingSafeEqualHex(candidate, storedHash);
 }
 
-export function evaluateSendWindow({ lastSentAt = null, now = Date.now() } = {}) {
-  if (!lastSentAt) return { allowed: true, retryAfterMs: 0 };
+export function evaluateSendWindow({
+  lastSentAt = null,
+  now = Date.now()
+} = {}) {
+  if (!lastSentAt) {
+    return { allowed: true, retryAfterMs: 0 };
+  }
 
   const last = dbTimestampToMs(lastSentAt);
-  if (!Number.isFinite(last)) return { allowed: true, retryAfterMs: 0 };
+  if (!Number.isFinite(last)) {
+    return { allowed: true, retryAfterMs: 0 };
+  }
 
   const elapsed = now - last;
+
   if (elapsed >= RESEND_COOLDOWN_SECONDS * 1000) {
     return { allowed: true, retryAfterMs: 0 };
   }
 
   return {
     allowed: false,
-    retryAfterMs: RESEND_COOLDOWN_SECONDS * 1000 - Math.max(elapsed, 0)
+    retryAfterMs:
+      RESEND_COOLDOWN_SECONDS * 1000 - Math.max(elapsed, 0)
   };
 }
 
@@ -304,11 +321,17 @@ export async function sendVerificationEmail({
   fromName = EMAIL_FROM_NAME
 } = {}) {
   if (typeof apiKey !== "string" || !apiKey) {
-    return { ok: false, status: 0, message: "BREVO_API_KEY is missing" };
+    return {
+      ok: false,
+      status: 0,
+      message: "BREVO_API_KEY is missing"
+    };
   }
+
   if (typeof to !== "string" || !to.includes("@")) {
     return { ok: false, status: 0, message: "Invalid recipient" };
   }
+
   if (typeof fetcher !== "function") {
     return { ok: false, status: 0, message: "fetch is unavailable" };
   }
@@ -322,6 +345,7 @@ export async function sendVerificationEmail({
   };
 
   let res;
+
   try {
     res = await fetcher(BREVO_API_URL, {
       method: "POST",
@@ -332,9 +356,12 @@ export async function sendVerificationEmail({
       },
       body: JSON.stringify(payload)
     });
-  } catch (error) {
-    // Never surface the provider error body: it can echo request content.
-    return { ok: false, status: 0, message: "Email provider unreachable" };
+  } catch {
+    return {
+      ok: false,
+      status: 0,
+      message: "Email provider unreachable"
+    };
   }
 
   if (!res || !res.ok) {
@@ -392,7 +419,9 @@ async function verifyFirebaseToken(token) {
   }
 
   const keysResponse = await fetch(GOOGLE_KEYS_URL);
-  if (!keysResponse.ok) throw new Error("Could not retrieve keys");
+  if (!keysResponse.ok) {
+    throw new Error("Could not retrieve keys");
+  }
 
   const keySet = await keysResponse.json();
   const jwk = keySet.keys.find(key => key.kid === header.kid);
@@ -438,6 +467,14 @@ function emailVerificationConfigured(env) {
   );
 }
 
+function generateReferralCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const random = new Uint8Array(8);
+  crypto.getRandomValues(random);
+
+  return Array.from(random, byte => alphabet[byte % alphabet.length]).join("");
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -471,6 +508,7 @@ export default {
     // AUTH SYNC
     if (url.pathname === "/api/auth/sync" && request.method === "POST") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -493,7 +531,6 @@ export default {
         `).bind(user.sub, user.email).run();
 
         if (emailChanged) {
-          // A new address must be verified again; pending codes are invalid.
           await env.DB.batch([
             env.DB.prepare(
               "UPDATE users SET email_verified = 0, email_verified_at = NULL WHERE uid = ?"
@@ -504,7 +541,6 @@ export default {
           ]);
         }
 
-        // Backfill a real username once, only if the column exists.
         if (previous && "username" in previous && !previous.username) {
           await env.DB.prepare(
             "UPDATE users SET username = ? WHERE uid = ?"
@@ -530,6 +566,7 @@ export default {
     // EMAIL VERIFICATION — SEND CODE
     if (url.pathname === "/api/email/send-code" && request.method === "POST") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -547,10 +584,14 @@ export default {
           "SELECT email, email_verified FROM users WHERE uid = ?"
         ).bind(user.sub).first();
 
-        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+        if (!account) {
+          return fail("User not synchronized", 404, { code: "not_synced" });
+        }
 
         if (Number(account.email_verified) === 1) {
-          return fail("Email is already verified", 409, { code: "already_verified" });
+          return fail("Email is already verified", 409, {
+            code: "already_verified"
+          });
         }
 
         const existing = await env.DB.prepare(
@@ -566,16 +607,23 @@ export default {
         if (!window.allowed) {
           return fail("Please wait before requesting a new code", 429, {
             code: "resend_too_soon",
-            retry_after_seconds: Math.max(1, Math.ceil(window.retryAfterMs / 1000))
+            retry_after_seconds: Math.max(
+              1,
+              Math.ceil(window.retryAfterMs / 1000)
+            )
           });
         }
 
         const code = generateVerificationCode();
-        const codeHash = await hashVerificationCode(code, env.EMAIL_CODE_PEPPER);
-        const expiresAt = new Date(now + CODE_TTL_SECONDS * 1000).toISOString();
+        const codeHash = await hashVerificationCode(
+          code,
+          env.EMAIL_CODE_PEPPER
+        );
+        const expiresAt = new Date(
+          now + CODE_TTL_SECONDS * 1000
+        ).toISOString();
         const sentAt = new Date(now).toISOString();
 
-        // Only the HMAC hash is stored; attempts reset on every new code.
         await env.DB.prepare(`
           INSERT INTO email_verification_codes
             (uid, code_hash, expires_at, attempts, last_sent_at, created_at)
@@ -586,7 +634,13 @@ export default {
             attempts = 0,
             last_sent_at = excluded.last_sent_at,
             created_at = excluded.created_at
-        `).bind(user.sub, codeHash, expiresAt, sentAt, sentAt).run();
+        `).bind(
+          user.sub,
+          codeHash,
+          expiresAt,
+          sentAt,
+          sentAt
+        ).run();
 
         const delivery = await sendVerificationEmail({
           apiKey: env.BREVO_API_KEY,
@@ -595,7 +649,6 @@ export default {
         });
 
         if (!delivery.ok) {
-          // Allow an immediate retry: no code was delivered, no cooldown burn.
           await env.DB.prepare(
             "DELETE FROM email_verification_codes WHERE uid = ?"
           ).bind(user.sub).run();
@@ -621,6 +674,7 @@ export default {
     // EMAIL VERIFICATION — VERIFY CODE
     if (url.pathname === "/api/email/verify-code" && request.method === "POST") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -634,16 +688,23 @@ export default {
       }
 
       let body;
+
       try {
         body = await request.json();
       } catch {
-        return fail("Invalid request body", 400, { code: "invalid_body" });
+        return fail("Invalid request body", 400, {
+          code: "invalid_body"
+        });
       }
 
-      const code = typeof body?.code === "string" ? body.code.trim() : "";
+      const code = typeof body?.code === "string"
+        ? body.code.trim()
+        : "";
 
       if (!/^\d{6}$/.test(code)) {
-        return fail("Enter the 6-digit code", 400, { code: "invalid_format" });
+        return fail("Enter the 6-digit code", 400, {
+          code: "invalid_format"
+        });
       }
 
       try {
@@ -651,7 +712,11 @@ export default {
           "SELECT email, email_verified FROM users WHERE uid = ?"
         ).bind(user.sub).first();
 
-        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+        if (!account) {
+          return fail("User not synchronized", 404, {
+            code: "not_synced"
+          });
+        }
 
         if (Number(account.email_verified) === 1) {
           return response({
@@ -710,9 +775,15 @@ export default {
           ).bind(user.sub, MAX_CODE_ATTEMPTS).run();
 
           const attemptsUsed = attempts + 1;
-          const attemptsLeft = Math.max(0, MAX_CODE_ATTEMPTS - attemptsUsed);
+          const attemptsLeft = Math.max(
+            0,
+            MAX_CODE_ATTEMPTS - attemptsUsed
+          );
 
-          if (attemptsLeft === 0 || updated.meta?.changes === 0) {
+          if (
+            attemptsLeft === 0 ||
+            updated.meta?.changes === 0
+          ) {
             await env.DB.prepare(
               "DELETE FROM email_verification_codes WHERE uid = ?"
             ).bind(user.sub).run();
@@ -760,9 +831,10 @@ export default {
       }
     }
 
-    // EMAIL VERIFICATION — STATUS (backend is the only source of truth)
+    // EMAIL VERIFICATION — STATUS
     if (url.pathname === "/api/email/status" && request.method === "GET") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -774,7 +846,11 @@ export default {
           "SELECT email, email_verified, email_verified_at FROM users WHERE uid = ?"
         ).bind(user.sub).first();
 
-        if (!account) return fail("User not synchronized", 404, { code: "not_synced" });
+        if (!account) {
+          return fail("User not synchronized", 404, {
+            code: "not_synced"
+          });
+        }
 
         const verified = Number(account.email_verified) === 1;
 
@@ -793,8 +869,12 @@ export default {
         ).bind(user.sub).first();
 
         const now = Date.now();
-        const expiresAtMs = record ? dbTimestampToMs(record.expires_at) : NaN;
-        const sentAtMs = record ? dbTimestampToMs(record.last_sent_at) : NaN;
+        const expiresAtMs = record
+          ? dbTimestampToMs(record.expires_at)
+          : NaN;
+        const sentAtMs = record
+          ? dbTimestampToMs(record.last_sent_at)
+          : NaN;
 
         const codeActive = Boolean(
           record &&
@@ -814,10 +894,18 @@ export default {
             : 0,
           resend_in_seconds:
             record && Number.isFinite(sentAtMs)
-              ? Math.max(0, Math.ceil((sentAtMs + RESEND_COOLDOWN_SECONDS * 1000 - now) / 1000))
+              ? Math.max(
+                  0,
+                  Math.ceil(
+                    (sentAtMs + RESEND_COOLDOWN_SECONDS * 1000 - now) / 1000
+                  )
+                )
               : 0,
           attempts_left: record
-            ? Math.max(0, MAX_CODE_ATTEMPTS - Number(record.attempts))
+            ? Math.max(
+                0,
+                MAX_CODE_ATTEMPTS - Number(record.attempts)
+              )
             : MAX_CODE_ATTEMPTS,
           max_attempts: MAX_CODE_ATTEMPTS
         });
@@ -826,9 +914,10 @@ export default {
       }
     }
 
-    // PROFILE (read-only; every field comes from D1)
+    // PROFILE
     if (url.pathname === "/api/profile" && request.method === "GET") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -836,12 +925,15 @@ export default {
       }
 
       try {
-        // SELECT * keeps this working before/after the profile migration.
         const row = await env.DB.prepare(
           "SELECT * FROM users WHERE uid = ?"
         ).bind(user.sub).first();
 
-        if (!row) return fail("User not synchronized", 404, { code: "not_synced" });
+        if (!row) {
+          return fail("User not synchronized", 404, {
+            code: "not_synced"
+          });
+        }
 
         return response({
           success: true,
@@ -853,9 +945,10 @@ export default {
       }
     }
 
-    // AVATAR UPLOAD (binary body, R2, never D1)
+    // AVATAR UPLOAD
     if (url.pathname === "/api/profile/avatar" && request.method === "POST") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -879,27 +972,43 @@ export default {
         });
       }
 
-      const declaredLength = Number(request.headers.get("content-length") || 0);
-      if (Number.isFinite(declaredLength) && declaredLength > AVATAR_MAX_BYTES) {
-        return fail("Image must be 2 MB or smaller", 413, { code: "file_too_large" });
+      const declaredLength = Number(
+        request.headers.get("content-length") || 0
+      );
+
+      if (
+        Number.isFinite(declaredLength) &&
+        declaredLength > AVATAR_MAX_BYTES
+      ) {
+        return fail("Image must be 2 MB or smaller", 413, {
+          code: "file_too_large"
+        });
       }
 
       let buffer;
+
       try {
         buffer = await request.arrayBuffer();
       } catch {
-        return fail("Could not read the uploaded file", 400, { code: "invalid_body" });
+        return fail("Could not read the uploaded file", 400, {
+          code: "invalid_body"
+        });
       }
 
       if (buffer.byteLength === 0) {
-        return fail("The uploaded file is empty", 400, { code: "empty_file" });
+        return fail("The uploaded file is empty", 400, {
+          code: "empty_file"
+        });
       }
 
       if (buffer.byteLength > AVATAR_MAX_BYTES) {
-        return fail("Image must be 2 MB or smaller", 413, { code: "file_too_large" });
+        return fail("Image must be 2 MB or smaller", 413, {
+          code: "file_too_large"
+        });
       }
 
       const detected = detectImageType(buffer);
+
       if (!detected) {
         return fail("The file is not a valid PNG, JPEG or WebP image", 415, {
           code: "invalid_image"
@@ -907,6 +1016,7 @@ export default {
       }
 
       const uid = user.sub;
+
       if (!UID_PATTERN.test(uid)) {
         return fail("Invalid account identifier", 400);
       }
@@ -921,7 +1031,9 @@ export default {
           }
         });
       } catch {
-        return fail("Could not store the image", 502, { code: "storage_failed" });
+        return fail("Could not store the image", 502, {
+          code: "storage_failed"
+        });
       }
 
       const avatarUrl = `/api/avatar/${uid}?v=${Date.now()}`;
@@ -931,7 +1043,6 @@ export default {
           "UPDATE users SET avatar_url = ? WHERE uid = ?"
         ).bind(avatarUrl, uid).run();
       } catch {
-        // Do not leave an orphan object behind if the column is missing.
         try {
           await env.AVATARS.delete(key);
         } catch {}
@@ -951,6 +1062,7 @@ export default {
     // AVATAR DELETE
     if (url.pathname === "/api/profile/avatar" && request.method === "DELETE") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -964,6 +1076,7 @@ export default {
       }
 
       const uid = user.sub;
+
       if (!UID_PATTERN.test(uid)) {
         return fail("Invalid account identifier", 400);
       }
@@ -971,7 +1084,9 @@ export default {
       try {
         await env.AVATARS.delete(avatarObjectKey(uid));
       } catch {
-        return fail("Could not remove the image", 502, { code: "storage_failed" });
+        return fail("Could not remove the image", 502, {
+          code: "storage_failed"
+        });
       }
 
       try {
@@ -991,8 +1106,11 @@ export default {
       });
     }
 
-    // PUBLIC AVATAR (served from R2; unguessable-by-uid only, no private data)
-    const avatarMatch = url.pathname.match(/^\/api\/avatar\/([A-Za-z0-9_-]{1,128})$/);
+    // PUBLIC AVATAR
+    const avatarMatch = url.pathname.match(
+      /^\/api\/avatar\/([A-Za-z0-9_-]{1,128})$/
+    );
+
     if (avatarMatch && request.method === "GET") {
       if (!env.AVATARS) {
         return fail("Avatar storage is not configured", 503, {
@@ -1001,10 +1119,15 @@ export default {
       }
 
       let object;
+
       try {
-        object = await env.AVATARS.get(avatarObjectKey(avatarMatch[1]));
+        object = await env.AVATARS.get(
+          avatarObjectKey(avatarMatch[1])
+        );
       } catch {
-        return fail("Could not load the image", 502, { code: "storage_failed" });
+        return fail("Could not load the image", 502, {
+          code: "storage_failed"
+        });
       }
 
       if (!object || !object.body) {
@@ -1014,16 +1137,101 @@ export default {
       const imageHeaders = new Headers(headers);
       imageHeaders.set(
         "Content-Type",
-        (object.httpMetadata && object.httpMetadata.contentType) || "application/octet-stream"
+        (object.httpMetadata && object.httpMetadata.contentType) ||
+          "application/octet-stream"
       );
       imageHeaders.set("Cache-Control", "public, max-age=300");
 
-      return new Response(object.body, { status: 200, headers: imageHeaders });
+      return new Response(object.body, {
+        status: 200,
+        headers: imageHeaders
+      });
+    }
+
+    // REFERRALS
+    if (url.pathname === "/api/referrals" && request.method === "GET") {
+      let user;
+
+      try {
+        user = await authenticate(request);
+      } catch {
+        return fail("Authentication required", 401);
+      }
+
+      try {
+        const account = await env.DB.prepare(`
+          SELECT ref_code, email_verified
+          FROM users
+          WHERE uid = ?
+        `).bind(user.sub).first();
+
+        if (!account) {
+          return fail("User not synchronized", 404, {
+            code: "not_synced"
+          });
+        }
+
+        if (Number(account.email_verified) !== 1) {
+          return fail("Verify your email first", 403, {
+            code: "email_verified_required"
+          });
+        }
+
+        let refCode = account.ref_code;
+
+        if (!refCode) {
+          let saved = false;
+
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            const candidate = generateReferralCode();
+
+            try {
+              await env.DB.prepare(`
+                UPDATE users
+                SET ref_code = ?
+                WHERE uid = ?
+                  AND (ref_code IS NULL OR ref_code = '')
+              `).bind(candidate, user.sub).run();
+
+              const updated = await env.DB.prepare(
+                "SELECT ref_code FROM users WHERE uid = ?"
+              ).bind(user.sub).first();
+
+              if (updated?.ref_code) {
+                refCode = updated.ref_code;
+                saved = true;
+                break;
+              }
+            } catch {
+              // A unique-code collision can be retried safely.
+            }
+          }
+
+          if (!saved) {
+            return fail("Could not generate referral code", 500);
+          }
+        }
+
+        const stats = await env.DB.prepare(`
+          SELECT COUNT(*) AS invited_count
+          FROM users
+          WHERE referred_by = ?
+        `).bind(refCode).first();
+
+        return response({
+          success: true,
+          ref_code: refCode,
+          invited_count: Number(stats?.invited_count || 0)
+        });
+      } catch {
+        return fail("Could not load referrals", 500);
+      }
     }
 
     // CLAIM
     if (url.pathname === "/api/claim" && request.method === "POST") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -1037,7 +1245,9 @@ export default {
           ).bind(user.sub).first();
 
           if (!account) {
-            return fail("User not synchronized", 404, { code: "not_synced" });
+            return fail("User not synchronized", 404, {
+              code: "not_synced"
+            });
           }
 
           if (Number(account.email_verified) !== 1) {
@@ -1068,10 +1278,7 @@ export default {
             INSERT INTO claims (uid, amount_koinu)
             SELECT ?, ?
             WHERE changes() = 1
-          `).bind(
-            user.sub,
-            CLAIM_AMOUNT_KOINU
-          )
+          `).bind(user.sub, CLAIM_AMOUNT_KOINU)
         ]);
 
         if (results[0].meta.changes !== 1) {
@@ -1080,12 +1287,16 @@ export default {
           ).bind(user.sub).first();
 
           if (!existing) {
-            return fail("User not synchronized", 404, { code: "not_synced" });
+            return fail("User not synchronized", 404, {
+              code: "not_synced"
+            });
           }
 
-          return fail("Cooldown active. Please wait before claiming again.", 429, {
-            code: "cooldown_active"
-          });
+          return fail(
+            "Cooldown active. Please wait before claiming again.",
+            429,
+            { code: "cooldown_active" }
+          );
         }
 
         const account = await env.DB.prepare(`
@@ -1101,14 +1312,20 @@ export default {
           balance_koinu: account.balance_koinu,
           last_claim_at: account.last_claim_at
         });
-      } catch {
-        return fail("Claim failed or authentication invalid", 401);
+      } catch (error) {
+        console.error(
+          "CLAIM_ENDPOINT_ERROR:",
+          error instanceof Error ? error.message : "Unknown error"
+        );
+
+        return fail("Claim processing failed", 500);
       }
     }
 
     // CLAIM HISTORY
     if (url.pathname === "/api/claims" && request.method === "GET") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
@@ -1136,6 +1353,7 @@ export default {
     // BALANCE
     if (url.pathname === "/api/balance" && request.method === "GET") {
       let user;
+
       try {
         user = await authenticate(request);
       } catch {
