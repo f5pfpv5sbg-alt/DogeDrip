@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
@@ -63,7 +62,9 @@ const auth = getAuth(firebaseApp);
 const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
-const TURNSTILE_SITE_KEY = "VENDOS_SITE_KEY_TUAJ_KETU"; // Zëvendësojeni me Site Key tuaj të Turnstile
+
+// >>> VETËM KËTË RRESHT DUHET TA NDRYSHOSH: vendos Site Key real nga Cloudflare → Turnstile
+const TURNSTILE_SITE_KEY = "SITE_KEY_I_VERTETE_KETU";
 
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
@@ -352,27 +353,30 @@ export default function App() {
   const turnstileWidgetIdRef = useRef(null);
 
   const renderTurnstileWidget = useCallback((containerId) => {
-    if (window.turnstile && document.getElementById(containerId)) {
-      try {
-        if (turnstileWidgetIdRef.current !== null) {
-          window.turnstile.reset(turnstileWidgetIdRef.current);
-        }
-        turnstileWidgetIdRef.current = window.turnstile.render(`#${containerId}`, {
-          sitekey: TURNSTILE_SITE_KEY,
-          theme: 'dark',
-          callback: (token) => {
-            setTurnstileToken(token);
-          },
-          'expired-callback': () => {
-            setTurnstileToken('');
-          },
-          'error-callback': () => {
-            setTurnstileToken('');
-          }
-        });
-      } catch (e) {
-        console.error("Turnstile render error:", e);
+    const el = document.getElementById(containerId);
+    if (!window.turnstile || !el) return false;
+
+    try {
+      if (turnstileWidgetIdRef.current !== null) {
+        try { window.turnstile.remove(turnstileWidgetIdRef.current); } catch {}
+        turnstileWidgetIdRef.current = null;
       }
+
+      el.innerHTML = '';
+      setTurnstileToken('');
+
+      turnstileWidgetIdRef.current = window.turnstile.render(el, {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: (token) => setTurnstileToken(token),
+        'expired-callback': () => setTurnstileToken(''),
+        'error-callback': () => setTurnstileToken('')
+      });
+
+      return true;
+    } catch (e) {
+      console.error('Turnstile render error:', e);
+      return false;
     }
   }, []);
 
@@ -387,14 +391,42 @@ export default function App() {
     }
   };
 
+  // Ngarko skriptën e Turnstile një herë
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (activeTab === 'faucet') renderTurnstileWidget('turnstile-faucet');
-      if (activeTab === 'wheel') renderTurnstileWidget('turnstile-wheel');
-      if (activeTab === 'streak') renderTurnstileWidget('turnstile-streak');
-    }, 150);
-    return () => clearTimeout(timer);
-  }, [activeTab, renderTurnstileWidget]);
+    if (window.turnstile) return;
+    if (document.querySelector('script[data-turnstile]')) return;
+
+    const s = document.createElement('script');
+    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+    s.async = true;
+    s.defer = true;
+    s.setAttribute('data-turnstile', '1');
+    document.head.appendChild(s);
+  }, []);
+
+  // Vizato widget-in vetëm kur div-i ekziston (pas login-it) dhe skripta është gati
+  useEffect(() => {
+    if (authLoading || !firebaseUser || !userProfile) return;
+    if (!['faucet', 'wheel', 'streak'].includes(activeTab)) return;
+
+    const containerId = `turnstile-${activeTab}`;
+    let tries = 0;
+
+    const timer = setInterval(() => {
+      tries++;
+      if (renderTurnstileWidget(containerId) || tries >= 40) {
+        clearInterval(timer);
+      }
+    }, 250);
+
+    return () => {
+      clearInterval(timer);
+      if (window.turnstile && turnstileWidgetIdRef.current !== null) {
+        try { window.turnstile.remove(turnstileWidgetIdRef.current); } catch {}
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, [activeTab, authLoading, firebaseUser, userProfile, renderTurnstileWidget]);
 
   const pendingReferralRef = useRef(null);
   const authEventRef = useRef(0);
@@ -4027,4 +4059,3 @@ export default function App() {
     </div>
   );
 }
-
