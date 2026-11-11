@@ -425,6 +425,9 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
   const [adminActionLoading, setAdminActionLoading] = useState(null);
+  const [adminStats, setAdminStats] = useState(null);
+  const [adminStatsLoading, setAdminStatsLoading] = useState(false);
+  const [adminStatsError, setAdminStatsError] = useState('');
 
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
 
@@ -635,6 +638,9 @@ export default function App() {
       setReferralError('');
       setClaimsError('');
       setAdminError('');
+      setAdminStats(null);
+      setAdminStatsError('');
+      setAdminStatsLoading(false);
       setReferralLoading(false);
       setClaimsLoading(false);
       setAdminLoading(false);
@@ -1041,6 +1047,43 @@ export default function App() {
       cancelled = true;
     };
   }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady || !isDemoAdmin) {
+      setAdminStats(null);
+      setAdminStatsError('');
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadAdminStats = async () => {
+      setAdminStatsLoading(true);
+      setAdminStatsError('');
+
+      try {
+        const data = await apiRequest('/api/admin/stats');
+
+        if (!cancelled) {
+          setAdminStats(data);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setAdminStatsError(error.message || 'Could not load daily statistics.');
+        }
+      } finally {
+        if (!cancelled) {
+          setAdminStatsLoading(false);
+        }
+      }
+    };
+
+    loadAdminStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser, apiReady, isDemoAdmin, accountSyncTick, apiRequest]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1688,6 +1731,20 @@ export default function App() {
       );
     } catch (error) {
       setAdminError(error.message || 'Could not refresh withdrawals.');
+    }
+  };
+
+  const refreshAdminStats = async () => {
+    setAdminStatsLoading(true);
+    setAdminStatsError('');
+
+    try {
+      const data = await apiRequest('/api/admin/stats');
+      setAdminStats(data);
+    } catch (error) {
+      setAdminStatsError(error.message || 'Could not refresh daily statistics.');
+    } finally {
+      setAdminStatsLoading(false);
     }
   };
 
@@ -3548,6 +3605,192 @@ export default function App() {
                 </div>
               )}
 
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                    Today's Statistics
+                  </h3>
+                  <span className={`text-xs font-mono ${adminAccentText}`}>
+                    {adminStats?.date ? `${adminStats.date} (UTC)` : 'UTC day'}
+                  </span>
+                </div>
+
+                {adminStatsError && (
+                  <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{adminStatsError}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <StatTile
+                    label="Users Registered Today"
+                    value={
+                      adminStats
+                        ? (adminStats.registered_today === null || adminStats.registered_today === undefined
+                            ? 'N/A'
+                            : adminStats.registered_today)
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats && (adminStats.registered_today === null || adminStats.registered_today === undefined)
+                        ? 'users.created_at missing'
+                        : undefined
+                    }
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="Won Today (Income)"
+                    value={
+                      adminStats
+                        ? `${formatDoge(adminStats.income_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.breakdown
+                        ? `${adminStats.breakdown.wheel_purchases_count} spin purchases`
+                        : undefined
+                    }
+                    valueCls="text-emerald-400"
+                  />
+                  <StatTile
+                    label="Lost Today (Paid Out)"
+                    value={
+                      adminStats
+                        ? `${formatDoge(adminStats.payouts_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.breakdown
+                        ? `Claims ${formatDoge(adminStats.breakdown.claims_koinu)} · Wheel ${formatDoge(adminStats.breakdown.wheel_prizes_koinu)} · Check-in ${formatDoge(adminStats.breakdown.streak_koinu)}`
+                        : undefined
+                    }
+                    valueCls="text-red-400"
+                  />
+                  <StatTile
+                    label="Profit Today"
+                    value={
+                      adminStats
+                        ? `${Number(adminStats.profit_koinu) > 0 ? '+' : ''}${formatDoge(adminStats.profit_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub="Income minus paid out"
+                    valueCls={
+                      adminStats && Number(adminStats.profit_koinu) < 0
+                        ? 'text-red-400'
+                        : 'text-emerald-400'
+                    }
+                  />
+                </div>
+
+                <h3 className="pt-2 text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                  Withdrawals & Reserves
+                </h3>
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <StatTile
+                    label="Pending Withdrawals"
+                    value={
+                      adminStats?.withdrawals
+                        ? `${formatDoge(adminStats.withdrawals.pending.koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.withdrawals
+                        ? `${adminStats.withdrawals.pending.count} waiting (all time)`
+                        : undefined
+                    }
+                    valueCls="text-yellow-400"
+                  />
+                  <StatTile
+                    label="Requested Today"
+                    value={
+                      adminStats?.withdrawals
+                        ? `${formatDoge(adminStats.withdrawals.requested_today.koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.withdrawals
+                        ? `${adminStats.withdrawals.requested_today.count} requests`
+                        : undefined
+                    }
+                  />
+                  <StatTile
+                    label="Approved / Rejected Today"
+                    value={
+                      adminStats?.withdrawals
+                        ? `${adminStats.withdrawals.approved_today.count} / ${adminStats.withdrawals.rejected_today.count}`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.withdrawals
+                        ? `${formatDoge(adminStats.withdrawals.approved_today.koinu)} / ${formatDoge(adminStats.withdrawals.rejected_today.koinu)} DOGE`
+                        : undefined
+                    }
+                  />
+                  <StatTile
+                    label="Total User Balances"
+                    value={
+                      adminStats?.liability
+                        ? `${formatDoge(adminStats.liability.user_balances_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.liability
+                        ? `${adminStats.liability.users_count} users total`
+                        : undefined
+                    }
+                    valueCls={adminAccentText}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <StatTile
+                    label="Faucet Reserve"
+                    value={
+                      adminStats?.reserves
+                        ? `${formatDoge(adminStats.reserves.faucet_available_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.reserves
+                        ? (adminStats.reserves.faucet_payouts_enabled ? 'Payouts enabled' : 'Payouts paused')
+                        : undefined
+                    }
+                    valueCls={
+                      adminStats?.reserves && !adminStats.reserves.faucet_payouts_enabled
+                        ? 'text-red-400'
+                        : 'text-white'
+                    }
+                  />
+                  <StatTile
+                    label="Wheel Reserve"
+                    value={
+                      adminStats?.reserves
+                        ? `${formatDoge(adminStats.reserves.wheel_available_koinu)} DOGE`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats?.reserves
+                        ? `Locked ${formatDoge(adminStats.reserves.wheel_locked_koinu)} · ${adminStats.reserves.wheel_payouts_enabled ? 'Payouts enabled' : 'Payouts paused'}`
+                        : undefined
+                    }
+                    valueCls={
+                      adminStats?.reserves && !adminStats.reserves.wheel_payouts_enabled
+                        ? 'text-red-400'
+                        : 'text-white'
+                    }
+                  />
+                </div>
+
+                <p className="text-[11px] text-slate-500">
+                  DEMO ledger, UTC day. Income = DOGE users spent on Lucky Wheel spins.
+                  Paid out = faucet claims + Lucky Wheel prizes + Daily Check-in rewards.
+                  Pending withdrawals and user balances are what the platform owes users.
+                  Subscriptions are not included yet.
+                </p>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
@@ -3584,8 +3827,11 @@ export default function App() {
 
                 <button
                   type="button"
-                  disabled={adminLoading || !apiReady}
-                  onClick={refreshAdminWithdrawals}
+                  disabled={adminLoading || adminStatsLoading || !apiReady}
+                  onClick={() => {
+                    refreshAdminWithdrawals();
+                    refreshAdminStats();
+                  }}
                   className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-2 disabled:opacity-50 ${
                     isBlueAdmin
                       ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
