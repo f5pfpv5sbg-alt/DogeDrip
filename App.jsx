@@ -411,6 +411,7 @@ export default function App() {
   const wheelRotationRef = useRef(0);
   const wheelSpinRequestIdRef = useRef(null);
   const wheelBuyRequestRef = useRef(null);
+  const [wheelCaps, setWheelCaps] = useState(null);
 
   const [streakInfo, setStreakInfo] = useState(null);
   const [streakLoading, setStreakLoading] = useState(false);
@@ -574,6 +575,13 @@ export default function App() {
       setWheelPacks(data.packs);
     }
 
+    if (
+      typeof data.wheel_enabled === 'boolean' &&
+      typeof data.can_buy === 'boolean'
+    ) {
+      setWheelCaps({ enabled: data.wheel_enabled, canBuy: data.can_buy });
+    }
+
     applyWheelSpins(data.spins);
     applyAccountData(data);
   }, [applyWheelSpins, applyAccountData]);
@@ -637,6 +645,7 @@ export default function App() {
       setWheelPurchases([]);
       setWheelError('');
       setWheelBackendMissing(false);
+      setWheelCaps(null);
       setWheelResult(null);
       setWheelMsg('');
       setWheelLoading(false);
@@ -2049,8 +2058,25 @@ export default function App() {
       ? wheelSpins.totalRemaining
       : null;
   const wheelNoSpins = wheelTotalSpins !== null && wheelTotalSpins <= 0;
+  const wheelSpinPaused =
+    wheelCaps !== null && !wheelCaps.enabled && !wheelNoSpins;
+  const cheapestPackKoinu =
+    wheelPacks.length > 0
+      ? Math.min(...wheelPacks.map(p => Number(p.price_koinu)))
+      : null;
+  const wheelBuyPaused =
+    wheelCaps !== null &&
+    !wheelCaps.canBuy &&
+    cheapestPackKoinu !== null &&
+    Number.isFinite(cheapestPackKoinu) &&
+    Math.round(demoBalance * KOINU) >= cheapestPackKoinu;
   const canSpin =
-    apiReady && wheelReady && !isSpinning && buyingPackId === null && !wheelNoSpins;
+    apiReady &&
+    wheelReady &&
+    !isSpinning &&
+    buyingPackId === null &&
+    !wheelNoSpins &&
+    !wheelSpinPaused;
 
   const spinButtonLabel = isSpinning
     ? 'Spinning...'
@@ -2062,7 +2088,9 @@ export default function App() {
           ? 'Loading wheel...'
           : wheelNoSpins
             ? 'No Spins Left'
-            : 'Spin Now';
+            : wheelSpinPaused
+              ? 'Wheel Paused'
+              : 'Spin Now';
 
   const streakCheckedToday = streakInfo ? streakInfo.checkedInToday : false;
   const streakCompletedDays = streakInfo
@@ -2743,6 +2771,20 @@ export default function App() {
                 </div>
               )}
 
+              {(wheelSpinPaused || wheelBuyPaused) && (
+                <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 rounded-xl text-sm flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    {wheelSpinPaused && wheelBuyPaused
+                      ? 'Spins and spin purchases are paused: the wheel payout reserve is empty or payouts are disabled on the server.'
+                      : wheelSpinPaused
+                        ? 'Spins are paused: the wheel payout reserve is empty or payouts are disabled on the server.'
+                        : 'Spin purchases are paused: the wheel payout reserve is empty or payouts are disabled on the server.'}
+                    {' '}Nothing was deducted from your balance.
+                  </span>
+                </div>
+              )}
+
               <PinkDivider />
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -2925,14 +2967,16 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => handleBuyPack(pack)}
-                            disabled={!apiReady || isSpinning || buyingPackId !== null || cannotAfford}
+                            disabled={!apiReady || isSpinning || buyingPackId !== null || cannotAfford || wheelBuyPaused}
                             className="w-full bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/40 text-[#F4A6C1] disabled:opacity-40 disabled:cursor-not-allowed font-black py-2 rounded-lg text-xs transition-colors font-['Space_Grotesk',sans-serif]"
                           >
                             {buyingPackId === pack.id
                               ? 'Buying...'
                               : cannotAfford
                                 ? 'Not enough balance'
-                                : 'Buy'}
+                                : wheelBuyPaused
+                                  ? 'Paused'
+                                  : 'Buy'}
                           </button>
                         </div>
                       );
