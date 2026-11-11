@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Shield,
@@ -62,6 +63,7 @@ const auth = getAuth(firebaseApp);
 const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
+const TURNSTILE_SITE_KEY = "VENDOS_SITE_KEY_TUAJ_KETU"; // Zëvendësojeni me Site Key tuaj të Turnstile
 
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
@@ -344,6 +346,55 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login');
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
+
+  // Turnstile state dhe refs
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const turnstileWidgetIdRef = useRef(null);
+
+  const renderTurnstileWidget = useCallback((containerId) => {
+    if (window.turnstile && document.getElementById(containerId)) {
+      try {
+        if (turnstileWidgetIdRef.current !== null) {
+          window.turnstile.reset(turnstileWidgetIdRef.current);
+        }
+        turnstileWidgetIdRef.current = window.turnstile.render(`#${containerId}`, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: 'dark',
+          callback: (token) => {
+            setTurnstileToken(token);
+          },
+          'expired-callback': () => {
+            setTurnstileToken('');
+          },
+          'error-callback': () => {
+            setTurnstileToken('');
+          }
+        });
+      } catch (e) {
+        console.error("Turnstile render error:", e);
+      }
+    }
+  }, []);
+
+  const resetTurnstile = () => {
+    setTurnstileToken('');
+    if (window.turnstile && turnstileWidgetIdRef.current !== null) {
+      try {
+        window.turnstile.reset(turnstileWidgetIdRef.current);
+      } catch (e) {
+        console.error("Turnstile reset error:", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (activeTab === 'faucet') renderTurnstileWidget('turnstile-faucet');
+      if (activeTab === 'wheel') renderTurnstileWidget('turnstile-wheel');
+      if (activeTab === 'streak') renderTurnstileWidget('turnstile-streak');
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [activeTab, renderTurnstileWidget]);
 
   const pendingReferralRef = useRef(null);
   const authEventRef = useRef(0);
@@ -1319,10 +1370,14 @@ export default function App() {
     try {
       const data = await apiRequest('/api/claim', {
         method: 'POST',
-        body: JSON.stringify({ request_id: requestId })
+        body: JSON.stringify({ 
+          request_id: requestId,
+          turnstile_token: turnstileToken 
+        })
       });
 
       claimRequestIdRef.current = null;
+      resetTurnstile();
 
       if (claimSession !== authEventRef.current) return;
 
@@ -1361,6 +1416,7 @@ export default function App() {
       if (typeof error.status === 'number') {
         claimRequestIdRef.current = null;
       }
+      resetTurnstile();
 
       if (claimSession !== authEventRef.current) return;
 
@@ -1446,13 +1502,18 @@ export default function App() {
     try {
       data = await apiRequest('/api/wheel/spin', {
         method: 'POST',
-        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current })
+        body: JSON.stringify({ 
+          request_id: wheelSpinRequestIdRef.current,
+          turnstile_token: turnstileToken 
+        })
       });
       wheelSpinRequestIdRef.current = null;
+      resetTurnstile();
     } catch (error) {
       if (typeof error.status === 'number') {
         wheelSpinRequestIdRef.current = null;
       }
+      resetTurnstile();
 
       if (error.status === 404) {
         setWheelBackendMissing(true);
@@ -1630,7 +1691,14 @@ export default function App() {
     const streakSession = authEventRef.current;
 
     try {
-      const data = await apiRequest('/api/streak/checkin', { method: 'POST' });
+      const data = await apiRequest('/api/streak/checkin', { 
+        method: 'POST',
+        body: JSON.stringify({
+          turnstile_token: turnstileToken
+        })
+      });
+
+      resetTurnstile();
 
       if (streakSession !== authEventRef.current) return;
 
@@ -1651,6 +1719,7 @@ export default function App() {
 
       await refreshStreak(streakSession);
     } catch (error) {
+      resetTurnstile();
       if (streakSession !== authEventRef.current) return;
 
       showStreakMessage(error.message || 'Could not complete check-in.', true);
@@ -2577,10 +2646,15 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Turnstile Widget për Faucet */}
+                <div className="my-2 flex justify-center">
+                  <div id="turnstile-faucet"></div>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleClaim}
-                  disabled={!canClaim}
+                  disabled={!canClaim || !turnstileToken}
                   className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   {isClaiming
@@ -2770,10 +2844,15 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Turnstile Widget për Daily Check-in */}
+                <div className="my-2 flex justify-center">
+                  <div id="turnstile-streak"></div>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleStreakCheckin}
-                  disabled={!canStreakCheckin}
+                  disabled={!canStreakCheckin || !turnstileToken}
                   className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   {isCheckingIn || (streakLoading && streakInfo === null)
@@ -2920,10 +2999,15 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Turnstile Widget për Lucky Wheel */}
+                <div className="my-2 flex justify-center">
+                  <div id="turnstile-wheel"></div>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleWheelSpin}
-                  disabled={!canSpin}
+                  disabled={!canSpin || !turnstileToken}
                   className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   {isSpinning
@@ -3943,3 +4027,4 @@ export default function App() {
     </div>
   );
 }
+
