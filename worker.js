@@ -1869,10 +1869,14 @@ async function handleRequest(request, env, json) {
       );
     }
 
+    // The batch is atomic and its last statement aborts it unless every step
+    // changed exactly one row. D1 also counts rows changed by triggers (e.g. the
+    // faucet_reserve deduction on claims), so meta.changes can legitimately be
+    // greater than 1 here. Only treat "no row changed" as a failure.
     if (
-      results[0].meta.changes !== 1 ||
-      results[1].meta.changes !== 1 ||
-      results[2].meta.changes !== 1
+      results[0].meta.changes < 1 ||
+      results[1].meta.changes < 1 ||
+      results[2].meta.changes < 1
     ) {
       throw new HttpError(500, "Claim transaction could not be confirmed");
     }
