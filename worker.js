@@ -1,3 +1,4 @@
+
 /**
  * DogeDrip API — Cloudflare Worker
  *
@@ -6,6 +7,7 @@
  * Added:
  *   - GET /api/referrals
  *   - Claim errors are logged safely and returned as HTTP 500.
+ *   - Health check diagnostics for required email secrets.
  *
  * Secrets required:
  *   BREVO_API_KEY
@@ -461,9 +463,9 @@ async function authenticate(request) {
 function emailVerificationConfigured(env) {
   return (
     typeof env.BREVO_API_KEY === "string" &&
-    env.BREVO_API_KEY.length > 0 &&
+    env.BREVO_API_KEY.trim().length > 0 &&
     typeof env.EMAIL_CODE_PEPPER === "string" &&
-    env.EMAIL_CODE_PEPPER.length >= PEPPER_MIN_LENGTH
+    env.EMAIL_CODE_PEPPER.trim().length >= PEPPER_MIN_LENGTH
   );
 }
 
@@ -495,7 +497,15 @@ export default {
           message: "DogeDrip API is connected",
           database: "connected",
           tables: result.results.map(row => row.name),
-          email_verification_configured: emailVerificationConfigured(env)
+          email_verification_configured: emailVerificationConfigured(env),
+          email_debug: {
+            brevo_exists:
+              typeof env.BREVO_API_KEY === "string" &&
+              env.BREVO_API_KEY.trim().length > 0,
+            pepper_exists:
+              typeof env.EMAIL_CODE_PEPPER === "string" &&
+              env.EMAIL_CODE_PEPPER.trim().length >= PEPPER_MIN_LENGTH
+          }
         });
       } catch {
         return response(
