@@ -25,7 +25,7 @@ const PLAN_CONFIG = {
     amount_koinu: 150000,
     cooldown_seconds: 0,
     daily_limit: 100,
-    free_wheel_spins: 2
+    free_wheel_spins: 3
   }
 };
 
