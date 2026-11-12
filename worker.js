@@ -6,8 +6,8 @@
  * claims and balance.
  * Added:
  *   - GET /api/referrals
- *   - Claim errors are logged safely and returned as HTTP 500.
- *   - Health check diagnostics for required email secrets.
+ *   - Safe claim error logging.
+ *   - Detailed email-secret binding diagnostics.
  *
  * Secrets required:
  *   BREVO_API_KEY
@@ -499,12 +499,16 @@ export default {
           tables: result.results.map(row => row.name),
           email_verification_configured: emailVerificationConfigured(env),
           email_debug: {
-            brevo_exists:
-              typeof env.BREVO_API_KEY === "string" &&
-              env.BREVO_API_KEY.trim().length > 0,
-            pepper_exists:
-              typeof env.EMAIL_CODE_PEPPER === "string" &&
-              env.EMAIL_CODE_PEPPER.trim().length >= PEPPER_MIN_LENGTH
+            brevo_type: typeof env.BREVO_API_KEY,
+            pepper_type: typeof env.EMAIL_CODE_PEPPER,
+            turnstile_type: typeof env.TURNSTILE_SECRET_KEY,
+            env_keys: Object.keys(env).filter(key =>
+              [
+                "BREVO_API_KEY",
+                "EMAIL_CODE_PEPPER",
+                "TURNSTILE_SECRET_KEY"
+              ].includes(key)
+            )
           }
         });
       } catch {
@@ -1213,7 +1217,7 @@ export default {
                 break;
               }
             } catch {
-              // A unique-code collision can be retried safely.
+              // Retry safely if a unique-code collision occurs.
             }
           }
 
