@@ -346,6 +346,19 @@ export default function App() {
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
   const [verifyMsg, setVerifyMsg] = useState('');
+  const [verificationResendSeconds, setVerificationResendSeconds] = useState(0);
+  const [verificationSending, setVerificationSending] = useState(false);
+  const [verificationChecking, setVerificationChecking] = useState(false);
+
+  useEffect(() => {
+    if (verificationResendSeconds <= 0) return undefined;
+
+    const timer = window.setInterval(() => {
+      setVerificationResendSeconds(current => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [verificationResendSeconds]);
 
   const pendingReferralRef = useRef(null);
   const authEventRef = useRef(0);
@@ -1207,8 +1220,11 @@ export default function App() {
 
       try {
         await sendEmailVerification(credential.user);
+        setVerificationResendSeconds(60);
+        setVerifyMsg('Verification email sent. Check your inbox and spam folder.');
       } catch (verifyError) {
         console.warn('Verification email could not be sent:', verifyError.message);
+        setVerifyMsg('Your account was created, but Firebase could not send the verification email. Use Resend verification email below.');
       }
 
       const localProfile = {
@@ -1267,37 +1283,57 @@ export default function App() {
   };
 
   const handleResendVerification = async () => {
+    if (!firebaseUser || verificationSending || verificationResendSeconds > 0) return;
+
     setVerifyMsg('');
+    setVerificationSending(true);
 
     try {
       await sendEmailVerification(firebaseUser);
+      setVerificationResendSeconds(60);
       setVerifyMsg('Verification email sent. Check your inbox and spam folder.');
     } catch (error) {
-      setVerifyMsg(error.message.replace('Firebase: ', ''));
+      if (error.code === 'auth/too-many-requests') {
+        setVerifyMsg('Too many attempts. Please wait a while before trying again.');
+      } else {
+        setVerifyMsg(error.message.replace('Firebase: ', ''));
+      }
+    } finally {
+      setVerificationSending(false);
     }
   };
 
   const handleVerifiedContinue = async () => {
+    if (!firebaseUser || verificationChecking) return;
+
     setVerifyMsg('');
+    setVerificationChecking(true);
 
     try {
       await firebaseUser.reload();
-      await firebaseUser.getIdToken(true);
+      const refreshedUser = auth.currentUser;
 
-      if (!auth.currentUser || !auth.currentUser.emailVerified) {
-        setVerifyMsg('Your email is not verified yet. Open the link in the email first.');
+      if (!refreshedUser || !refreshedUser.emailVerified) {
+        setVerifyMsg('Your email is not verified yet. Open the link in your email, then try again.');
         return;
       }
 
+      await refreshedUser.getIdToken(true);
+      setFirebaseUser(refreshedUser);
+      setVerificationResendSeconds(0);
       setAuthSyncRetry(value => value + 1);
     } catch (error) {
       setVerifyMsg(error.message.replace('Firebase: ', ''));
+    } finally {
+      setVerificationChecking(false);
     }
   };
 
   const handleSignOut = async () => {
     try {
       await signOut(auth);
+      setVerificationResendSeconds(0);
+      setVerifyMsg('');
       setActiveTab('faucet');
     } catch (error) {
       console.error('Sign out error:', error);
@@ -2125,26 +2161,33 @@ export default function App() {
           </h2>
 
           <p className="text-sm text-slate-400">
-            We sent a verification link to{' '}
-            <span className="text-white font-mono break-all">{firebaseUser.email}</span>.
-            Open the link, then press the button below.
+            Email verification is required before you can use DogeDrip or receive rewards.
+            Open the verification link sent to{' '}
+            <span className="text-white font-mono break-all">{firebaseUser.email}</span>,
+            then return here and confirm below. Check your spam folder if you cannot find it.
           </p>
 
           <button
             type="button"
+            disabled={verificationChecking}
             onClick={handleVerifiedContinue}
             className={PRIMARY_BTN}
           >
             <CheckCircle className="w-4 h-4" />
-            <span>I verified my email</span>
+            <span>{verificationChecking ? 'Checking verification...' : 'I verified my email'}</span>
           </button>
 
           <button
             type="button"
+            disabled={verificationSending || verificationResendSeconds > 0}
             onClick={handleResendVerification}
-            className="w-full bg-black hover:bg-slate-900 border border-slate-800 text-slate-300 font-bold py-3 rounded-xl transition-all text-sm font-['Space_Grotesk',sans-serif]"
+            className="w-full bg-black hover:bg-slate-900 border border-slate-800 text-slate-300 font-bold py-3 rounded-xl transition-all text-sm font-['Space_Grotesk',sans-serif] disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Resend verification email
+            {verificationSending
+              ? 'Sending verification email...'
+              : verificationResendSeconds > 0
+                ? `Resend available in ${verificationResendSeconds}s`
+                : 'Resend verification email'}
           </button>
 
           <button
