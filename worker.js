@@ -478,16 +478,34 @@ async function syncUser(env, user, referredByCode) {
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       await env.DB.prepare(`
-        INSERT INTO users (uid, email, ref_code, referred_by)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO users (
+          uid,
+          email,
+          ref_code,
+          referred_by,
+          email_verified,
+          email_verified_at
+        )
+        VALUES (
+          ?, ?, ?, ?, ?,
+          CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
+        )
         ON CONFLICT(uid) DO UPDATE SET
           email = excluded.email,
-          ref_code = COALESCE(users.ref_code, excluded.ref_code)
+          ref_code = COALESCE(users.ref_code, excluded.ref_code),
+          email_verified = excluded.email_verified,
+          email_verified_at = CASE
+            WHEN excluded.email_verified = 1
+              THEN COALESCE(users.email_verified_at, CURRENT_TIMESTAMP)
+            ELSE NULL
+          END
       `).bind(
         user.sub,
         user.email,
         generateRefCode(),
-        referrerCode
+        referrerCode,
+        user.email_verified === true ? 1 : 0,
+        user.email_verified === true ? 1 : 0
       ).run();
 
       synchronized = true;
@@ -1839,6 +1857,7 @@ async function handleRequest(request, env, json) {
         SELECT COUNT(*) AS total
         FROM users
         WHERE referred_by = ?
+          AND email_verified = 1
       `).bind(account.ref_code).first();
 
       invitedCount = row ? Number(row.total) : 0;
