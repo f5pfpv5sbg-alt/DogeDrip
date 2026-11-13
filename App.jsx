@@ -19,7 +19,8 @@ import {
   Gift,
   Sparkles,
   Ticket,
-  CalendarCheck
+  CalendarCheck,
+  UserCircle
 } from 'lucide-react';
 
 // FIREBASE
@@ -342,6 +343,10 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileUsernameInput, setProfileUsernameInput] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
@@ -476,6 +481,8 @@ export default function App() {
       throw new Error('Please log in first.');
     }
 
+    const requestBody = options.body;
+
     const token = await firebaseUser.getIdToken();
     let response;
 
@@ -483,7 +490,7 @@ export default function App() {
       response = await fetch(`${API_URL}${path}`, {
         ...options,
         headers: {
-          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(requestBody ? { 'Content-Type': 'application/json' } : {}),
           ...options.headers,
           Authorization: `Bearer ${token}`
         }
@@ -719,7 +726,8 @@ export default function App() {
             Authorization: `Bearer ${token}`
           },
           body: JSON.stringify({
-            referred_by: referredBy || null
+            referred_by: referredBy || null,
+            username: pendingUsernameRef.current || null
           })
         });
 
@@ -735,6 +743,7 @@ export default function App() {
 
         pendingReferralRef.current = null;
         setRefCode(syncData.ref_code || '');
+        if (syncData.username) setProfileUsernameInput(syncData.username);
 
         if (syncData.plan) {
           setPlanInfo(prev => ({
@@ -761,13 +770,16 @@ export default function App() {
 
         if (docSnap.exists()) {
           const data = docSnap.data();
-          setUserProfile({
+          const mergedProfile = {
             ...fallbackProfile,
             ...data,
             username: data.username || fallbackProfile.username
-          });
+          };
+          setUserProfile(mergedProfile);
+          setProfileUsernameInput(mergedProfile.username);
         } else {
           setUserProfile(fallbackProfile);
+          setProfileUsernameInput(fallbackProfile.username);
         }
       } catch (error) {
         console.warn('Firestore unavailable:', error.message);
@@ -775,6 +787,7 @@ export default function App() {
         if (!isMounted || eventId !== authEventRef.current) return;
 
         setUserProfile(fallbackProfile);
+        setProfileUsernameInput(fallbackProfile.username);
       }
 
       if (isMounted && eventId === authEventRef.current) {
@@ -788,6 +801,28 @@ export default function App() {
       unsubscribe();
     };
   }, [authSyncRetry]);
+
+  useEffect(() => {
+    if (activeTab !== 'profile' || !firebaseUser || !apiReady) return undefined;
+    let cancelled = false;
+    setProfileLoading(true);
+    setProfileError('');
+
+    apiRequest('/api/profile')
+      .then(data => {
+        if (cancelled || !data.profile) return;
+        setUserProfile(prev => ({ ...(prev || {}), ...data.profile }));
+        setProfileUsernameInput(data.profile.username || '');
+      })
+      .catch(error => {
+        if (!cancelled) setProfileError(error.message || 'Could not load profile.');
+      })
+      .finally(() => {
+        if (!cancelled) setProfileLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [activeTab, firebaseUser, apiReady, apiRequest]);
 
   useEffect(() => {
     if (!firebaseUser || !apiReady) return;
@@ -1175,6 +1210,7 @@ export default function App() {
 
     setIsLoadingAuth(true);
 
+    try {
     if (referralCode) {
       if (!REF_CODE_REGEX.test(referralCode)) {
         setAuthError('Invalid referral code format.');
@@ -1326,6 +1362,36 @@ export default function App() {
       setVerifyMsg(error.message.replace('Firebase: ', ''));
     } finally {
       setVerificationChecking(false);
+    }
+  };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    if (!firebaseUser || profileSaving) return;
+    const username = profileUsernameInput.trim();
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+      setProfileError('Username must be 3–20 characters: letters, numbers, or underscore.');
+      return;
+    }
+    setProfileSaving(true);
+    setProfileError('');
+    try {
+      const data = await apiRequest('/api/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ username })
+      });
+      const savedUsername = data.profile?.username || username;
+      setProfileUsernameInput(savedUsername);
+      setUserProfile(prev => ({ ...(prev || {}), username: savedUsername }));
+      try {
+        await setDoc(doc(dbStore, 'users', firebaseUser.uid), { username: savedUsername }, { merge: true });
+      } catch (firestoreError) {
+        console.warn('Firestore profile mirror could not be updated:', firestoreError.message);
+      }
+    } catch (error) {
+      setProfileError(error.message || 'Could not update your profile.');
+    } finally {
+      setProfileSaving(false);
     }
   };
 
@@ -1703,7 +1769,9 @@ export default function App() {
     const streakSession = authEventRef.current;
 
     try {
-      const data = await apiRequest('/api/streak/checkin', { method: 'POST' });
+      const data = await apiRequest('/api/streak/checkin', {
+        method: 'POST',
+      });
 
       if (streakSession !== authEventRef.current) return;
 
@@ -2449,6 +2517,15 @@ export default function App() {
       <div className="max-w-7xl mx-auto px-4 py-8 flex-1 w-full flex flex-col md:flex-row gap-8">
         <aside className="w-full md:w-64 space-y-2 shrink-0">
           <div className="bg-black border border-slate-800 rounded-2xl p-3 space-y-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className={tabBtnCls('profile')}
+            >
+              <UserCircle className="w-4 h-4" />
+              <span>My Profile</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setActiveTab('faucet')}
@@ -3616,6 +3693,48 @@ export default function App() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'profile' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">My Profile</h2>
+                <p className="text-sm text-slate-400">View your account details and update your username.</p>
+              </div>
+              {profileError && <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">{profileError}</div>}
+              {profileLoading ? (
+                <p className="text-sm text-slate-400">Loading profile...</p>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <StatTile label="User ID" value={firebaseUser?.uid || '...'} />
+                    <StatTile label="Email" value={firebaseUser?.email || '...'} />
+                    <StatTile label="Email Verification" value={firebaseUser?.emailVerified ? 'Verified' : 'Not verified'} valueCls={firebaseUser?.emailVerified ? 'text-emerald-400' : 'text-red-400'} />
+                    <StatTile label="Account Plan" value={planName || 'FREE'} />
+                    <StatTile label="Referral Code" value={refCode || '...'} valueCls="text-[#F4A6C1]" />
+                    <StatTile label="Member Since" value={formatDate(userProfile?.created_at || userProfile?.createdAt)} />
+                  </div>
+                  {!firebaseUser?.emailVerified && (
+                    <div className="p-4 border border-red-500/30 bg-red-500/5 rounded-xl space-y-3">
+                      <p className="text-sm text-red-300 font-bold">Email verification required</p>
+                      <p className="text-xs text-slate-400">Verify your email to unlock account benefits and protected actions.</p>
+                      <button type="button" onClick={handleResendVerification} disabled={verificationSending || verificationResendSeconds > 0} className="px-4 py-2 rounded-lg bg-[#F4A6C1] text-black text-xs font-black disabled:opacity-50">
+                        {verificationSending ? 'Sending...' : verificationResendSeconds > 0 ? `Resend in ${verificationResendSeconds}s` : 'Resend verification email'}
+                      </button>
+                      {verifyMsg && <p className="text-xs text-slate-300">{verifyMsg}</p>}
+                    </div>
+                  )}
+                  <form onSubmit={handleSaveProfile} className="bg-black border border-slate-800 rounded-xl p-5 space-y-3">
+                    <label className={LABEL_CLS} htmlFor="profile-username">Username</label>
+                    <input id="profile-username" className={INPUT_CLS} value={profileUsernameInput} onChange={e => setProfileUsernameInput(e.target.value)} minLength={3} maxLength={20} autoComplete="username" />
+                    <p className="text-xs text-slate-500">3–20 characters. Letters, numbers, and underscore only.</p>
+                    <button type="submit" disabled={profileSaving || !apiReady || !firebaseUser?.emailVerified} className={PRIMARY_BTN}>
+                      {profileSaving ? 'Saving...' : 'Save Username'}
+                    </button>
+                  </form>
+                </>
+              )}
             </div>
           )}
 
