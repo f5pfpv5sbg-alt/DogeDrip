@@ -7,3 +7,43 @@ body {
   background-color: #000000;
   color: #ffffff;
 }
+
+/* DogeDrip premium ambient background */
+html {
+  min-height: 100%;
+  background: #050507;
+}
+
+body {
+  min-height: 100vh;
+  background-color: #050507;
+  background-image:
+    radial-gradient(ellipse 48rem 34rem at 4% 8%, rgba(244, 166, 193, 0.105), transparent 68%),
+    radial-gradient(ellipse 42rem 30rem at 98% 32%, rgba(244, 166, 193, 0.075), transparent 70%),
+    radial-gradient(ellipse 36rem 28rem at 52% 100%, rgba(244, 166, 193, 0.055), transparent 72%),
+    linear-gradient(145deg, #08080b 0%, #050507 48%, #09070a 100%);
+  background-attachment: fixed;
+  color: #ffffff;
+}
+
+#root {
+  min-height: 100vh;
+  isolation: isolate;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.16;
+    background-image:
+      radial-gradient(circle at 12% 22%, rgba(255, 255, 255, 0.34) 0 1px, transparent 1.6px),
+      radial-gradient(circle at 78% 16%, rgba(244, 166, 193, 0.5) 0 1px, transparent 1.8px),
+      radial-gradient(circle at 38% 72%, rgba(255, 255, 255, 0.24) 0 1px, transparent 1.6px),
+      radial-gradient(circle at 88% 82%, rgba(244, 166, 193, 0.38) 0 1px, transparent 1.8px);
+    background-size: 260px 260px, 340px 340px, 300px 300px, 380px 380px;
+  }
+}
