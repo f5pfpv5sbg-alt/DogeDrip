@@ -174,7 +174,7 @@ const PLAN_CATALOG = [
   }
 ];
 
-const TURNSTILE_SITE_KEY = "0x4AAAAAAF-3vTPXQqhd-_GX";
+const TURNSTILE_SITE_KEY = "0x4AAAAAAF_XYKCNP4Ptjst8";
 const TURNSTILE_SCRIPT_URL =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
