@@ -1313,6 +1313,26 @@ export default function App() {
 
     setIsLoadingAuth(true);
 
+    try {
+      const turnstileToken = await getTurnstileToken('register');
+      const verificationResponse = await fetch(`${API_URL}/api/security/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnstile_token: turnstileToken })
+      });
+      const verificationData = await verificationResponse.json().catch(() => ({}));
+
+      if (!verificationResponse.ok || verificationData.success !== true) {
+        throw new Error(
+          verificationData.error || 'Security verification failed. Please try again.'
+        );
+      }
+    } catch (error) {
+      setAuthError(error.message || 'Security verification failed. Please try again.');
+      setIsLoadingAuth(false);
+      return;
+    }
+
     if (referralCode) {
       if (!REF_CODE_REGEX.test(referralCode)) {
         setAuthError('Invalid referral code format.');
