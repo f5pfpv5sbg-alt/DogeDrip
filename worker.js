@@ -61,7 +61,7 @@ function corsHeaders(request) {
 
   const headers = {
     "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400"
   };
@@ -550,7 +550,17 @@ async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
 // USER SYNCHRONIZATION
 // ==========================================
 
-async function syncUser(env, user, referredByCode) {
+async function syncUser(env, user, referredByCode, requestedUsername) {
+  const existingUsername = await env.DB.prepare(`
+    SELECT uid FROM users
+    WHERE username = ? COLLATE NOCASE AND uid != ?
+    LIMIT 1
+  `).bind(requestedUsername, user.sub).first();
+
+  if (existingUsername) {
+    throw new HttpError(409, "That username is already taken. Please choose another one.");
+  }
+
   let referrerCode = null;
 
   if (referredByCode) {
@@ -571,17 +581,19 @@ async function syncUser(env, user, referredByCode) {
         INSERT INTO users (
           uid,
           email,
+          username,
           ref_code,
           referred_by,
           email_verified,
           email_verified_at
         )
         VALUES (
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
         )
         ON CONFLICT(uid) DO UPDATE SET
           email = excluded.email,
+          username = COALESCE(users.username, excluded.username),
           ref_code = COALESCE(users.ref_code, excluded.ref_code),
           email_verified = excluded.email_verified,
           email_verified_at = CASE
@@ -592,6 +604,7 @@ async function syncUser(env, user, referredByCode) {
       `).bind(
         user.sub,
         user.email,
+        requestedUsername,
         generateRefCode(),
         referrerCode,
         user.email_verified === true ? 1 : 0,
@@ -612,7 +625,7 @@ async function syncUser(env, user, referredByCode) {
   }
 
   return env.DB.prepare(`
-    SELECT ref_code, referred_by, plan
+    SELECT username, ref_code, referred_by, plan, created_at, email_verified, email_verified_at
     FROM users
     WHERE uid = ?
   `).bind(user.sub).first();
@@ -1928,10 +1941,16 @@ async function handleRequest(request, env, json) {
         ? body.referred_by.trim().toUpperCase()
         : "";
 
+    const rawUsername = typeof body.username === "string" ? body.username.trim() : "";
+    const requestedUsername = /^[A-Za-z0-9_]{3,20}$/.test(rawUsername)
+      ? rawUsername
+      : (user.email ? user.email.split("@")[0].slice(0, 20) : "User");
+
     const profile = await syncUser(
       env,
       user,
-      REF_CODE_REGEX.test(rawRef) ? rawRef : null
+      REF_CODE_REGEX.test(rawRef) ? rawRef : null,
+      requestedUsername
     );
 
     return json({
@@ -1941,8 +1960,59 @@ async function handleRequest(request, env, json) {
       ref_code: profile.ref_code,
       referred_by: profile.referred_by,
       plan: profile.plan || "FREE",
-      email_verified: user.email_verified === true
+      username: profile.username || requestedUsername,
+      created_at: profile.created_at,
+      email_verified: user.email_verified === true,
+      email_verified_at: profile.email_verified_at
     });
+  }
+
+  // USER PROFILE
+  if (path === "/api/profile" && method === "GET") {
+    const user = await authenticate(request, { requireVerifiedEmail: false });
+    const profile = await env.DB.prepare(`
+      SELECT username, created_at, email_verified_at, plan, ref_code, referred_by
+      FROM users WHERE uid = ?
+    `).bind(user.sub).first();
+    if (!profile) throw new HttpError(404, "User profile not found");
+    return json({
+      success: true,
+      profile: {
+        uid: user.sub,
+        username: profile.username || "",
+        email: user.email,
+        created_at: profile.created_at,
+        email_verified: user.email_verified === true,
+        email_verified_at: profile.email_verified_at,
+        plan: profile.plan || "FREE",
+        ref_code: profile.ref_code || "",
+        referred_by: profile.referred_by || null
+      }
+    });
+  }
+
+  if (path === "/api/profile" && method === "PUT") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "profile_update", {
+      limit: 5,
+      windowSeconds: 3600
+    });
+    const body = await readJson(request);
+    const username = typeof body.username === "string" ? body.username.trim() : "";
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+      throw new HttpError(400, "Username must be 3-20 characters using letters, numbers, or underscore.");
+    }
+    try {
+      const result = await env.DB.prepare(`
+        UPDATE users SET username = ? WHERE uid = ?
+      `).bind(username, user.sub).run();
+      if (result.meta.changes !== 1) throw new HttpError(404, "User profile not found");
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (String(error.message).includes("UNIQUE")) throw new HttpError(409, "That username is already taken.");
+      throw error;
+    }
+    return json({ success: true, profile: { username }, message: "Username updated successfully." });
   }
 
   // REFERRAL STATS
