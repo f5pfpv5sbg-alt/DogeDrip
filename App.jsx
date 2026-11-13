@@ -479,6 +479,9 @@ export default function App() {
   const [adminStats, setAdminStats] = useState(null);
   const [adminStatsLoading, setAdminStatsLoading] = useState(false);
   const [adminStatsError, setAdminStatsError] = useState('');
+  const [financeAudit, setFinanceAudit] = useState(null);
+  const [financeAuditLoading, setFinanceAuditLoading] = useState(false);
+  const [financeAuditError, setFinanceAuditError] = useState('');
   const [myAdRequests, setMyAdRequests] = useState([]);
   const [adminAdRequests, setAdminAdRequests] = useState([]);
   const [adPlacements, setAdPlacements] = useState({ top: null, bottom: null });
@@ -2118,6 +2121,22 @@ export default function App() {
       setAdminStatsError(error.message || 'Could not refresh daily statistics.');
     } finally {
       setAdminStatsLoading(false);
+    }
+  };
+
+  const refreshFinanceAudit = async () => {
+    if (!isDemoAdmin || financeAuditLoading) return;
+
+    setFinanceAuditLoading(true);
+    setFinanceAuditError('');
+
+    try {
+      const data = await apiRequest('/api/admin/finance/audit');
+      setFinanceAudit(data);
+    } catch (error) {
+      setFinanceAuditError(error.message || 'Could not complete the financial integrity audit.');
+    } finally {
+      setFinanceAuditLoading(false);
     }
   };
 
@@ -4296,6 +4315,44 @@ export default function App() {
                     <span>{adminStatsError}</span>
                   </div>
                 )}
+
+                <div className="bg-black border border-slate-800 rounded-2xl p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-xs font-black uppercase tracking-wider text-slate-300">Financial integrity audit</h3>
+                      <p className="text-[11px] text-slate-500 mt-1">Read-only checks of user liabilities, ledger consistency, withdrawals and internal reserves.</p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={financeAuditLoading || !apiReady}
+                      onClick={refreshFinanceAudit}
+                      className={`px-3 py-2 rounded-lg border text-xs font-bold disabled:opacity-50 ${adminActionBtn}`}
+                    >
+                      {financeAuditLoading ? 'Auditing...' : 'Run financial audit'}
+                    </button>
+                  </div>
+
+                  {financeAuditError && <p className="text-xs text-red-300">{financeAuditError}</p>}
+
+                  {financeAudit && (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <StatTile label="User Balances Owed" value={`${formatDoge(financeAudit.liabilities.user_balances_koinu)} DOGE`} sub={`${financeAudit.liabilities.users_count} accounts`} />
+                        <StatTile label="Outstanding Withdrawals" value={`${formatDoge(financeAudit.liabilities.outstanding_withdrawals_koinu)} DOGE`} sub="Pending, processing or unknown" />
+                        <StatTile label="Unledgered Accounts" value={financeAudit.ledger.users_with_balance_without_ledger} sub={`${formatDoge(financeAudit.ledger.unledgered_balance_koinu)} DOGE without ledger entries`} valueCls={financeAudit.ledger.users_with_balance_without_ledger > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Claims Missing Ledger" value={financeAudit.ledger.claims_without_ledger_count} sub={`${formatDoge(financeAudit.ledger.claims_without_ledger_koinu)} DOGE not journaled`} valueCls={financeAudit.ledger.claims_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Balance Mismatches" value={financeAudit.ledger.user_balance_mismatches} sub="Latest ledger balance vs account balance" valueCls={financeAudit.ledger.user_balance_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Ledger Arithmetic Errors" value={financeAudit.ledger.arithmetic_mismatches} sub={`${financeAudit.ledger.transactions_count} ledger rows checked`} valueCls={financeAudit.ledger.arithmetic_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Legacy Approved" value={financeAudit.withdrawals.legacy_approved_without_payout_id_count} sub={`${formatDoge(financeAudit.withdrawals.legacy_approved_without_payout_id_koinu)} DOGE without FaucetPay ID`} valueCls={financeAudit.withdrawals.legacy_approved_without_payout_id_count > 0 ? 'text-yellow-300' : 'text-emerald-400'} />
+                      </div>
+                      <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
+                        <p className="text-xs font-bold text-yellow-300">External reserve funding: NOT VERIFIED</p>
+                        <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
+                        <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE</p>
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <StatTile

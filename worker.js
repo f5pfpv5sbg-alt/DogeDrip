@@ -2936,6 +2936,132 @@ async function handleRequest(request, env, json) {
     throw new HttpError(400, "Unsupported advertising request status.");
   }
 
+  // ADMIN: READ-ONLY FINANCIAL INTEGRITY AUDIT
+
+  if (path === "/api/admin/finance/audit" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_finance_audit",
+      RATE_LIMIT_POLICIES.adminRead
+    );
+
+    const [
+      liability,
+      unledgeredBalances,
+      claimsWithoutLedger,
+      balanceMismatches,
+      arithmeticMismatches,
+      ledgerCount,
+      withdrawalRows,
+      legacyApproved,
+      faucetReserve,
+      wheelReserve
+    ] = await Promise.all([
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS users_count
+        FROM users
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(u.balance_koinu), 0) AS total_koinu
+        FROM users u
+        WHERE u.balance_koinu > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM ledger_transactions lt WHERE lt.uid = u.uid
+          )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(c.amount_koinu), 0) AS total_koinu
+        FROM claims c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ledger_transactions lt
+          WHERE lt.reference_type = 'claim'
+            AND lt.reference_id = CAST(c.id AS TEXT)
+        )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count
+        FROM users u
+        WHERE EXISTS (
+          SELECT 1 FROM ledger_transactions lt WHERE lt.uid = u.uid
+        )
+          AND u.balance_koinu != (
+            SELECT lt.balance_after_koinu
+            FROM ledger_transactions lt
+            WHERE lt.uid = u.uid
+            ORDER BY lt.id DESC
+            LIMIT 1
+          )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count
+        FROM ledger_transactions
+        WHERE balance_after_koinu != balance_before_koinu + amount_koinu
+      `).first(),
+      env.DB.prepare(`SELECT COUNT(*) AS count FROM ledger_transactions`).first(),
+      env.DB.prepare(`
+        SELECT status, COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
+        FROM withdrawals
+        GROUP BY status
+      `).all(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
+        FROM withdrawals
+        WHERE status = 'approved'
+          AND faucetpay_payout_id IS NULL
+      `).first(),
+      env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM faucet_reserve WHERE id = 1`).first(),
+      env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first()
+    ]);
+
+    const withdrawalsByStatus = Object.create(null);
+    for (const row of withdrawalRows.results || []) {
+      withdrawalsByStatus[row.status] = {
+        count: Number(row.count || 0),
+        total_koinu: Number(row.total_koinu || 0)
+      };
+    }
+
+    const outstandingStatuses = ["pending", "processing", "payment_unknown"];
+    const outstanding = outstandingStatuses.reduce((total, status) => {
+      return total + Number(withdrawalsByStatus[status]?.total_koinu || 0);
+    }, 0);
+
+    return json({
+      success: true,
+      checked_at: new Date().toISOString(),
+      liabilities: {
+        user_balances_koinu: Number(liability?.total || 0),
+        users_count: Number(liability?.users_count || 0),
+        outstanding_withdrawals_koinu: outstanding
+      },
+      ledger: {
+        transactions_count: Number(ledgerCount?.count || 0),
+        users_with_balance_without_ledger: Number(unledgeredBalances?.count || 0),
+        unledgered_balance_koinu: Number(unledgeredBalances?.total_koinu || 0),
+        claims_without_ledger_count: Number(claimsWithoutLedger?.count || 0),
+        claims_without_ledger_koinu: Number(claimsWithoutLedger?.total_koinu || 0),
+        user_balance_mismatches: Number(balanceMismatches?.count || 0),
+        arithmetic_mismatches: Number(arithmeticMismatches?.count || 0)
+      },
+      withdrawals: {
+        by_status: withdrawalsByStatus,
+        legacy_approved_without_payout_id_count: Number(legacyApproved?.count || 0),
+        legacy_approved_without_payout_id_koinu: Number(legacyApproved?.total_koinu || 0)
+      },
+      reserves: {
+        faucet_available_koinu: Number(faucetReserve?.available_koinu || 0),
+        faucet_payouts_enabled: Number(faucetReserve?.payouts_enabled) === 1,
+        wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
+        wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
+        wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1,
+        external_funding_verified: false
+      }
+    });
+  }
+
   // ADMIN: DAILY STATS
 
   if (path === "/api/admin/stats" && method === "GET") {
