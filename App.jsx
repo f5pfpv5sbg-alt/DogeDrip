@@ -4202,7 +4202,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <StatTile
                     label="Users Registered Today"
                     value={
@@ -4280,6 +4280,20 @@ export default function App() {
                         ? 'text-red-400'
                         : 'text-emerald-400'
                     }
+                  />
+                  <StatTile
+                    label="Verified Ad Revenue Today"
+                    value={
+                      adminStats
+                        ? `€${Number(adminStats.verified_ad_revenue_eur || 0).toFixed(2)}`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats
+                        ? `${Number(adminStats.verified_ad_campaigns_today || 0)} campaigns activated after payment review`
+                        : undefined
+                    }
+                    valueCls="text-emerald-400"
                   />
                 </div>
 
