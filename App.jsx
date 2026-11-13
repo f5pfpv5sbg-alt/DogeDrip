@@ -227,10 +227,10 @@ async function getTurnstileToken(action) {
 
   const turnstile = await loadTurnstile();
   const container = document.createElement("div");
-  container.setAttribute("aria-hidden", "true");
   container.style.position = "fixed";
-  container.style.left = "-10000px";
-  container.style.top = "0";
+  container.style.right = "8px";
+  container.style.bottom = "8px";
+  container.style.zIndex = "9999";
   document.body.appendChild(container);
 
   return new Promise((resolve, reject) => {
@@ -267,7 +267,7 @@ async function getTurnstileToken(action) {
         action,
         execution: "execute",
         appearance: "execute",
-        size: "invisible",
+        theme: "dark",
         callback: token => {
           if (typeof token !== "string" || !token) {
             finish(new Error("Security verification returned an invalid token."));
