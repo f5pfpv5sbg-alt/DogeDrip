@@ -2951,6 +2951,7 @@ async function handleRequest(request, env, json) {
     const [
       liability,
       unledgeredBalances,
+      claimsWithoutLedger,
       balanceMismatches,
       arithmeticMismatches,
       ledgerCount,
@@ -2970,6 +2971,15 @@ async function handleRequest(request, env, json) {
           AND NOT EXISTS (
             SELECT 1 FROM ledger_transactions lt WHERE lt.uid = u.uid
           )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(c.amount_koinu), 0) AS total_koinu
+        FROM claims c
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ledger_transactions lt
+          WHERE lt.reference_type = 'claim'
+            AND lt.reference_id = CAST(c.id AS TEXT)
+        )
       `).first(),
       env.DB.prepare(`
         SELECT COUNT(*) AS count
@@ -3031,6 +3041,8 @@ async function handleRequest(request, env, json) {
         transactions_count: Number(ledgerCount?.count || 0),
         users_with_balance_without_ledger: Number(unledgeredBalances?.count || 0),
         unledgered_balance_koinu: Number(unledgeredBalances?.total_koinu || 0),
+        claims_without_ledger_count: Number(claimsWithoutLedger?.count || 0),
+        claims_without_ledger_koinu: Number(claimsWithoutLedger?.total_koinu || 0),
         user_balance_mismatches: Number(balanceMismatches?.count || 0),
         arithmetic_mismatches: Number(arithmeticMismatches?.count || 0)
       },
