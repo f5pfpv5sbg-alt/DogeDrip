@@ -38,6 +38,7 @@ Protected actions and their Turnstile action names:
 
 | API action | Turnstile action |
 |---|---|
+| `POST /api/security/register` | `register` |
 | `POST /api/claim` | `claim` |
 | `POST /api/wheel/spin` | `wheel_spin` |
 | `POST /api/wheel/buy` | `wheel_buy` |
