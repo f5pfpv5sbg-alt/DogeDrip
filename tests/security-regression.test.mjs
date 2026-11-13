@@ -105,3 +105,27 @@ test("manual FaucetPay reconciliation requires explicit admin confirmation", () 
   assert.ok(app.includes("Check FaucetPay payout history before choosing"));
   assert.ok(app.includes("faucetpay_payout_id: payoutId"));
 });
+
+
+test("financial audit endpoint is admin-only and performs read-only integrity checks", () => {
+  const start = worker.indexOf('if (path === "/api/admin/finance/audit" && method === "GET")');
+  const end = worker.indexOf("// ADMIN: DAILY STATS", start);
+  assert.ok(start >= 0 && end > start, "financial audit route must exist");
+  const route = worker.slice(start, end);
+  assert.match(route, /authenticate\(request\)/);
+  assert.match(route, /requireAdmin\(user, env\)/);
+  assert.match(route, /users_with_balance_without_ledger/);
+  assert.match(route, /user_balance_mismatches/);
+  assert.match(route, /arithmetic_mismatches/);
+  assert.match(route, /legacy_approved_without_payout_id_count/);
+  assert.match(route, /external_funding_verified: false/);
+  assert.doesNotMatch(route, /\b(?:INSERT INTO|UPDATE\s+users|UPDATE\s+withdrawals|DELETE FROM)\b/i);
+});
+
+test("Admin dashboard displays financial integrity warnings without changing balances", () => {
+  assert.ok(app.includes("Run financial audit"));
+  assert.ok(app.includes("Financial integrity audit"));
+  assert.ok(app.includes("External reserve funding: NOT VERIFIED"));
+  assert.ok(app.includes("Unledgered Accounts"));
+  assert.ok(app.includes("Legacy Approved"));
+});
