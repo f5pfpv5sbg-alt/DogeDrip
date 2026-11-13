@@ -3162,7 +3162,10 @@ async function handleRequest(request, env, json) {
     }
 
     const payoutId = String(payout.payout_id ?? "").trim();
-    if (!/^\d{1,32}$/.test(payoutId)) {
+    if (
+      String(payout.currency || "").toUpperCase() !== "DOGE" ||
+      !/^\d{1,32}$/.test(payoutId)
+    ) {
       await env.DB.prepare(`
         UPDATE withdrawals
         SET status = 'payment_unknown',
