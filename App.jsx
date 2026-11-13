@@ -2771,9 +2771,8 @@ export default function App() {
               <span>Lucky Wheel</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab('taskwall')}
+            <a
+              href="/taskwall"
               className={tabBtnCls('taskwall')}
             >
               <Ticket className="w-4 h-4" />
@@ -2781,7 +2780,7 @@ export default function App() {
               <span className="ml-auto rounded-md border border-current/30 px-2 py-1 text-[9px] font-black tracking-wider">
                 SOON
               </span>
-            </button>
+            </a>
 
             <button
               type="button"
@@ -3481,35 +3480,6 @@ export default function App() {
                 DEMO ledger only. No real DOGE is paid out. Prizes, odds, spin
                 counts and prices are controlled by the server.
               </p>
-            </div>
-          )}
-
-          {activeTab === 'taskwall' && (
-            <div className="min-h-[420px] bg-black border border-slate-800 rounded-2xl p-6 md:p-10 flex flex-col items-center justify-center text-center relative overflow-hidden">
-              <div className="absolute inset-0 pointer-events-none opacity-30" style={{ background: 'radial-gradient(ellipse at center, rgba(244,166,193,0.16), transparent 65%)' }} />
-              <div className="relative z-10 max-w-xl space-y-6">
-                <div className="mx-auto w-20 h-20 rounded-3xl border border-[#F4A6C1]/40 bg-[#F4A6C1]/10 flex items-center justify-center">
-                  <Ticket className="w-10 h-10 text-[#F4A6C1]" />
-                </div>
-                <div className="space-y-2">
-                  <div className="inline-flex items-center rounded-full border border-[#F4A6C1]/40 bg-[#F4A6C1]/10 px-3 py-1 text-[10px] font-black tracking-[0.2em] text-[#F4A6C1]">
-                    COMING SOON
-                  </div>
-                  <h2 className="text-3xl md:text-4xl font-black text-white font-['Space_Grotesk',sans-serif]">
-                    Taskwall
-                  </h2>
-                  <p className="text-base md:text-lg font-bold text-slate-300">
-                    More ways to earn. More reasons to come back.
-                  </p>
-                  <p className="text-sm leading-relaxed text-slate-500">
-                    New tasks, fresh rewards, and exciting opportunities are on the way. We’re building a better way to earn with DogeDrip.
-                  </p>
-                </div>
-                <div className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-xs font-bold text-slate-400">
-                  <Sparkles className="w-4 h-4 text-[#F4A6C1]" />
-                  Stay tuned — Taskwall is under development.
-                </div>
-              </div>
             </div>
           )}
 
