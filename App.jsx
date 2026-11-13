@@ -167,11 +167,11 @@ const PLAN_CATALOG = [
       'Exclusive Lucky Wheel Rewards'
     ],
     icon: Crown,
-    cardCls: 'border-yellow-500/30',
-    activeCardCls: 'border-yellow-400 shadow-lg shadow-yellow-400/20',
-    accentText: 'text-yellow-400',
-    badgeCls: 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/30',
-    iconWrapCls: 'bg-yellow-500/10 border border-yellow-500/20 text-yellow-400'
+    cardCls: 'border-[#F4A6C1]/30',
+    activeCardCls: 'border-[#F4A6C1] shadow-lg shadow-[#F4A6C1]/20',
+    accentText: 'text-[#F4A6C1]',
+    badgeCls: 'bg-[#F4A6C1]/10 text-[#F4A6C1] border border-[#F4A6C1]/30',
+    iconWrapCls: 'bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1]'
   }
 ];
 

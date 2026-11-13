@@ -106,3 +106,14 @@ body {
     z-index: 1;
   }
 }
+
+
+/* Clear keyboard focus for accessible navigation and forms */
+:where(a, button, input, select, textarea, [role="button"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid #F4A6C1;
+  outline-offset: 3px;
+}
+
+:where(button, input, select, textarea):focus:not(:focus-visible) {
+  outline: none;
+}
