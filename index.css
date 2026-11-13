@@ -47,3 +47,56 @@ body {
     background-size: 260px 260px, 340px 340px, 300px 300px, 380px 380px;
   }
 }
+
+
+/* Subtle Matrix-inspired code rain */
+@media (prefers-reduced-motion: no-preference) {
+  body::after {
+    content: "01011001 10100110 01001101 11010010 00110101 10110100 01101001 10010110 01011010 10100101 11001010 00101101 10110010 01010110 11010001 00110110 10101100 01001011 11010100 00101110 10110001 01101010 10010101 01011001 10100110 01001101 11010010 00110101 10110100 01101001 10010110 01011010 10100101 11001010 00101101 10110010 01010110 11010001 00110110 10101100 01001011 11010100 00101110 10110001 01101010 10010101";
+    position: fixed;
+    inset: -100% -10% -100% 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    color: rgba(244, 166, 193, 0.16);
+    font: 700 11px/3.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 10px;
+    word-spacing: 18px;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    white-space: normal;
+    opacity: 0.7;
+    mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 82%, transparent);
+    animation: dogedrip-code-fall 34s linear infinite;
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  @keyframes dogedrip-code-fall {
+    from { transform: translateY(-18%); }
+    to { transform: translateY(18%); }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::after {
+    content: "01011001 10100110 01001101 11010010 00110101 10110100 01101001 10010110";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    color: rgba(244, 166, 193, 0.08);
+    font: 700 10px/3 ui-monospace, monospace;
+    letter-spacing: 8px;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+  }
+
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+}
