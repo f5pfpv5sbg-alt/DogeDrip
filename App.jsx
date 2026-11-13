@@ -1210,7 +1210,6 @@ export default function App() {
 
     setIsLoadingAuth(true);
 
-    try {
     if (referralCode) {
       if (!REF_CODE_REGEX.test(referralCode)) {
         setAuthError('Invalid referral code format.');
