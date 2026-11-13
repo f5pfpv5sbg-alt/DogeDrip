@@ -337,6 +337,20 @@ const WheelGraphic = ({ prizes }) => {
   );
 };
 
+const SiteFooter = () => (
+  <footer className="w-full border-t border-slate-800 bg-black mt-auto">
+    <div className="max-w-7xl mx-auto px-4 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+      <a href="mailto:support.dogedrip@gmail.com" className="hover:text-[#F4A6C1] transition-colors">
+        Support: support.dogedrip@gmail.com
+      </a>
+      <a href="/terms.html" className="hover:text-[#F4A6C1] transition-colors">
+        Terms of Service
+      </a>
+      <span>© {new Date().getFullYear()} DogeDrip. All rights reserved.</span>
+    </div>
+  </footer>
+);
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('faucet');
 
@@ -2209,6 +2223,7 @@ export default function App() {
             </div>
           )}
         </div>
+        <SiteFooter />
       </div>
     );
   }
@@ -2269,6 +2284,7 @@ export default function App() {
             <p className="text-xs font-bold text-[#F4A6C1]">{verifyMsg}</p>
           )}
         </div>
+        <SiteFooter />
       </div>
     );
   }
@@ -4189,8 +4205,11 @@ export default function App() {
               </p>
             </div>
           )}
+
         </main>
       </div>
+
+      <SiteFooter />
     </div>
   );
 }
