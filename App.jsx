@@ -174,6 +174,125 @@ const PLAN_CATALOG = [
   }
 ];
 
+const TURNSTILE_SITE_KEY = "0x4AAAAAAF-3vTPXQqhd-_GX";
+const TURNSTILE_SCRIPT_URL =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+
+let turnstileScriptPromise = null;
+
+function loadTurnstile() {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Turnstile is only available in the browser."));
+  }
+
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (turnstileScriptPromise) return turnstileScriptPromise;
+
+  turnstileScriptPromise = new Promise((resolve, reject) => {
+    let script = document.querySelector("script[data-dogedrip-turnstile]");
+
+    const onLoad = () => {
+      if (window.turnstile) resolve(window.turnstile);
+      else reject(new Error("Turnstile could not be initialized."));
+    };
+
+    const onError = () => {
+      turnstileScriptPromise = null;
+      reject(new Error("Could not load the security verification service."));
+    };
+
+    if (!script) {
+      script = document.createElement("script");
+      script.src = TURNSTILE_SCRIPT_URL;
+      script.async = true;
+      script.defer = true;
+      script.dataset.dogedripTurnstile = "true";
+      script.addEventListener("load", onLoad, { once: true });
+      script.addEventListener("error", onError, { once: true });
+      document.head.appendChild(script);
+    } else {
+      script.addEventListener("load", onLoad, { once: true });
+      script.addEventListener("error", onError, { once: true });
+      if (window.turnstile) onLoad();
+    }
+  });
+
+  return turnstileScriptPromise;
+}
+
+async function getTurnstileToken(action) {
+  if (!/^[a-z_]{1,32}$/.test(action)) {
+    throw new Error("Invalid security verification action.");
+  }
+
+  const turnstile = await loadTurnstile();
+  const container = document.createElement("div");
+  container.setAttribute("aria-hidden", "true");
+  container.style.position = "fixed";
+  container.style.left = "-10000px";
+  container.style.top = "0";
+  document.body.appendChild(container);
+
+  return new Promise((resolve, reject) => {
+    let widgetId = null;
+    let settled = false;
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      if (widgetId !== null) {
+        try {
+          turnstile.remove(widgetId);
+        } catch {
+          // The widget may already have been removed by Turnstile.
+        }
+      }
+      container.remove();
+    };
+
+    const finish = (error, token) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve(token);
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      finish(new Error("Security verification timed out. Please try again."));
+    }, 120000);
+
+    try {
+      widgetId = turnstile.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action,
+        execution: "execute",
+        appearance: "execute",
+        size: "invisible",
+        callback: token => {
+          if (typeof token !== "string" || !token) {
+            finish(new Error("Security verification returned an invalid token."));
+            return;
+          }
+          finish(null, token);
+        },
+        "error-callback": () => {
+          finish(new Error("Security verification failed. Please try again."));
+        },
+        "expired-callback": () => {
+          finish(new Error("Security verification expired. Please try again."));
+        },
+        "timeout-callback": () => {
+          finish(new Error("Security verification timed out. Please try again."));
+        }
+      });
+
+      turnstile.execute(widgetId);
+    } catch {
+      finish(new Error("Could not start security verification."));
+    }
+  });
+}
+
 const isNum = (v) =>
   v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
@@ -476,15 +595,34 @@ export default function App() {
       throw new Error('Please log in first.');
     }
 
+    const { turnstileAction, ...fetchOptions } = options;
+    let requestBody = fetchOptions.body;
+
+    if (turnstileAction) {
+      let parsedBody = {};
+      try {
+        parsedBody = requestBody ? JSON.parse(requestBody) : {};
+      } catch {
+        throw new Error('Invalid request payload.');
+      }
+
+      const turnstileToken = await getTurnstileToken(turnstileAction);
+      requestBody = JSON.stringify({
+        ...parsedBody,
+        turnstile_token: turnstileToken
+      });
+    }
+
     const token = await firebaseUser.getIdToken();
     let response;
 
     try {
       response = await fetch(`${API_URL}${path}`, {
-        ...options,
+        ...fetchOptions,
+        body: requestBody,
         headers: {
-          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-          ...options.headers,
+          ...(requestBody ? { 'Content-Type': 'application/json' } : {}),
+          ...fetchOptions.headers,
           Authorization: `Bearer ${token}`
         }
       });
@@ -1392,7 +1530,8 @@ export default function App() {
     try {
       const data = await apiRequest('/api/claim', {
         method: 'POST',
-        body: JSON.stringify({ request_id: requestId })
+        body: JSON.stringify({ request_id: requestId }),
+        turnstileAction: 'claim'
       });
 
       claimRequestIdRef.current = null;
@@ -1519,7 +1658,8 @@ export default function App() {
     try {
       data = await apiRequest('/api/wheel/spin', {
         method: 'POST',
-        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current })
+        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current }),
+        turnstileAction: 'wheel_spin'
       });
       wheelSpinRequestIdRef.current = null;
     } catch (error) {
@@ -1635,7 +1775,8 @@ export default function App() {
         body: JSON.stringify({
           pack_id: pack.id,
           request_id: wheelBuyRequestRef.current.requestId
-        })
+        }),
+        turnstileAction: 'wheel_buy'
       });
 
       wheelBuyRequestRef.current = null;
@@ -1703,7 +1844,11 @@ export default function App() {
     const streakSession = authEventRef.current;
 
     try {
-      const data = await apiRequest('/api/streak/checkin', { method: 'POST' });
+      const data = await apiRequest('/api/streak/checkin', {
+        method: 'POST',
+        body: JSON.stringify({}),
+        turnstileAction: 'daily_streak'
+      });
 
       if (streakSession !== authEventRef.current) return;
 
@@ -1772,7 +1917,8 @@ export default function App() {
         body: JSON.stringify({
           amount_koinu: amountKoinu,
           wallet_address: withdrawAddress.trim()
-        })
+        }),
+        turnstileAction: 'withdrawal_create'
       });
 
       const [balanceData, historyData] = await Promise.all([
