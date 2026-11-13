@@ -1727,6 +1727,7 @@ async function getAdminDailyStats(env) {
     wdApproved,
     wdRejected,
     balances,
+    activity,
     faucetReserve,
     wheelReserve
   ] = await Promise.all([
@@ -1799,6 +1800,14 @@ async function getAdminDailyStats(env) {
     `).first(),
 
     env.DB.prepare(`
+      SELECT
+        COUNT(*) AS active_users,
+        COALESCE(SUM(session_count), 0) AS login_sessions
+      FROM user_daily_activity
+      WHERE utc_date = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1842,6 +1851,8 @@ async function getAdminDailyStats(env) {
     success: true,
     date: today,
     registered_today: registeredToday,
+    active_users_today: Number(activity?.active_users || 0),
+    login_sessions_today: Number(activity?.login_sessions || 0),
     income_koinu: incomeKoinu,
     payouts_koinu: payoutsKoinu,
     profit_koinu: incomeKoinu - payoutsKoinu,
@@ -2002,6 +2013,31 @@ async function handleRequest(request, env, json) {
       REF_CODE_REGEX.test(rawRef) ? rawRef : null,
       requestedUsername
     );
+
+    if (user.email_verified === true) {
+      await env.DB.prepare(`
+        INSERT INTO user_daily_activity (
+          utc_date,
+          uid,
+          session_count,
+          first_seen_at,
+          last_seen_at
+        )
+        VALUES (date('now'), ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(utc_date, uid) DO UPDATE SET
+          session_count = user_daily_activity.session_count + 1,
+          last_seen_at = CURRENT_TIMESTAMP
+      `).bind(user.sub).run();
+
+      if (Math.random() < 0.005) {
+        await env.DB.prepare(`
+          DELETE FROM user_daily_activity
+          WHERE utc_date < date('now', '-90 days')
+        `).run().catch(error => {
+          console.warn("Daily activity cleanup skipped:", error);
+        });
+      }
+    }
 
     return json({
       success: true,
