@@ -4230,7 +4230,7 @@ export default function App() {
                     valueCls={adminAccentText}
                   />
                   <StatTile
-                    label="Login Sessions Today"
+                    label="App Sessions Today"
                     value={
                       adminStats
                         ? Number(adminStats.login_sessions_today || 0)
