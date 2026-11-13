@@ -115,6 +115,8 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /authenticate\(request\)/);
   assert.match(route, /requireAdmin\(user, env\)/);
   assert.match(route, /users_with_balance_without_ledger/);
+  assert.match(route, /claims_without_ledger_count/);
+  assert.match(route, /reference_type = 'claim'/);
   assert.match(route, /user_balance_mismatches/);
   assert.match(route, /arithmetic_mismatches/);
   assert.match(route, /legacy_approved_without_payout_id_count/);
@@ -127,5 +129,6 @@ test("Admin dashboard displays financial integrity warnings without changing bal
   assert.ok(app.includes("Financial integrity audit"));
   assert.ok(app.includes("External reserve funding: NOT VERIFIED"));
   assert.ok(app.includes("Unledgered Accounts"));
+  assert.ok(app.includes("Claims Missing Ledger"));
   assert.ok(app.includes("Legacy Approved"));
 });
