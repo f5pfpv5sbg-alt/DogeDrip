@@ -20,3 +20,9 @@ Sensitive API actions use an atomic D1 fixed-window counter. Authenticated route
 | `POST /api/admin/withdrawals/:id/reject` | 10 | 60 seconds | Admin UID |
 
 Limits are fixed windows and return HTTP 429 with `retry_after` when exceeded. The D1 upsert is atomic; if rate-limit storage is unavailable, protected requests fail closed with HTTP 503. The table contains only hashed keys and is periodically cleaned of entries older than one day. D1 adds one write per protected request; at higher traffic, evaluate a Durable Object or Cloudflare edge rate-limiting rules to reduce D1 write load. These limits are abuse controls, not a substitute for Turnstile, authentication, idempotency, or business-level claim/withdrawal rules.
+
+## User profiles
+
+User profile data is stored in D1. Firebase Authentication remains the identity provider. The authenticated profile API exposes account ID, email, account creation date, email-verification state, plan, and referral details. Users may update only their username; email, UID, role, balance, plan, referral code, and verification state are server-controlled.
+
+The D1 migration in `migrations/0002_user_profile.sql` adds the username column and a case-insensitive unique index. Usernames are 3–20 characters, limited to ASCII letters, numbers, and underscores. Profile reads are available to authenticated users so they can see their verification status; profile updates require a verified email.
