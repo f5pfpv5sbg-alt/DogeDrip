@@ -2776,7 +2776,7 @@ async function handleRequest(request, env, json) {
       const updated = await env.DB.prepare(`
         UPDATE advertising_requests
         SET status = 'active',
-            active_until = datetime('now', '+' || duration_days || ' days'),
+            active_until = datetime('now', '+' || (duration_days + CASE WHEN duration_days = 30 THEN 5 ELSE 0 END) || ' days'),
             processed_by = ?,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND status = 'payment_submitted'
