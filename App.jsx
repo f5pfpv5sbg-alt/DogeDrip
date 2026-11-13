@@ -248,6 +248,8 @@ const mapWithdrawal = (w) => ({
   amount: Number(w.amount_koinu) / KOINU,
   address: w.wallet_address || w.address || '',
   status: w.status || 'pending',
+  faucetpayPayoutId: w.faucetpay_payout_id || '',
+  payoutError: w.payout_error || '',
   timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
@@ -1973,7 +1975,7 @@ export default function App() {
 
       setWithdrawAddress('');
       setWithdrawMsg(
-        'Withdrawal request submitted successfully. DEMO ledger only.'
+        'Withdrawal request submitted. Payment will be processed after admin review.'
       );
     } catch (error) {
       setWithdrawMsg(error.message || 'Withdrawal request failed.');
@@ -4524,15 +4526,27 @@ export default function App() {
                             </td>
 
                             <td className="p-4">
-                              <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
-                                w.status === 'approved'
-                                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                                  : w.status === 'rejected'
-                                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                                    : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
-                              }`}>
-                                {w.status}
-                              </span>
+                              <div className="flex flex-col items-start gap-1">
+                                <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
+                                  w.status === 'paid' || w.status === 'approved'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                    : w.status === 'rejected'
+                                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                                      : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                                }`}>
+                                  {w.status}
+                                </span>
+                                {w.faucetpayPayoutId && (
+                                  <span className="text-[10px] text-slate-500 break-all">
+                                    FaucetPay ID: {w.faucetpayPayoutId}
+                                  </span>
+                                )}
+                                {w.payoutError && (
+                                  <span className="text-[10px] text-red-300 max-w-[220px]">
+                                    {w.payoutError}
+                                  </span>
+                                )}
+                              </div>
                             </td>
 
                             <td className="p-4">
@@ -4544,7 +4558,7 @@ export default function App() {
                                     onClick={() => handleAdminApprove(w.id)}
                                     className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${adminActionBtn}`}
                                   >
-                                    {adminActionLoading === w.id ? '...' : 'Approve'}
+                                    {adminActionLoading === w.id ? '...' : 'Pay DOGE'}
                                   </button>
 
                                   <button
