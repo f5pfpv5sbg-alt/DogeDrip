@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
   <head>
@@ -21,6 +20,81 @@
       content="DogeDrip - Dogecoin Faucet & Rewards"
     />
     <title>DogeDrip - Dogecoin Faucet & Rewards</title>
+
+    <script>
+      (() => {
+        let gestureStartScale = 1;
+        let pinchStartDistance = 0;
+        let pinchStartScale = 1;
+
+        const getTouchDistance = (touches) => {
+          const dx = touches[0].clientX - touches[1].clientX;
+          const dy = touches[0].clientY - touches[1].clientY;
+          return Math.hypot(dx, dy);
+        };
+
+        document.addEventListener(
+          "gesturestart",
+          () => {
+            gestureStartScale = window.visualViewport?.scale || 1;
+          },
+          { passive: true }
+        );
+
+        document.addEventListener(
+          "gesturechange",
+          (event) => {
+            if (
+              Number.isFinite(event.scale) &&
+              gestureStartScale * event.scale < 1 &&
+              event.cancelable
+            ) {
+              event.preventDefault();
+            }
+          },
+          { passive: false }
+        );
+
+        document.addEventListener(
+          "touchstart",
+          (event) => {
+            if (event.touches.length === 2) {
+              pinchStartDistance = getTouchDistance(event.touches);
+              pinchStartScale = window.visualViewport?.scale || 1;
+            }
+          },
+          { passive: true }
+        );
+
+        document.addEventListener(
+          "touchmove",
+          (event) => {
+            if (event.touches.length !== 2 || pinchStartDistance <= 0) {
+              return;
+            }
+
+            const nextDistance = getTouchDistance(event.touches);
+            const projectedScale =
+              pinchStartScale * (nextDistance / pinchStartDistance);
+
+            if (projectedScale < 1 && event.cancelable) {
+              event.preventDefault();
+            }
+          },
+          { passive: false }
+        );
+
+        const resetPinch = (event) => {
+          if (event.touches.length < 2) {
+            pinchStartDistance = 0;
+            pinchStartScale = window.visualViewport?.scale || 1;
+          }
+        };
+
+        document.addEventListener("touchend", resetPinch, { passive: true });
+        document.addEventListener("touchcancel", resetPinch, { passive: true });
+      })();
+    </script>
 
     <!-- Cloudflare Turnstile -->
     <script
