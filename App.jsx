@@ -175,6 +175,16 @@ const PLAN_CATALOG = [
   }
 ];
 
+// ADVERTISING PACKAGES (DISPLAY PRICING; payment is still manually verified)
+const ADVERTISING_PLAN_CATALOG = [
+  { key: 'bottom-7', label: 'Bottom Banner', placement: 'bottom', days: 7, totalDays: 7, price: '€5' },
+  { key: 'bottom-14', label: 'Bottom Banner', placement: 'bottom', days: 14, totalDays: 14, price: '€9' },
+  { key: 'bottom-30', label: 'Bottom Banner', placement: 'bottom', days: 30, totalDays: 35, price: '€15' },
+  { key: 'top-7', label: 'Top Banner', placement: 'top', days: 7, totalDays: 7, price: '€8' },
+  { key: 'top-14', label: 'Top Banner', placement: 'top', days: 14, totalDays: 14, price: '€14' },
+  { key: 'top-30', label: 'Top Banner', placement: 'top', days: 30, totalDays: 35, price: '€25' }
+];
+
 const isNum = (v) =>
   v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
@@ -3749,6 +3759,72 @@ export default function App() {
                 })}
               </div>
 
+              <div className="border-t border-slate-800 pt-7 space-y-5">
+                <div>
+                  <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
+                    Advertising Plans
+                  </h2>
+                  <p className="text-sm text-slate-400">
+                    Promote your website with a sponsored banner on DogeDrip. Choose a placement and campaign duration.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  {[
+                    { placement: 'bottom', title: 'Bottom Banner', description: 'Displayed at the bottom of the DogeDrip page.', icon: Wallet },
+                    { placement: 'top', title: 'Top Banner', description: 'Premium visibility near the top of the DogeDrip page.', icon: Award }
+                  ].map(group => {
+                    const PlacementIcon = group.icon;
+                    return (
+                      <section key={group.placement} className="border border-slate-800 rounded-2xl p-4 md:p-5 space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-3 rounded-xl bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1]">
+                            <PlacementIcon className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-black text-white">{group.title}</h3>
+                            <p className="text-xs text-slate-500">{group.description}</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {ADVERTISING_PLAN_CATALOG.filter(plan => plan.placement === group.placement).map(plan => (
+                            <div key={plan.key} className="bg-black border border-slate-800 rounded-xl p-4 flex flex-col">
+                              <span className="text-xs font-bold text-slate-400">{plan.days} days</span>
+                              <span className="text-2xl font-black font-mono text-white mt-1">{plan.price}</span>
+                              {plan.days === 30 ? (
+                                <span className="text-[11px] font-black text-[#F4A6C1] mt-2">+ 5 DAYS FREE</span>
+                              ) : (
+                                <span className="text-[11px] text-slate-500 mt-2">Standard duration</span>
+                              )}
+                              <span className="text-[11px] text-slate-400 mt-1">{plan.totalDays} days of advertising</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAdForm(prev => ({
+                                    ...prev,
+                                    placement: plan.placement,
+                                    duration_days: String(plan.days)
+                                  }));
+                                  setAdMessage('');
+                                  setAdMessageIsError(false);
+                                  setActiveTab('advertise');
+                                }}
+                                className="mt-4 w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-2.5 rounded-lg text-xs transition-colors"
+                              >
+                                Choose Plan
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Displayed prices are launch package rates. Your campaign is reviewed before payment instructions are sent. The 5 bonus days on 30-day packages are applied after payment verification.
+                </p>
+              </div>
+
               <div className="p-4 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
                 <Info className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
@@ -4103,7 +4179,7 @@ export default function App() {
                       <span className="text-[10px] uppercase font-black tracking-wider text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
                     </div>
                     <a href={request.website_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#F4A6C1] break-all">{request.website_url}</a>
-                    <p className="text-xs text-slate-500">{request.placement} placement · {request.duration_days} days · {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Price pending review'}</p>
+                    <p className="text-xs text-slate-500">{request.placement} placement · {request.duration_days === 30 ? '30 days + 5 bonus (35 total)' : request.duration_days + ' days'} · {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Price pending review'}</p>
                     {request.status === 'awaiting_payment' && (
                       <div className="space-y-2">
                         <p className="text-xs text-slate-400">Check your contact email for payment instructions. After paying, enter the transaction reference below.</p>
@@ -4158,7 +4234,7 @@ export default function App() {
                       <span>Contact: {request.contact_email}</span>
                       <span>Account: {request.account_email}</span>
                       <span>Placement: {request.placement}</span>
-                      <span>Duration: {request.duration_days} days</span>
+                      <span>Duration: {request.duration_days === 30 ? '30 days + 5 bonus (35 total)' : request.duration_days + ' days'}</span>
                       <span>Submitted: {formatDate(request.created_at)}</span>
                       <span>Quote: {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Not set'}</span>
                     </div>
