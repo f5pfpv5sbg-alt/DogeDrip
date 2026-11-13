@@ -109,7 +109,7 @@ const PLAN_CATALOG = [
       '0.0005 DOGE per claim',
       '50-second claim cooldown',
       'Free Lucky Wheel',
-      'Daily Check-in',
+      'Daily streak bonus with Claim',
       'Return Bonuses',
       'Missions & Challenges',
       'Advertisements'
@@ -1556,8 +1556,30 @@ export default function App() {
       }, 2200);
 
       const reward = Number(data.amount_koinu) / KOINU;
+      let dailyBonusText = '';
+
+      try {
+        const currentStreak = await apiRequest('/api/streak');
+        applyStreakData(currentStreak);
+
+        if (currentStreak.can_checkin === true) {
+          const checkinData = await apiRequest('/api/streak/checkin', {
+            method: 'POST'
+          });
+
+          applyStreakData(checkinData);
+          applyAccountData(checkinData);
+
+          if (checkinData.already_checked_in !== true && isNum(checkinData.reward_koinu)) {
+            dailyBonusText = ` + Daily Bonus: ${formatDoge(checkinData.reward_koinu)} DOGE (Day ${Number(checkinData.streak_day)})`;
+          }
+        }
+      } catch (streakError) {
+        setStreakError(streakError.message || 'Daily bonus could not be processed. It can be retried with your next successful claim.');
+      }
+
       showClaimMessage(
-        `Claim successful! +${reward.toFixed(6)} DOGE`,
+        `Claim successful! +${reward.toFixed(6)} DOGE${dailyBonusText}`,
         false
       );
 
@@ -2728,15 +2750,6 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setActiveTab('streak')}
-              className={tabBtnCls('streak')}
-            >
-              <CalendarCheck className="w-4 h-4" />
-              <span>Daily Check-in</span>
-            </button>
-
-            <button
-              type="button"
               onClick={() => setActiveTab('wheel')}
               className={tabBtnCls('wheel')}
             >
@@ -2917,6 +2930,45 @@ export default function App() {
                 />
               </div>
 
+              <div className="bg-black border border-[#F4A6C1]/30 rounded-2xl p-4 md:p-5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black text-white font-['Space_Grotesk',sans-serif]">Daily Streak Bonus</h3>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Earn your daily streak reward automatically with your first successful Claim each UTC day.
+                    </p>
+                  </div>
+                  <CalendarCheck className="w-6 h-6 text-[#F4A6C1] shrink-0" />
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <StatTile
+                    label="Current Streak"
+                    value={streakInfo ? `Day ${streakCompletedDays} / 7` : (streakLoading ? '...' : 'N/A')}
+                    valueCls="text-[#F4A6C1]"
+                  />
+                  <StatTile
+                    label={streakCheckedToday ? "Today's Bonus" : 'Next Daily Bonus'}
+                    value={streakInfo
+                      ? (streakCheckedToday ? 'Claimed' : `${formatDoge(streakInfo.nextRewardKoinu)} DOGE`)
+                      : (streakLoading ? '...' : 'N/A')}
+                    sub={streakInfo && !streakCheckedToday && streakNextDay > 0 ? `Day ${streakNextDay}` : undefined}
+                  />
+                  <StatTile
+                    label="Total Streak Rewards"
+                    value={streakInfo ? formatDoge(streakInfo.totalRewardsKoinu) : (streakLoading ? '...' : 'N/A')}
+                    sub="DOGE"
+                  />
+                </div>
+                {streakError && (
+                  <p className="text-xs text-red-400">{streakError}</p>
+                )}
+                {streakCheckedToday && (
+                  <p className="text-xs text-emerald-400 font-bold">
+                    Today's daily bonus has been credited to your balance.
+                  </p>
+                )}
+              </div>
+
               <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
                 {showClaimEffect && (
                   <div className="claim-celebration" aria-hidden="true">
@@ -3061,148 +3113,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-            </div>
-          )}
-
-          {activeTab === 'streak' && (
-            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-              <div>
-                <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Daily Check-in <span className="text-[#F4A6C1]">(DEMO)</span>
-                </h2>
-                <p className="text-sm text-slate-400">
-                  Check in once per day (UTC) to build a 7-day streak. Rewards grow each day and are added to your DEMO balance by the server.
-                </p>
-              </div>
-
-              {streakError && (
-                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>{streakError}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <StatTile
-                  label="Current Streak"
-                  value={
-                    streakInfo
-                      ? `Day ${streakCompletedDays} / 7`
-                      : (streakLoading ? '...' : 'N/A')
-                  }
-                  valueCls="text-[#F4A6C1]"
-                />
-                <StatTile
-                  label={streakCheckedToday ? "Today's Reward" : 'Next Reward'}
-                  value={
-                    streakInfo
-                      ? (streakCheckedToday
-                          ? 'Claimed'
-                          : `${formatDoge(streakInfo.nextRewardKoinu)} DOGE`)
-                      : (streakLoading ? '...' : 'N/A')
-                  }
-                  sub={streakInfo && !streakCheckedToday && streakNextDay > 0 ? `Day ${streakNextDay}` : undefined}
-                />
-                <StatTile
-                  label="Total Earned"
-                  value={
-                    streakInfo
-                      ? formatDoge(streakInfo.totalRewardsKoinu)
-                      : (streakLoading ? '...' : 'N/A')
-                  }
-                  sub="DOGE (demo)"
-                />
-                <StatTile
-                  label="Balance"
-                  value={demoBalance.toFixed(6)}
-                  sub="DOGE (demo)"
-                />
-              </div>
-
-              <PinkDivider />
-
-              <div className="grid grid-cols-4 md:grid-cols-7 gap-3">
-                {STREAK_CYCLE_DAYS.map(day => {
-                  const isDone = day <= streakCompletedDays;
-                  const isNext = streakNextDay === day;
-
-                  return (
-                    <div
-                      key={day}
-                      className={`bg-black rounded-xl p-3 text-center border-2 transition-all ${
-                        isNext
-                          ? 'border-[#F4A6C1] shadow-lg shadow-[#F4A6C1]/20'
-                          : isDone
-                            ? 'border-emerald-500/40'
-                            : 'border-slate-800'
-                      }`}
-                    >
-                      <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-mono font-bold">
-                        Day {day}
-                      </span>
-
-                      <div className="flex justify-center my-2">
-                        {isDone ? (
-                          <CheckCircle className="w-5 h-5 text-emerald-400" />
-                        ) : isNext ? (
-                          <Gift className="w-5 h-5 text-[#F4A6C1]" />
-                        ) : (
-                          <Lock className="w-5 h-5 text-slate-600" />
-                        )}
-                      </div>
-
-                      <span className={`block text-[11px] font-black font-mono break-words ${
-                        isDone
-                          ? 'text-emerald-400'
-                          : isNext
-                            ? 'text-[#F4A6C1]'
-                            : 'text-slate-400'
-                      }`}>
-                        +{formatDoge(STREAK_REWARD_KOINU[day])}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="flex flex-col items-center space-y-4">
-                {streakCheckedToday && (
-                  <div className="w-full max-w-sm bg-black border border-slate-800 p-4 rounded-xl text-center space-y-1">
-                    <div className="flex items-center justify-center space-x-2 text-emerald-400 text-sm font-bold">
-                      <CheckCircle className="w-4 h-4" />
-                      <span>You have checked in today</span>
-                    </div>
-                    <p className="text-xs text-slate-400">
-                      Next check-in available in {formatDuration(resetSeconds)} (00:00 UTC).
-                    </p>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={handleStreakCheckin}
-                  disabled={!canStreakCheckin}
-                  className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
-                >
-                  {isCheckingIn || (streakLoading && streakInfo === null)
-                    ? <RefreshCw className="w-5 h-5 animate-spin" />
-                    : <CalendarCheck className="w-5 h-5" />
-                  }
-                  <span>{streakButtonLabel}</span>
-                </button>
-
-                {streakMsg && (
-                  <p className={`text-sm font-bold font-['Space_Grotesk',sans-serif] text-center ${
-                    streakMsgIsError ? 'text-red-400' : 'text-emerald-400'
-                  }`}>
-                    {streakMsg}
-                  </p>
-                )}
-              </div>
-
-              <p className="text-[11px] text-slate-500 text-center">
-                DEMO ledger only. No real DOGE is paid out. Streak progress and rewards are controlled by the server. The streak resets if you miss a day.
-              </p>
             </div>
           )}
 
