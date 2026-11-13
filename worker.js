@@ -270,6 +270,96 @@ async function requireAdmin(user, env) {
   return account;
 }
 
+const RATE_LIMIT_POLICIES = Object.freeze({
+  referralValidate: { limit: 30, windowSeconds: 60 },
+  authSync: { limit: 10, windowSeconds: 60 },
+  claim: { limit: 20, windowSeconds: 60 },
+  wheelSpin: { limit: 15, windowSeconds: 60 },
+  wheelBuy: { limit: 5, windowSeconds: 60 },
+  streakCheckin: { limit: 3, windowSeconds: 60 },
+  withdrawalCreate: { limit: 3, windowSeconds: 3600 },
+  adminRead: { limit: 60, windowSeconds: 60 },
+  adminReject: { limit: 10, windowSeconds: 60 },
+  adminApprove: { limit: 5, windowSeconds: 60 }
+});
+
+async function enforceRateLimit(env, identity, route, policy) {
+  if (
+    !env.DB ||
+    typeof identity !== "string" ||
+    !identity ||
+    !policy ||
+    !Number.isSafeInteger(policy.limit) ||
+    !Number.isSafeInteger(policy.windowSeconds) ||
+    policy.limit < 1 ||
+    policy.windowSeconds < 1
+  ) {
+    throw new HttpError(503, "Rate limiting is temporarily unavailable.");
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const windowStart = Math.floor(nowSeconds / policy.windowSeconds) * policy.windowSeconds;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${route}:${identity}`)
+  );
+  const bucketHash = Array.from(
+    new Uint8Array(digest),
+    byte => byte.toString(16).padStart(2, "0")
+  ).join("");
+
+  let row;
+
+  try {
+    row = await env.DB.prepare(`
+      INSERT INTO api_rate_limits (bucket_hash, window_start, hits)
+      VALUES (?, ?, 1)
+      ON CONFLICT(bucket_hash) DO UPDATE SET
+        hits = CASE
+          WHEN api_rate_limits.window_start = excluded.window_start
+          THEN api_rate_limits.hits + 1
+          ELSE 1
+        END,
+        window_start = excluded.window_start,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING hits
+    `).bind(bucketHash, windowStart).first();
+  } catch (error) {
+    console.error("Rate limit storage error:", error);
+    throw new HttpError(503, "Rate limiting is temporarily unavailable. Please try again.");
+  }
+
+  const hits = Number(row?.hits);
+
+  if (!Number.isSafeInteger(hits) || hits < 1) {
+    throw new HttpError(503, "Rate limiting is temporarily unavailable.");
+  }
+
+  if (hits > policy.limit) {
+    const retryAfter = Math.max(
+      1,
+      windowStart + policy.windowSeconds - nowSeconds
+    );
+
+    throw new HttpError(
+      429,
+      "Too many requests. Please try again later.",
+      { retry_after: retryAfter }
+    );
+  }
+
+  if (Math.random() < 0.005) {
+    try {
+      await env.DB.prepare(`
+        DELETE FROM api_rate_limits
+        WHERE updated_at < datetime('now', '-1 day')
+      `).run();
+    } catch (error) {
+      console.warn("Rate limit cleanup skipped:", error);
+    }
+  }
+}
+
 async function readJson(request) {
   const contentLength = Number(request.headers.get("Content-Length") || 0);
 
@@ -1784,6 +1874,19 @@ async function handleRequest(request, env, json) {
   // REFERRAL VALIDATION
 
   if (path === "/api/referral/validate" && method === "GET") {
+    const clientIp = request.headers.get("CF-Connecting-IP");
+
+    if (!clientIp) {
+      throw new HttpError(503, "Rate limiting is temporarily unavailable.");
+    }
+
+    await enforceRateLimit(
+      env,
+      `ip:${clientIp}`,
+      "referral_validate",
+      RATE_LIMIT_POLICIES.referralValidate
+    );
+
     const code = (url.searchParams.get("code") || "").trim();
 
     if (!REF_CODE_REGEX.test(code)) {
@@ -1810,6 +1913,13 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request, {
       requireVerifiedEmail: false
     });
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "auth_sync",
+      RATE_LIMIT_POLICIES.authSync
+    );
 
     const body = await readJson(request);
 
@@ -1881,6 +1991,14 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/wheel/spin" && method === "POST") {
     const user = await authenticate(request);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "wheel_spin",
+      RATE_LIMIT_POLICIES.wheelSpin
+    );
+
     const body = await readJson(request);
 
     return json(await handleWheelSpin(env, user.sub, body));
@@ -1888,6 +2006,14 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/wheel/buy" && method === "POST") {
     const user = await authenticate(request);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "wheel_buy",
+      RATE_LIMIT_POLICIES.wheelBuy
+    );
+
     const body = await readJson(request);
 
     return json(await handleWheelBuy(env, user.sub, body));
@@ -1905,6 +2031,14 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/claim" && method === "POST") {
     const user = await authenticate(request);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "claim",
+      RATE_LIMIT_POLICIES.claim
+    );
+
     const body = await readJson(request);
     const requestId = getRequestId(body);
     const plan = await getUserPlan(env, user.sub);
@@ -2117,6 +2251,13 @@ async function handleRequest(request, env, json) {
   if (path === "/api/streak/checkin" && method === "POST") {
     const user = await authenticate(request);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "streak_checkin",
+      RATE_LIMIT_POLICIES.streakCheckin
+    );
+
     return json(
       await handleStreakCheckin(env, user.sub)
     );
@@ -2156,6 +2297,14 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/withdrawals" && method === "POST") {
     const user = await authenticate(request);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "withdrawal_create",
+      RATE_LIMIT_POLICIES.withdrawalCreate
+    );
+
     const body = await readJson(request);
 
     const amount = body.amount_koinu;
@@ -2347,6 +2496,13 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
     await requireAdmin(user, env);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_stats",
+      RATE_LIMIT_POLICIES.adminRead
+    );
+
     return json(await getAdminDailyStats(env));
   }
 
@@ -2355,6 +2511,13 @@ async function handleRequest(request, env, json) {
   if (path === "/api/admin/withdrawals" && method === "GET") {
     const user = await authenticate(request);
     await requireAdmin(user, env);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_withdrawals_read",
+      RATE_LIMIT_POLICIES.adminRead
+    );
 
     const result = await env.DB.prepare(`
       SELECT
@@ -2390,6 +2553,13 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
     await requireAdmin(user, env);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_withdrawal_approve",
+      RATE_LIMIT_POLICIES.adminApprove
+    );
+
     throw new HttpError(
       501,
       "Real DOGE payouts are not integrated. Withdrawal approval is disabled."
@@ -2405,6 +2575,14 @@ async function handleRequest(request, env, json) {
   if (rejectMatch && method === "POST") {
     const user = await authenticate(request);
     const admin = await requireAdmin(user, env);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_withdrawal_reject",
+      RATE_LIMIT_POLICIES.adminReject
+    );
+
     const id = Number(rejectMatch[1]);
 
     if (!Number.isSafeInteger(id)) {
