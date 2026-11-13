@@ -2750,7 +2750,7 @@ export default function App() {
               className={tabBtnCls('plans')}
             >
               <Crown className="w-4 h-4" />
-              <span>Plans</span>
+              <span>Plans &amp; Advertisements</span>
             </button>
 
             <button
@@ -2769,23 +2769,6 @@ export default function App() {
             >
               <Users className="w-4 h-4" />
               <span>Referral Program</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab('advertise');
-                setAdMessage('');
-                setAdMessageIsError(false);
-                setAdForm(prev => ({
-                  ...prev,
-                  contact_email: prev.contact_email || firebaseUser?.email || ''
-                }));
-              }}
-              className={tabBtnCls('advertise')}
-            >
-              <Ticket className="w-4 h-4" />
-              <span>Advertise</span>
             </button>
 
             {isDemoAdmin && (
@@ -3569,11 +3552,12 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Plans
+                  Plans &amp; Advertisements
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Compare the three DogeDrip plans. Your active plan is determined by the server.
+                  Manage your DogeDrip membership and advertising campaigns in one place.
                 </p>
+                <h3 className="text-base font-black uppercase tracking-wider text-slate-300 mt-5">Membership Plans</h3>
               </div>
 
               {accountError && !accountLoaded && (
@@ -3807,7 +3791,7 @@ export default function App() {
                                   }));
                                   setAdMessage('');
                                   setAdMessageIsError(false);
-                                  setActiveTab('advertise');
+                                  setActiveTab('plans');
                                 }}
                                 className="mt-4 w-full bg-[#F4A6C1] hover:bg-[#e091ad] text-black font-black py-2.5 rounded-lg text-xs transition-colors"
                               >
@@ -3823,6 +3807,112 @@ export default function App() {
                 <p className="text-[11px] text-slate-500">
                   Displayed prices are launch package rates. Your campaign is reviewed before payment instructions are sent. The 5 bonus days on 30-day packages are applied after payment verification.
                 </p>
+              </div>
+
+              <div className="border-t border-slate-800 pt-7 space-y-5">
+                <div>
+                  <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">Advertising Campaign</h2>
+                  <p className="text-sm text-slate-400">Choose an advertising package above, then submit your campaign details below.</p>
+                </div>
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Submit an Advertising Request</h2>
+                <p className="text-sm text-slate-400 mt-2">Promote your website to DogeDrip users. Submit your campaign for review. Your quote will appear here, and payment instructions will be sent separately by our team.</p>
+              </div>
+
+              {adMessage && (
+                <div className={`p-3 rounded-xl text-sm border ${adMessageIsError ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/30 text-[#F4A6C1]'}`}>
+                  {adMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleAdSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className={LABEL_CLS}>Business / Project Name</span>
+                    <input required minLength={2} maxLength={80} value={adForm.business_name} onChange={e => setAdForm(prev => ({ ...prev, business_name: e.target.value }))} className={INPUT_CLS} placeholder="Your brand name" />
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Contact Email</span>
+                    <input required type="email" maxLength={254} value={adForm.contact_email} onChange={e => setAdForm(prev => ({ ...prev, contact_email: e.target.value }))} className={INPUT_CLS} placeholder="you@example.com" />
+                  </label>
+                  <label className="block md:col-span-2">
+                    <span className={LABEL_CLS}>Website URL</span>
+                    <input required type="url" maxLength={2048} value={adForm.website_url} onChange={e => setAdForm(prev => ({ ...prev, website_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com" />
+                  </label>
+                  <label className="block md:col-span-2">
+                    <span className={LABEL_CLS}>Banner Image URL</span>
+                    <input required type="url" maxLength={2048} value={adForm.banner_image_url} onChange={e => setAdForm(prev => ({ ...prev, banner_image_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com/banner.jpg" />
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Ad Placement</span>
+                    <select value={adForm.placement} onChange={e => setAdForm(prev => ({ ...prev, placement: e.target.value }))} className={INPUT_CLS}>
+                      <option value="top">Top banner</option>
+                      <option value="bottom">Bottom banner</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Duration</span>
+                    <select value={adForm.duration_days} onChange={e => setAdForm(prev => ({ ...prev, duration_days: e.target.value }))} className={INPUT_CLS}>
+                      <option value="7">7 days</option>
+                      <option value="14">14 days</option>
+                      <option value="30">30 days</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className={LABEL_CLS}>Campaign Details (Optional)</span>
+                  <textarea maxLength={500} rows={3} value={adForm.notes} onChange={e => setAdForm(prev => ({ ...prev, notes: e.target.value }))} className={INPUT_CLS} placeholder="Tell us briefly what you want to promote." />
+                </label>
+
+                <p className="text-xs text-slate-500">No payment is collected by this form. After reviewing your request, DogeDrip will email you a quote and secure payment instructions. Ads are published only after payment is verified.</p>
+                <button type="submit" disabled={adSubmitting || !apiReady} className={PRIMARY_BTN}>
+                  {adSubmitting ? 'Submitting request...' : 'Submit Advertising Request'}
+                </button>
+              </form>
+
+              <div className="border-t border-slate-800 pt-5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Your Advertising Requests</h3>
+                  <button type="button" onClick={async () => {
+                    try {
+                      const [requestsData, placementsData] = await Promise.all([
+                        apiRequest('/api/ads'),
+                        apiRequest('/api/ads/placements')
+                      ]);
+                      setMyAdRequests(requestsData.requests || []);
+                      setAdPlacements(placementsData.placements || { top: null, bottom: null });
+                    } catch (error) {
+                      setAdMessage(error.message || 'Could not refresh advertising requests.');
+                      setAdMessageIsError(true);
+                    }
+                  }} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">Refresh</button>
+                </div>
+                {myAdRequests.length === 0 ? (
+                  <p className="text-sm text-slate-500">You have not submitted any advertising requests yet.</p>
+                ) : myAdRequests.map(request => (
+                  <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-white">{request.business_name}</strong>
+                      <span className="text-[10px] uppercase font-black tracking-wider text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
+                    </div>
+                    <a href={request.website_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#F4A6C1] break-all">{request.website_url}</a>
+                    <p className="text-xs text-slate-500">{request.placement} placement · {request.duration_days === 30 ? '30 days + 5 bonus (35 total)' : request.duration_days + ' days'} · {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Price pending review'}</p>
+                    {request.status === 'awaiting_payment' && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-400">Check your contact email for payment instructions. After paying, enter the transaction reference below.</p>
+                        <input value={adPaymentRefs[request.id] || ''} onChange={e => setAdPaymentRefs(prev => ({ ...prev, [request.id]: e.target.value }))} maxLength={120} className={INPUT_CLS} placeholder="Payment transaction reference" />
+                        <button type="button" disabled={adActionLoading === request.id} onClick={() => handleAdPaymentReference(request.id)} className={PRIMARY_BTN}>{adActionLoading === request.id ? 'Submitting...' : 'Submit Payment Reference'}</button>
+                      </div>
+                    )}
+                    {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
+                    {request.status === 'active' && <p className="text-xs text-emerald-400">Your advertisement is live until {formatDate(request.active_until)}.</p>}
+                    {request.status === 'rejected' && <p className="text-xs text-red-400">This request was not approved. Contact support for details.</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
               </div>
 
               <div className="p-4 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
@@ -4094,107 +4184,7 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === 'advertise' && (
-            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-              <div>
-                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertise on DogeDrip</h2>
-                <p className="text-sm text-slate-400 mt-2">Promote your website to DogeDrip users. Submit your campaign for review. Your quote will appear here, and payment instructions will be sent separately by our team.</p>
-              </div>
 
-              {adMessage && (
-                <div className={`p-3 rounded-xl text-sm border ${adMessageIsError ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/30 text-[#F4A6C1]'}`}>
-                  {adMessage}
-                </div>
-              )}
-
-              <form onSubmit={handleAdSubmit} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <label className="block">
-                    <span className={LABEL_CLS}>Business / Project Name</span>
-                    <input required minLength={2} maxLength={80} value={adForm.business_name} onChange={e => setAdForm(prev => ({ ...prev, business_name: e.target.value }))} className={INPUT_CLS} placeholder="Your brand name" />
-                  </label>
-                  <label className="block">
-                    <span className={LABEL_CLS}>Contact Email</span>
-                    <input required type="email" maxLength={254} value={adForm.contact_email} onChange={e => setAdForm(prev => ({ ...prev, contact_email: e.target.value }))} className={INPUT_CLS} placeholder="you@example.com" />
-                  </label>
-                  <label className="block md:col-span-2">
-                    <span className={LABEL_CLS}>Website URL</span>
-                    <input required type="url" maxLength={2048} value={adForm.website_url} onChange={e => setAdForm(prev => ({ ...prev, website_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com" />
-                  </label>
-                  <label className="block md:col-span-2">
-                    <span className={LABEL_CLS}>Banner Image URL</span>
-                    <input required type="url" maxLength={2048} value={adForm.banner_image_url} onChange={e => setAdForm(prev => ({ ...prev, banner_image_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com/banner.jpg" />
-                  </label>
-                  <label className="block">
-                    <span className={LABEL_CLS}>Ad Placement</span>
-                    <select value={adForm.placement} onChange={e => setAdForm(prev => ({ ...prev, placement: e.target.value }))} className={INPUT_CLS}>
-                      <option value="top">Top banner</option>
-                      <option value="bottom">Bottom banner</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className={LABEL_CLS}>Duration</span>
-                    <select value={adForm.duration_days} onChange={e => setAdForm(prev => ({ ...prev, duration_days: e.target.value }))} className={INPUT_CLS}>
-                      <option value="7">7 days</option>
-                      <option value="14">14 days</option>
-                      <option value="30">30 days</option>
-                    </select>
-                  </label>
-                </div>
-
-                <label className="block">
-                  <span className={LABEL_CLS}>Campaign Details (Optional)</span>
-                  <textarea maxLength={500} rows={3} value={adForm.notes} onChange={e => setAdForm(prev => ({ ...prev, notes: e.target.value }))} className={INPUT_CLS} placeholder="Tell us briefly what you want to promote." />
-                </label>
-
-                <p className="text-xs text-slate-500">No payment is collected by this form. After reviewing your request, DogeDrip will email you a quote and secure payment instructions. Ads are published only after payment is verified.</p>
-                <button type="submit" disabled={adSubmitting || !apiReady} className={PRIMARY_BTN}>
-                  {adSubmitting ? 'Submitting request...' : 'Submit Advertising Request'}
-                </button>
-              </form>
-
-              <div className="border-t border-slate-800 pt-5 space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Your Advertising Requests</h3>
-                  <button type="button" onClick={async () => {
-                    try {
-                      const [requestsData, placementsData] = await Promise.all([
-                        apiRequest('/api/ads'),
-                        apiRequest('/api/ads/placements')
-                      ]);
-                      setMyAdRequests(requestsData.requests || []);
-                      setAdPlacements(placementsData.placements || { top: null, bottom: null });
-                    } catch (error) {
-                      setAdMessage(error.message || 'Could not refresh advertising requests.');
-                      setAdMessageIsError(true);
-                    }
-                  }} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">Refresh</button>
-                </div>
-                {myAdRequests.length === 0 ? (
-                  <p className="text-sm text-slate-500">You have not submitted any advertising requests yet.</p>
-                ) : myAdRequests.map(request => (
-                  <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <strong className="text-white">{request.business_name}</strong>
-                      <span className="text-[10px] uppercase font-black tracking-wider text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
-                    </div>
-                    <a href={request.website_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#F4A6C1] break-all">{request.website_url}</a>
-                    <p className="text-xs text-slate-500">{request.placement} placement · {request.duration_days === 30 ? '30 days + 5 bonus (35 total)' : request.duration_days + ' days'} · {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Price pending review'}</p>
-                    {request.status === 'awaiting_payment' && (
-                      <div className="space-y-2">
-                        <p className="text-xs text-slate-400">Check your contact email for payment instructions. After paying, enter the transaction reference below.</p>
-                        <input value={adPaymentRefs[request.id] || ''} onChange={e => setAdPaymentRefs(prev => ({ ...prev, [request.id]: e.target.value }))} maxLength={120} className={INPUT_CLS} placeholder="Payment transaction reference" />
-                        <button type="button" disabled={adActionLoading === request.id} onClick={() => handleAdPaymentReference(request.id)} className={PRIMARY_BTN}>{adActionLoading === request.id ? 'Submitting...' : 'Submit Payment Reference'}</button>
-                      </div>
-                    )}
-                    {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
-                    {request.status === 'active' && <p className="text-xs text-emerald-400">Your advertisement is live until {formatDate(request.active_until)}.</p>}
-                    {request.status === 'rejected' && <p className="text-xs text-red-400">This request was not approved. Contact support for details.</p>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {activeTab === 'admin' && isDemoAdmin && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
