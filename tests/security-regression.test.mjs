@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [worker, app] = await Promise.all([
+const [worker, app, wheelMigration] = await Promise.all([
   readFile(new URL("../worker.js", import.meta.url), "utf8"),
-  readFile(new URL("../App.jsx", import.meta.url), "utf8")
+  readFile(new URL("../App.jsx", import.meta.url), "utf8"),
+  readFile(new URL("../migrations/0005_lucky_wheel.sql", import.meta.url), "utf8")
 ]);
 
 test("authenticated API requests require a verified Firebase email by default", () => {
@@ -131,4 +132,38 @@ test("Admin dashboard displays financial integrity warnings without changing bal
   assert.ok(app.includes("Unledgered Accounts"));
   assert.ok(app.includes("Claims Missing Ledger"));
   assert.ok(app.includes("Legacy Approved"));
+});
+
+
+test("referral dashboard endpoint is implemented and authenticated on both sides", () => {
+  assert.match(app, /apiRequest\('\/api\/referrals'\)/);
+  assert.match(worker, /path === "\/api\/referrals" && method === "GET"[\\s\\S]{0,120}authenticate\\(request\\)/);
+  assert.match(worker, /invited_count: invitedCount/);
+});
+
+test("Lucky Wheel frontend endpoints have matching authenticated Worker routes", () => {
+  for (const endpoint of ["/api/wheel/state", "/api/wheel/spin", "/api/wheel/buy", "/api/wheel/history"]) {
+    assert.ok(app.includes(endpoint), `frontend must call ${endpoint}`);
+    assert.ok(worker.includes(endpoint), `Worker must expose ${endpoint}`);
+  }
+  assert.match(worker, /path === "\/api\/wheel\/spin" && method === "POST"[\\s\\S]{0,180}authenticate\\(request\\)/);
+  assert.match(worker, /path === "\/api\/wheel\/buy" && method === "POST"[\\s\\S]{0,180}authenticate\\(request\\)/);
+});
+
+test("Lucky Wheel migration creates every persistence table and keeps payouts disabled by default", () => {
+  for (const table of [
+    "wheel_prizes",
+    "wheel_reserve",
+    "wheel_daily_usage",
+    "wheel_spin_inventory",
+    "wheel_spins",
+    "wheel_purchases"
+  ]) {
+    assert.match(wheelMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+  }
+  assert.match(wheelMigration, /available_koinu INTEGER NOT NULL DEFAULT 0/);
+  assert.match(wheelMigration, /locked_koinu INTEGER NOT NULL DEFAULT 0/);
+  assert.match(wheelMigration, /payouts_enabled INTEGER NOT NULL DEFAULT 0/);
+  assert.match(wheelMigration, /VALUES \(1, 0, 0, 0\)/);
+  assert.match(wheelMigration, /UNIQUE \(uid, request_id\)/);
 });
