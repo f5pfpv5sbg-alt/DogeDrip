@@ -1728,6 +1728,7 @@ async function getAdminDailyStats(env) {
     wdRejected,
     balances,
     activity,
+    adRevenue,
     faucetReserve,
     wheelReserve
   ] = await Promise.all([
@@ -1808,6 +1809,17 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(quoted_price_eur), 0) AS total,
+        COUNT(*) AS count
+      FROM advertising_requests
+      WHERE status = 'active'
+        AND payment_reference IS NOT NULL
+        AND quoted_price_eur IS NOT NULL
+        AND date(updated_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1853,6 +1865,8 @@ async function getAdminDailyStats(env) {
     registered_today: registeredToday,
     active_users_today: Number(activity?.active_users || 0),
     login_sessions_today: Number(activity?.login_sessions || 0),
+    verified_ad_revenue_eur: Number(adRevenue?.total || 0),
+    verified_ad_campaigns_today: Number(adRevenue?.count || 0),
     income_koinu: incomeKoinu,
     payouts_koinu: payoutsKoinu,
     profit_koinu: incomeKoinu - payoutsKoinu,
