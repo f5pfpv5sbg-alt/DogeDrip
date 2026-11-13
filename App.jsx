@@ -3234,10 +3234,10 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-8">
               <div className="text-center">
                 <h2 className="text-2xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif] tracking-tight">
-                  Lucky Wheel <span className="text-[#F4A6C1]">(DEMO)</span>
+                  Lucky Wheel
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Spin for simulated DEMO DOGE. The prize is decided by the server.
+                  Spin for server-verified DOGE rewards.
                 </p>
               </div>
 
@@ -3245,10 +3245,9 @@ export default function App() {
                 <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 rounded-xl text-sm flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <span>
-                    The Lucky Wheel is not available yet: the Worker does not have the
-                    Wheel endpoints (/api/wheel/state, /api/wheel/spin, /api/wheel/buy,
-                    /api/wheel/history). Nothing is simulated here, so spinning and
-                    buying are disabled until they are deployed.
+                    The Lucky Wheel service is not available. Check that the Worker is deployed
+                    with the latest code and that wheel prizes and the payout reserve are configured.
+                    No balance changes are made while the wheel is unavailable.
                   </span>
                 </div>
               )}
