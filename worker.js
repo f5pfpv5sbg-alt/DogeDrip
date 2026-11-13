@@ -288,6 +288,7 @@ async function requireAdmin(user, env) {
 }
 
 const RATE_LIMIT_POLICIES = Object.freeze({
+  registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
@@ -1959,6 +1960,25 @@ async function handleRequest(request, env, json) {
     }
   }
 
+  // PUBLIC REGISTRATION RATE LIMIT
+  // Limits account creation attempts by Cloudflare-verified client IP.
+  if (path === "/api/security/register" && method === "POST") {
+    const clientIp = request.headers.get("CF-Connecting-IP");
+
+    if (!clientIp) {
+      throw new HttpError(503, "Registration security is temporarily unavailable.");
+    }
+
+    await enforceRateLimit(
+      env,
+      `ip:${clientIp}`,
+      "registration",
+      RATE_LIMIT_POLICIES.registration
+    );
+
+    return json({ success: true });
+  }
+
   // REFERRAL VALIDATION
 
   if (path === "/api/referral/validate" && method === "GET") {
@@ -2069,7 +2089,7 @@ async function handleRequest(request, env, json) {
 
   // USER PROFILE
   if (path === "/api/profile" && method === "GET") {
-    const user = await authenticate(request, { requireVerifiedEmail: false });
+    const user = await authenticate(request);
     const profile = await env.DB.prepare(`
       SELECT username, created_at, email_verified_at, plan, ref_code, referred_by
       FROM users WHERE uid = ?
