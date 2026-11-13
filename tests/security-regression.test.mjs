@@ -54,3 +54,30 @@ test("unverified users are shown the verification gate and cannot save profile c
   assert.match(app, /Email verification required/);
   assert.match(app, /disabled=\{profileSaving \|\| !apiReady \|\| !firebaseUser\?\.emailVerified\}/);
 });
+
+
+test("FaucetPay payouts are disabled unless an explicit server-side flag is enabled", () => {
+  assert.match(worker, /env\.FAUCETPAY_PAYOUTS_ENABLED !== "true"/);
+  assert.match(worker, /env\.FAUCETPAY_API_KEY/);
+  assert.doesNotMatch(worker, /FAUCETPAY_API_KEY\s*=\s*["']/);
+});
+
+test("FaucetPay payout calls stay server-side and use DOGE smallest-unit amounts", () => {
+  assert.match(worker, /https:\/\/faucetpay\.io\/api\/v1\//);
+  assert.match(worker, /faucetPayRequest\(env, "send"/);
+  assert.match(worker, /amount:\s*String\(Number\(withdrawal\.amount_koinu\)\)/);
+  assert.match(worker, /to:\s*withdrawal\.wallet_address/);
+  assert.match(worker, /currency:\s*"DOGE"/);
+});
+
+test("FaucetPay payouts lock pending withdrawals before sending and prevent automatic retries on uncertain results", () => {
+  assert.match(worker, /SET status = 'processing'[\s\S]{0,180}WHERE id = \?[\s\S]{0,80}AND status = 'pending'/);
+  assert.match(worker, /status = 'payment_unknown'/);
+  assert.match(worker, /Check FaucetPay payout history before any retry/);
+  assert.match(worker, /status = 'paid'[\s\S]{0,180}faucetpay_payout_id = \?/);
+});
+
+test("FaucetPay payout IDs are persisted in the withdrawals schema", () => {
+  assert.match(worker, /w\.faucetpay_payout_id/);
+  assert.match(worker, /reconcile/);
+});

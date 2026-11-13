@@ -1933,6 +1933,70 @@ function validatePublicHttpUrl(value, fieldName) {
 }
 
 // ==========================================
+// FAUCETPAY API (DOGE PAYOUTS)
+// ==========================================
+
+async function faucetPayRequest(env, endpoint, parameters) {
+  const apiKey = typeof env.FAUCETPAY_API_KEY === "string"
+    ? env.FAUCETPAY_API_KEY.trim()
+    : "";
+
+  if (!apiKey) {
+    throw new HttpError(503, "FaucetPay API key is not configured.");
+  }
+
+  const form = new URLSearchParams({
+    api_key: apiKey,
+    ...parameters
+  });
+
+  let response;
+  try {
+    response = await fetch(`https://faucetpay.io/api/v1/${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: form.toString(),
+      signal: AbortSignal.timeout(12000)
+    });
+  } catch {
+    throw new HttpError(
+      504,
+      "FaucetPay did not return a response. The payout result must be checked manually."
+    );
+  }
+
+  let payload;
+  try {
+    const raw = await response.text();
+    if (!raw || raw.length > 16384) throw new Error("Invalid response size");
+    payload = JSON.parse(raw);
+  } catch {
+    throw new HttpError(
+      502,
+      "FaucetPay returned an unreadable response. The payout result must be checked manually."
+    );
+  }
+
+  if (!response.ok || !payload || !Number.isInteger(Number(payload.status))) {
+    throw new HttpError(
+      502,
+      "FaucetPay returned an unexpected response. The payout result must be checked manually."
+    );
+  }
+
+  return payload;
+}
+
+function getTrustedClientIp(request) {
+  const value = request.headers.get("CF-Connecting-IP") || "";
+  return value.length <= 45 && /^[0-9a-fA-F:.]+$/.test(value)
+    ? value
+    : "";
+}
+
+// ==========================================
 // MAIN API ROUTES
 // ==========================================
 
@@ -2909,6 +2973,8 @@ async function handleRequest(request, env, json) {
         w.amount_koinu,
         w.wallet_address,
         w.status,
+        w.faucetpay_payout_id,
+        w.payout_error,
         w.created_at
       FROM withdrawals w
       LEFT JOIN users u ON u.uid = w.uid
@@ -2924,8 +2990,46 @@ async function handleRequest(request, env, json) {
     });
   }
 
-  // ADMIN: APPROVE WITHDRAWAL
-  // Real DOGE sending is not integrated.
+  // ADMIN: READ FAUCETPAY DOGE BALANCE (SAFE, NO PAYOUT)
+
+  if (path === "/api/admin/faucetpay/balance" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_faucetpay_balance",
+      RATE_LIMIT_POLICIES.adminRead
+    );
+
+    const result = await faucetPayRequest(env, "getbalance", {
+      currency: "DOGE"
+    });
+
+    if (Number(result.status) !== 200) {
+      throw new HttpError(
+        502,
+        typeof result.message === "string"
+          ? result.message.slice(0, 180)
+          : "FaucetPay balance check failed."
+      );
+    }
+
+    const balanceKoinu = Number(result.balance);
+    if (!Number.isSafeInteger(balanceKoinu) || balanceKoinu < 0) {
+      throw new HttpError(502, "FaucetPay returned an invalid DOGE balance.");
+    }
+
+    return json({
+      success: true,
+      currency: "DOGE",
+      balance_koinu: balanceKoinu,
+      balance_doge: balanceKoinu / 100000000
+    });
+  }
+
+  // ADMIN: SEND A DOGE WITHDRAWAL THROUGH FAUCETPAY
+  // Disabled unless FAUCETPAY_PAYOUTS_ENABLED=true is set explicitly.
 
   const approveMatch = path.match(
     /^\/api\/admin\/withdrawals\/(\d+)\/approve$/
@@ -2933,7 +3037,7 @@ async function handleRequest(request, env, json) {
 
   if (approveMatch && method === "POST") {
     const user = await authenticate(request);
-    await requireAdmin(user, env);
+    const admin = await requireAdmin(user, env);
 
     await enforceRateLimit(
       env,
@@ -2942,10 +3046,239 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.adminApprove
     );
 
-    throw new HttpError(
-      501,
-      "Real DOGE payouts are not integrated. Withdrawal approval is disabled."
+    if (env.FAUCETPAY_PAYOUTS_ENABLED !== "true") {
+      throw new HttpError(
+        503,
+        "FaucetPay payouts are disabled until integration testing is complete."
+      );
+    }
+
+    const id = Number(approveMatch[1]);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new HttpError(400, "Invalid withdrawal ID.");
+    }
+
+    const locked = await env.DB.prepare(`
+      UPDATE withdrawals
+      SET status = 'processing',
+          processed_by = ?,
+          processed_at = CURRENT_TIMESTAMP,
+          payout_error = NULL
+      WHERE id = ?
+        AND status = 'pending'
+    `).bind(admin.uid, id).run();
+
+    if (locked.meta.changes !== 1) {
+      throw new HttpError(
+        409,
+        "Withdrawal is not pending or has already been processed."
+      );
+    }
+
+    const withdrawal = await env.DB.prepare(`
+      SELECT id, amount_koinu, wallet_address, status
+      FROM withdrawals
+      WHERE id = ?
+        AND status = 'processing'
+    `).bind(id).first();
+
+    if (
+      !withdrawal ||
+      !Number.isSafeInteger(Number(withdrawal.amount_koinu)) ||
+      Number(withdrawal.amount_koinu) <= 0 ||
+      !(await isValidDogeAddress(withdrawal.wallet_address))
+    ) {
+      await env.DB.prepare(`
+        UPDATE withdrawals
+        SET status = 'pending',
+            processed_by = NULL,
+            processed_at = NULL,
+            payout_error = 'Withdrawal data failed validation.'
+        WHERE id = ?
+          AND status = 'processing'
+      `).bind(id).run();
+
+      throw new HttpError(409, "Withdrawal data failed validation.");
+    }
+
+    let payout;
+    try {
+      payout = await faucetPayRequest(env, "send", {
+        amount: String(Number(withdrawal.amount_koinu)),
+        to: withdrawal.wallet_address,
+        currency: "DOGE",
+        ...(getTrustedClientIp(request)
+          ? { ip_address: getTrustedClientIp(request) }
+          : {})
+      });
+    } catch (error) {
+      const isUncertain =
+        error.status === 504 ||
+        (error.status === 502 &&
+          /unreadable|unexpected response|must be checked manually/i.test(error.message));
+
+      if (isUncertain) {
+        await env.DB.prepare(`
+          UPDATE withdrawals
+          SET status = 'payment_unknown',
+              payout_error = ?
+          WHERE id = ?
+            AND status = 'processing'
+        `).bind(
+          "FaucetPay response was uncertain. Check FaucetPay payout history before any retry.",
+          id
+        ).run();
+      } else {
+        await env.DB.prepare(`
+          UPDATE withdrawals
+          SET status = 'pending',
+              processed_by = NULL,
+              processed_at = NULL,
+              payout_error = ?
+          WHERE id = ?
+            AND status = 'processing'
+        `).bind(String(error.message || "FaucetPay request failed").slice(0, 180), id).run();
+      }
+
+      throw error;
+    }
+
+    if (Number(payout.status) !== 200) {
+      const message = typeof payout.message === "string"
+        ? payout.message.slice(0, 180)
+        : "FaucetPay rejected this payout.";
+
+      await env.DB.prepare(`
+        UPDATE withdrawals
+        SET status = 'pending',
+            processed_by = NULL,
+            processed_at = NULL,
+            payout_error = ?
+        WHERE id = ?
+          AND status = 'processing'
+      `).bind(message, id).run();
+
+      throw new HttpError(502, message);
+    }
+
+    const payoutId = String(payout.payout_id ?? "").trim();
+    if (
+      String(payout.currency || "").toUpperCase() !== "DOGE" ||
+      !/^\d{1,32}$/.test(payoutId)
+    ) {
+      await env.DB.prepare(`
+        UPDATE withdrawals
+        SET status = 'payment_unknown',
+            payout_error = 'FaucetPay reported success without a valid payout ID. Manual verification required.'
+        WHERE id = ?
+          AND status = 'processing'
+      `).bind(id).run();
+
+      throw new HttpError(
+        502,
+        "FaucetPay response did not include a valid payout ID. Verify the payout manually."
+      );
+    }
+
+    const completed = await env.DB.prepare(`
+      UPDATE withdrawals
+      SET status = 'paid',
+          faucetpay_payout_id = ?,
+          payout_error = NULL,
+          processed_by = ?,
+          processed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+        AND status = 'processing'
+    `).bind(payoutId, admin.uid, id).run();
+
+    if (completed.meta.changes !== 1) {
+      throw new HttpError(
+        503,
+        "FaucetPay may have paid this withdrawal, but DogeDrip could not confirm the database update. Check FaucetPay history before retrying."
+      );
+    }
+
+    return json({
+      success: true,
+      message: "DOGE payout completed through FaucetPay.",
+      id,
+      status: "paid",
+      faucetpay_payout_id: payoutId
+    });
+  }
+
+  // ADMIN: RECONCILE AN UNCERTAIN FAUCETPAY RESULT
+  // Admin must inspect FaucetPay payout history before choosing a resolution.
+
+  const reconcileMatch = path.match(
+    /^\/api\/admin\/withdrawals\/(\d+)\/reconcile$/
+  );
+
+  if (reconcileMatch && method === "POST") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_withdrawal_approve",
+      RATE_LIMIT_POLICIES.adminApprove
     );
+
+    const id = Number(reconcileMatch[1]);
+    const body = await readJson(request);
+    const resolution = body.resolution;
+
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new HttpError(400, "Invalid withdrawal ID.");
+    }
+
+    if (resolution === "paid") {
+      const payoutId = typeof body.faucetpay_payout_id === "string"
+        ? body.faucetpay_payout_id.trim()
+        : "";
+
+      if (!/^\d{1,32}$/.test(payoutId)) {
+        throw new HttpError(400, "Enter the payout ID shown in FaucetPay.");
+      }
+
+      const result = await env.DB.prepare(`
+        UPDATE withdrawals
+        SET status = 'paid',
+            faucetpay_payout_id = ?,
+            payout_error = NULL,
+            processed_by = ?,
+            processed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND status IN ('processing', 'payment_unknown')
+      `).bind(payoutId, admin.uid, id).run();
+
+      if (result.meta.changes !== 1) {
+        throw new HttpError(409, "This withdrawal is not awaiting reconciliation.");
+      }
+
+      return json({ success: true, id, status: "paid" });
+    }
+
+    if (resolution === "not_paid") {
+      const result = await env.DB.prepare(`
+        UPDATE withdrawals
+        SET status = 'pending',
+            faucetpay_payout_id = NULL,
+            payout_error = NULL,
+            processed_by = NULL,
+            processed_at = NULL
+        WHERE id = ?
+          AND status IN ('processing', 'payment_unknown')
+      `).bind(id).run();
+
+      if (result.meta.changes !== 1) {
+        throw new HttpError(409, "This withdrawal is not awaiting reconciliation.");
+      }
+
+      return json({ success: true, id, status: "pending" });
+    }
+
+    throw new HttpError(400, "Choose a valid reconciliation result.");
   }
 
   // ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER
