@@ -3016,7 +3016,7 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first()
     ]);
 
-    const withdrawalsByStatus = {};
+    const withdrawalsByStatus = Object.create(null);
     for (const row of withdrawalRows.results || []) {
       withdrawalsByStatus[row.status] = {
         count: Number(row.count || 0),
