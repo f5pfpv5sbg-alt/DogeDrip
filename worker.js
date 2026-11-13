@@ -619,6 +619,16 @@ async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
 // ==========================================
 
 async function syncUser(env, user, referredByCode, requestedUsername) {
+  const existingUsername = await env.DB.prepare(`
+    SELECT uid FROM users
+    WHERE username = ? COLLATE NOCASE AND uid != ?
+    LIMIT 1
+  `).bind(requestedUsername, user.sub).first();
+
+  if (existingUsername) {
+    throw new HttpError(409, "That username is already taken. Please choose another one.");
+  }
+
   let referrerCode = null;
 
   if (referredByCode) {
