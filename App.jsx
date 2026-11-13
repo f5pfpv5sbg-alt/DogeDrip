@@ -2589,7 +2589,7 @@ export default function App() {
           : `Check In (+${formatDoge(streakInfo.nextRewardKoinu)} DOGE)`;
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col font-sans">
+    <div className="min-h-screen bg-transparent text-white flex flex-col font-sans">
       <style>{`
         .claim-celebration {
           position: absolute;
