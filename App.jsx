@@ -1328,6 +1328,20 @@ export default function App() {
       pendingReferralRef.current = referralCode || null;
       pendingUsernameRef.current = trimmedUsername;
 
+      const registrationResponse = await fetch(`${API_URL}/api/security/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const registrationData = await registrationResponse.json().catch(() => ({}));
+
+      if (!registrationResponse.ok || registrationData.success !== true) {
+        throw new Error(
+          registrationData.error ||
+          "Registration is temporarily unavailable. Please try again later."
+        );
+      }
+
       const credential = await createUserWithEmailAndPassword(
         auth,
         trimmedEmail,
