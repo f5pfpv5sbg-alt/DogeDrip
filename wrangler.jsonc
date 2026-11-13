@@ -7,7 +7,8 @@
     {
       "binding": "DB",
       "database_name": "dogedrip-db",
-      "database_id": "fde11b87-4b5a-47ed-8312-afc550bc5cba"
+      "database_id": "fde11b87-4b5a-47ed-8312-afc550bc5cba",
+      "migrations_dir": "migrations"
     }
   ]
 }
