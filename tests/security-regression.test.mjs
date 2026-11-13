@@ -136,18 +136,30 @@ test("Admin dashboard displays financial integrity warnings without changing bal
 
 
 test("referral dashboard endpoint is implemented and authenticated on both sides", () => {
-  assert.match(app, /apiRequest\('\/api\/referrals'\)/);
-  assert.match(worker, /path === "\/api\/referrals" && method === "GET"[\\s\\S]{0,120}authenticate\\(request\\)/);
-  assert.match(worker, /invited_count: invitedCount/);
+  assert.ok(app.includes("apiRequest('/api/referrals')"));
+  const start = worker.indexOf('if (path === "/api/referrals" && method === "GET")');
+  const end = worker.indexOf("// LUCKY WHEEL ROUTES", start);
+  assert.ok(start >= 0 && end > start, "referral API route must exist");
+  assert.match(worker.slice(start, end), /authenticate\\(request\\)/);
+  assert.match(worker.slice(start, end), /invited_count: invitedCount/);
 });
 
 test("Lucky Wheel frontend endpoints have matching authenticated Worker routes", () => {
-  for (const endpoint of ["/api/wheel/state", "/api/wheel/spin", "/api/wheel/buy", "/api/wheel/history"]) {
+  const routes = [
+    ["/api/wheel/state", "GET"],
+    ["/api/wheel/spin", "POST"],
+    ["/api/wheel/buy", "POST"],
+    ["/api/wheel/history", "GET"]
+  ];
+  for (const [endpoint, method] of routes) {
     assert.ok(app.includes(endpoint), `frontend must call ${endpoint}`);
-    assert.ok(worker.includes(endpoint), `Worker must expose ${endpoint}`);
+    assert.ok(worker.includes(`path === "${endpoint}" && method === "${method}"`), `Worker must expose ${endpoint}`);
   }
-  assert.match(worker, /path === "\/api\/wheel\/spin" && method === "POST"[\\s\\S]{0,180}authenticate\\(request\\)/);
-  assert.match(worker, /path === "\/api\/wheel\/buy" && method === "POST"[\\s\\S]{0,180}authenticate\\(request\\)/);
+  for (const endpoint of ["/api/wheel/spin", "/api/wheel/buy"]) {
+    const start = worker.indexOf(`path === "${endpoint}"`);
+    const route = worker.slice(start, start + 350);
+    assert.match(route, /authenticate\\(request\\)/);
+  }
 });
 
 test("Lucky Wheel migration creates every persistence table and keeps payouts disabled by default", () => {
@@ -159,11 +171,11 @@ test("Lucky Wheel migration creates every persistence table and keeps payouts di
     "wheel_spins",
     "wheel_purchases"
   ]) {
-    assert.match(wheelMigration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
+    assert.ok(wheelMigration.includes(`CREATE TABLE IF NOT EXISTS ${table} (`), `missing ${table} table`);
   }
   assert.match(wheelMigration, /available_koinu INTEGER NOT NULL DEFAULT 0/);
   assert.match(wheelMigration, /locked_koinu INTEGER NOT NULL DEFAULT 0/);
   assert.match(wheelMigration, /payouts_enabled INTEGER NOT NULL DEFAULT 0/);
-  assert.match(wheelMigration, /VALUES \(1, 0, 0, 0\)/);
-  assert.match(wheelMigration, /UNIQUE \(uid, request_id\)/);
+  assert.ok(wheelMigration.includes("VALUES (1, 0, 0, 0)"));
+  assert.ok(wheelMigration.includes("UNIQUE (uid, request_id)"));
 });
