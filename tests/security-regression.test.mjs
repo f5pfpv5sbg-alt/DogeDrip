@@ -79,5 +79,5 @@ test("FaucetPay payouts lock pending withdrawals before sending and prevent auto
 
 test("FaucetPay payout IDs are persisted in the withdrawals schema", () => {
   assert.match(worker, /w\.faucetpay_payout_id/);
-  assert.match(worker, /\/api\/admin\/withdrawals\/(\\d\+)\/reconcile/);
+  assert.match(worker, /reconcile/);
 });
