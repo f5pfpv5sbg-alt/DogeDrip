@@ -4022,7 +4022,7 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertise on DogeDrip</h2>
-                <p className="text-sm text-slate-400 mt-2">Promote your website to DogeDrip users. Submit your details and we will review your campaign and email you the price and payment instructions.</p>
+                <p className="text-sm text-slate-400 mt-2">Promote your website to DogeDrip users. Submit your campaign for review. Your quote will appear here, and payment instructions will be sent separately by our team.</p>
               </div>
 
               {adMessage && (
@@ -4078,7 +4078,22 @@ export default function App() {
               </form>
 
               <div className="border-t border-slate-800 pt-5 space-y-3">
-                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Your Advertising Requests</h3>
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Your Advertising Requests</h3>
+                  <button type="button" onClick={async () => {
+                    try {
+                      const [requestsData, placementsData] = await Promise.all([
+                        apiRequest('/api/ads'),
+                        apiRequest('/api/ads/placements')
+                      ]);
+                      setMyAdRequests(requestsData.requests || []);
+                      setAdPlacements(placementsData.placements || { top: null, bottom: null });
+                    } catch (error) {
+                      setAdMessage(error.message || 'Could not refresh advertising requests.');
+                      setAdMessageIsError(true);
+                    }
+                  }} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">Refresh</button>
+                </div>
                 {myAdRequests.length === 0 ? (
                   <p className="text-sm text-slate-500">You have not submitted any advertising requests yet.</p>
                 ) : myAdRequests.map(request => (
