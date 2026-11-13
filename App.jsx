@@ -2771,6 +2771,24 @@ export default function App() {
               <span>Lucky Wheel</span>
             </button>
 
+            <div
+              aria-label="Taskwall coming soon"
+              className="w-full rounded-xl border border-[#F4A6C1]/30 bg-[#F4A6C1]/[0.06] px-3 py-3 opacity-90"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-slate-300">
+                  <Ticket className="w-4 h-4 text-[#F4A6C1]" />
+                  <span className="text-sm font-bold">Taskwall</span>
+                </div>
+                <span className="rounded-md border border-[#F4A6C1]/30 bg-[#F4A6C1]/10 px-2 py-1 text-[9px] font-black tracking-wider text-[#F4A6C1]">
+                  COMING SOON
+                </span>
+              </div>
+              <p className="mt-2 pl-6 text-[11px] leading-relaxed text-slate-500">
+                More ways to earn. New tasks, fresh rewards — all in one place.
+              </p>
+            </div>
+
             <button
               type="button"
               onClick={() => setActiveTab('plans')}
