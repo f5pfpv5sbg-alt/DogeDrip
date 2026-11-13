@@ -29,3 +29,28 @@ test("reward endpoints authenticate before changing account value", () => {
   assert.match(worker, /path === "\/api\/wheel\/spin" && method === "POST"[\s\S]{0,180}authenticate\(request\)/);
   assert.match(worker, /path === "\/api\/streak\/checkin" && method === "POST"[\s\S]{0,180}authenticate\(request\)/);
 });
+
+
+test("registration sends a Firebase one-time email verification action link", () => {
+  assert.match(app, /await sendEmailVerification\(credential\.user\)/);
+  assert.match(app, /Verification email sent\. Check your inbox and spam folder\./);
+  assert.match(app, /Your account was created, but Firebase could not send the verification email/);
+});
+
+test("verification resend is throttled in the client and Firebase rate-limit errors are handled", () => {
+  assert.match(app, /verificationResendSeconds > 0\) return/);
+  assert.match(app, /setVerificationResendSeconds\(60\)/);
+  assert.match(app, /auth\/too-many-requests/);
+});
+
+test("verification status is refreshed from Firebase before unlocking the account", () => {
+  assert.match(app, /await firebaseUser\.reload\(\)/);
+  assert.match(app, /!refreshedUser\.emailVerified/);
+  assert.match(app, /await refreshedUser\.getIdToken\(true\)/);
+  assert.match(app, /setAuthSyncRetry\(value => value \+ 1\)/);
+});
+
+test("unverified users are shown the verification gate and cannot save profile changes", () => {
+  assert.match(app, /Email verification required/);
+  assert.match(app, /disabled=\{profileSaving \|\| !apiReady \|\| !firebaseUser\?\.emailVerified\}/);
+});
