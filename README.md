@@ -8,6 +8,7 @@ Sensitive API actions use an atomic D1 fixed-window counter. Authenticated route
 
 | Endpoint | Limit | Window | Key |
 |---|---:|---:|---|
+| `POST /api/security/register` | 5 | 1 hour | Client IP |
 | `POST /api/auth/sync` | 10 | 60 seconds | Firebase UID |
 | `POST /api/claim` | 20 | 60 seconds | Firebase UID |
 | `POST /api/wheel/spin` | 15 | 60 seconds | Firebase UID |
