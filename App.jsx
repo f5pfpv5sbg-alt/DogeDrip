@@ -4202,7 +4202,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <StatTile
                     label="Users Registered Today"
                     value={
@@ -4217,6 +4217,26 @@ export default function App() {
                         ? 'users.created_at missing'
                         : undefined
                     }
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="Active Users Today"
+                    value={
+                      adminStats
+                        ? Number(adminStats.active_users_today || 0)
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub="Verified users with an app session today"
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="App Sessions Today"
+                    value={
+                      adminStats
+                        ? Number(adminStats.login_sessions_today || 0)
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub="Verified account syncs today"
                     valueCls={adminAccentText}
                   />
                   <StatTile
