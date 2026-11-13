@@ -38,6 +38,23 @@ const WHEEL_PACKAGES = [
 
 const ALLOWED_ORIGINS = ["https://dogedrip.pages.dev"];
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+
+  try {
+    const url = new URL(origin);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".dogedrip.pages.dev") &&
+      url.hostname.split(".").length === 4 &&
+      url.port === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -66,7 +83,7 @@ function corsHeaders(request) {
     "Access-Control-Max-Age": "86400"
   };
 
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+  if (isAllowedOrigin(origin) && origin) {
     headers["Access-Control-Allow-Origin"] = origin;
   }
 
@@ -2785,7 +2802,7 @@ export default {
 
     const origin = request.headers.get("Origin");
 
-    if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+    if (!isAllowedOrigin(origin)) {
       return new Response(
         JSON.stringify({
           success: false,
