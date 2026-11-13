@@ -462,6 +462,24 @@ export default function App() {
   const [adminStats, setAdminStats] = useState(null);
   const [adminStatsLoading, setAdminStatsLoading] = useState(false);
   const [adminStatsError, setAdminStatsError] = useState('');
+  const [myAdRequests, setMyAdRequests] = useState([]);
+  const [adminAdRequests, setAdminAdRequests] = useState([]);
+  const [adPlacements, setAdPlacements] = useState({ top: null, bottom: null });
+  const [adSubmitting, setAdSubmitting] = useState(false);
+  const [adMessage, setAdMessage] = useState('');
+  const [adMessageIsError, setAdMessageIsError] = useState(false);
+  const [adPaymentRefs, setAdPaymentRefs] = useState({});
+  const [adQuoteInputs, setAdQuoteInputs] = useState({});
+  const [adActionLoading, setAdActionLoading] = useState(null);
+  const [adForm, setAdForm] = useState({
+    business_name: '',
+    contact_email: '',
+    website_url: '',
+    banner_image_url: '',
+    placement: 'bottom',
+    duration_days: '7',
+    notes: ''
+  });
 
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
 
@@ -869,6 +887,47 @@ export default function App() {
       cancelled = true;
     };
   }, [firebaseUser, apiReady, activeTab, accountSyncTick, apiRequest, applyAccountData]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady) {
+      setMyAdRequests([]);
+      setAdPlacements({ top: null, bottom: null });
+      return;
+    }
+
+    let cancelled = false;
+
+    Promise.all([
+      apiRequest('/api/ads'),
+      apiRequest('/api/ads/placements')
+    ]).then(([requestsData, placementsData]) => {
+      if (cancelled) return;
+      setMyAdRequests(requestsData.requests || []);
+      setAdPlacements(placementsData.placements || { top: null, bottom: null });
+    }).catch(error => {
+      if (!cancelled) console.warn('Advertising data could not be loaded:', error.message);
+    });
+
+    return () => { cancelled = true; };
+  }, [firebaseUser, apiReady, apiRequest]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady || !isDemoAdmin) {
+      setAdminAdRequests([]);
+      return;
+    }
+
+    let cancelled = false;
+    apiRequest('/api/admin/ads')
+      .then(data => {
+        if (!cancelled) setAdminAdRequests(data.requests || []);
+      })
+      .catch(error => {
+        if (!cancelled) setAdminError(error.message || 'Could not load advertising requests.');
+      });
+
+    return () => { cancelled = true; };
+  }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
 
   useEffect(() => {
     if (!firebaseUser || !apiReady) {
@@ -1877,6 +1936,113 @@ export default function App() {
     }
   };
 
+  const handleAdSubmit = async (event) => {
+    event.preventDefault();
+    if (adSubmitting) return;
+
+    setAdSubmitting(true);
+    setAdMessage('');
+    setAdMessageIsError(false);
+
+    try {
+      const payload = {
+        ...adForm,
+        duration_days: Number(adForm.duration_days)
+      };
+      await apiRequest('/api/ads', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      const data = await apiRequest('/api/ads');
+      setMyAdRequests(data.requests || []);
+      setAdForm({
+        business_name: '',
+        contact_email: firebaseUser?.email || '',
+        website_url: '',
+        banner_image_url: '',
+        placement: 'bottom',
+        duration_days: '7',
+        notes: ''
+      });
+      setAdMessage('Your advertising request was submitted. Our team will review it and contact you with the price and payment instructions.');
+    } catch (error) {
+      setAdMessage(error.message || 'Could not submit advertising request.');
+      setAdMessageIsError(true);
+    } finally {
+      setAdSubmitting(false);
+    }
+  };
+
+  const handleAdPaymentReference = async (requestId) => {
+    const reference = String(adPaymentRefs[requestId] || '').trim();
+    if (reference.length < 5 || reference.length > 120) {
+      setAdMessage('Enter a valid payment transaction reference (5-120 characters).');
+      setAdMessageIsError(true);
+      return;
+    }
+
+    setAdActionLoading(requestId);
+    setAdMessage('');
+    try {
+      await apiRequest(`/api/ads/${encodeURIComponent(requestId)}/payment`, {
+        method: 'POST',
+        body: JSON.stringify({ payment_reference: reference })
+      });
+      const data = await apiRequest('/api/ads');
+      setMyAdRequests(data.requests || []);
+      setAdPaymentRefs(prev => ({ ...prev, [requestId]: '' }));
+      setAdMessage('Payment reference submitted. Your ad will go live after admin verification.');
+      setAdMessageIsError(false);
+    } catch (error) {
+      setAdMessage(error.message || 'Could not submit payment reference.');
+      setAdMessageIsError(true);
+    } finally {
+      setAdActionLoading(null);
+    }
+  };
+
+  const refreshAdminAds = async () => {
+    try {
+      const data = await apiRequest('/api/admin/ads');
+      setAdminAdRequests(data.requests || []);
+    } catch (error) {
+      setAdminError(error.message || 'Could not refresh advertising requests.');
+    }
+  };
+
+  const handleAdminAdStatus = async (request, status) => {
+    if (!isDemoAdmin || adActionLoading !== null) return;
+
+    const quote = Number(adQuoteInputs[request.id]);
+    if (status === 'awaiting_payment' && (!Number.isFinite(quote) || quote <= 0 || quote > 100000)) {
+      setAdminError('Enter a valid advertising price in EUR before sending the quote.');
+      return;
+    }
+
+    if (status === 'active' && request.status !== 'payment_submitted') {
+      setAdminError('An ad can only be activated after a payment reference has been submitted and verified.');
+      return;
+    }
+
+    setAdActionLoading(request.id);
+    setAdminError('');
+    try {
+      await apiRequest(`/api/admin/ads/${encodeURIComponent(request.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          status,
+          ...(status === 'awaiting_payment' ? { quoted_price_eur: quote } : {})
+        })
+      });
+      await refreshAdminAds();
+    } catch (error) {
+      setAdminError(error.message || 'Could not update advertising request.');
+      await refreshAdminAds();
+    } finally {
+      setAdActionLoading(null);
+    }
+  };
+
   const refreshAdminWithdrawals = async () => {
     try {
       const data = await apiRequest('/api/admin/withdrawals');
@@ -2595,6 +2761,23 @@ export default function App() {
               <span>Referral Program</span>
             </button>
 
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('advertise');
+                setAdMessage('');
+                setAdMessageIsError(false);
+                setAdForm(prev => ({
+                  ...prev,
+                  contact_email: prev.contact_email || firebaseUser?.email || ''
+                }));
+              }}
+              className={tabBtnCls('advertise')}
+            >
+              <Ticket className="w-4 h-4" />
+              <span>Advertise</span>
+            </button>
+
             {isDemoAdmin && (
               <button
                 type="button"
@@ -2656,17 +2839,24 @@ export default function App() {
           )}
 
           <div className="mb-6 w-full">
-            <div className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden">
-              <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">
-                Advertisement
-              </span>
-              <p className="text-sm md:text-base font-bold text-white">
-                Advertise Your Brand on DogeDrip
-              </p>
-              <p className="text-xs text-slate-500 mt-1">
-                Reach crypto users and promote your project here.
-              </p>
-            </div>
+            {adPlacements.top ? (
+              <a
+                href={adPlacements.top.website_url}
+                target="_blank"
+                rel="noopener noreferrer nofollow sponsored"
+                className="relative block w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl overflow-hidden hover:border-[#F4A6C1]/50 transition-colors"
+              >
+                <span className="absolute top-2 right-3 z-10 text-[9px] uppercase tracking-widest text-white bg-black/80 px-2 py-1 rounded font-mono">Sponsored</span>
+                <img src={adPlacements.top.banner_image_url} alt={adPlacements.top.business_name} loading="lazy" className="w-full h-[100px] md:h-[120px] object-cover" />
+              </a>
+            ) : (
+              <button type="button" onClick={() => setActiveTab('advertise')} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
+                <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">Advertisement</span>
+                <p className="text-sm md:text-base font-bold text-white">Advertise Your Brand on DogeDrip</p>
+                <p className="text-xs text-slate-500 mt-1">Reach crypto users and promote your project here.</p>
+                <span className="text-xs text-[#F4A6C1] font-bold mt-2">Submit an advertising request →</span>
+              </button>
+            )}
           </div>
 
           {activeTab === 'faucet' && (
@@ -3828,6 +4018,108 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'advertise' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertise on DogeDrip</h2>
+                <p className="text-sm text-slate-400 mt-2">Promote your website to DogeDrip users. Submit your campaign for review. Your quote will appear here, and payment instructions will be sent separately by our team.</p>
+              </div>
+
+              {adMessage && (
+                <div className={`p-3 rounded-xl text-sm border ${adMessageIsError ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/30 text-[#F4A6C1]'}`}>
+                  {adMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleAdSubmit} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label className="block">
+                    <span className={LABEL_CLS}>Business / Project Name</span>
+                    <input required minLength={2} maxLength={80} value={adForm.business_name} onChange={e => setAdForm(prev => ({ ...prev, business_name: e.target.value }))} className={INPUT_CLS} placeholder="Your brand name" />
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Contact Email</span>
+                    <input required type="email" maxLength={254} value={adForm.contact_email} onChange={e => setAdForm(prev => ({ ...prev, contact_email: e.target.value }))} className={INPUT_CLS} placeholder="you@example.com" />
+                  </label>
+                  <label className="block md:col-span-2">
+                    <span className={LABEL_CLS}>Website URL</span>
+                    <input required type="url" maxLength={2048} value={adForm.website_url} onChange={e => setAdForm(prev => ({ ...prev, website_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com" />
+                  </label>
+                  <label className="block md:col-span-2">
+                    <span className={LABEL_CLS}>Banner Image URL</span>
+                    <input required type="url" maxLength={2048} value={adForm.banner_image_url} onChange={e => setAdForm(prev => ({ ...prev, banner_image_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com/banner.jpg" />
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Ad Placement</span>
+                    <select value={adForm.placement} onChange={e => setAdForm(prev => ({ ...prev, placement: e.target.value }))} className={INPUT_CLS}>
+                      <option value="top">Top banner</option>
+                      <option value="bottom">Bottom banner</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className={LABEL_CLS}>Duration</span>
+                    <select value={adForm.duration_days} onChange={e => setAdForm(prev => ({ ...prev, duration_days: e.target.value }))} className={INPUT_CLS}>
+                      <option value="7">7 days</option>
+                      <option value="14">14 days</option>
+                      <option value="30">30 days</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className={LABEL_CLS}>Campaign Details (Optional)</span>
+                  <textarea maxLength={500} rows={3} value={adForm.notes} onChange={e => setAdForm(prev => ({ ...prev, notes: e.target.value }))} className={INPUT_CLS} placeholder="Tell us briefly what you want to promote." />
+                </label>
+
+                <p className="text-xs text-slate-500">No payment is collected by this form. After reviewing your request, DogeDrip will email you a quote and secure payment instructions. Ads are published only after payment is verified.</p>
+                <button type="submit" disabled={adSubmitting || !apiReady} className={PRIMARY_BTN}>
+                  {adSubmitting ? 'Submitting request...' : 'Submit Advertising Request'}
+                </button>
+              </form>
+
+              <div className="border-t border-slate-800 pt-5 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Your Advertising Requests</h3>
+                  <button type="button" onClick={async () => {
+                    try {
+                      const [requestsData, placementsData] = await Promise.all([
+                        apiRequest('/api/ads'),
+                        apiRequest('/api/ads/placements')
+                      ]);
+                      setMyAdRequests(requestsData.requests || []);
+                      setAdPlacements(placementsData.placements || { top: null, bottom: null });
+                    } catch (error) {
+                      setAdMessage(error.message || 'Could not refresh advertising requests.');
+                      setAdMessageIsError(true);
+                    }
+                  }} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">Refresh</button>
+                </div>
+                {myAdRequests.length === 0 ? (
+                  <p className="text-sm text-slate-500">You have not submitted any advertising requests yet.</p>
+                ) : myAdRequests.map(request => (
+                  <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-white">{request.business_name}</strong>
+                      <span className="text-[10px] uppercase font-black tracking-wider text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
+                    </div>
+                    <a href={request.website_url} target="_blank" rel="noopener noreferrer" className="text-xs text-[#F4A6C1] break-all">{request.website_url}</a>
+                    <p className="text-xs text-slate-500">{request.placement} placement · {request.duration_days} days · {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Price pending review'}</p>
+                    {request.status === 'awaiting_payment' && (
+                      <div className="space-y-2">
+                        <p className="text-xs text-slate-400">Check your contact email for payment instructions. After paying, enter the transaction reference below.</p>
+                        <input value={adPaymentRefs[request.id] || ''} onChange={e => setAdPaymentRefs(prev => ({ ...prev, [request.id]: e.target.value }))} maxLength={120} className={INPUT_CLS} placeholder="Payment transaction reference" />
+                        <button type="button" disabled={adActionLoading === request.id} onClick={() => handleAdPaymentReference(request.id)} className={PRIMARY_BTN}>{adActionLoading === request.id ? 'Submitting...' : 'Submit Payment Reference'}</button>
+                      </div>
+                    )}
+                    {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
+                    {request.status === 'active' && <p className="text-xs text-emerald-400">Your advertisement is live until {formatDate(request.active_until)}.</p>}
+                    {request.status === 'rejected' && <p className="text-xs text-red-400">This request was not approved. Contact support for details.</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {activeTab === 'admin' && isDemoAdmin && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
@@ -3842,9 +4134,54 @@ export default function App() {
                 )}
 
                 <p className="text-sm text-slate-400 mt-2">
-                  Manage and review withdrawal requests stored in the D1 database.
+                  Manage withdrawals, advertising requests, and daily platform statistics.
                 </p>
               </div>
+
+              <section className="border border-slate-800 rounded-2xl p-4 md:p-5 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Advertising Requests</h3>
+                    <p className="text-xs text-slate-500 mt-1">Review campaigns, set a EUR quote, and activate only after payment verification.</p>
+                  </div>
+                  <button type="button" onClick={refreshAdminAds} disabled={adActionLoading !== null} className="px-3 py-2 rounded-lg border border-[#F4A6C1]/30 text-[#F4A6C1] text-xs font-bold">Refresh</button>
+                </div>
+                {adminAdRequests.length === 0 ? (
+                  <p className="text-sm text-slate-500">No advertising requests yet.</p>
+                ) : adminAdRequests.map(request => (
+                  <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-white">{request.business_name}</strong>
+                      <span className="text-[10px] uppercase font-black text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-slate-400">
+                      <span>Contact: {request.contact_email}</span>
+                      <span>Account: {request.account_email}</span>
+                      <span>Placement: {request.placement}</span>
+                      <span>Duration: {request.duration_days} days</span>
+                      <span>Submitted: {formatDate(request.created_at)}</span>
+                      <span>Quote: {request.quoted_price_eur ? `€${Number(request.quoted_price_eur).toFixed(2)}` : 'Not set'}</span>
+                    </div>
+                    <a href={request.website_url} target="_blank" rel="noopener noreferrer" className="block text-xs text-[#F4A6C1] break-all">{request.website_url}</a>
+                    <a href={request.banner_image_url} target="_blank" rel="noopener noreferrer" className="block text-xs text-slate-500 break-all">View banner image</a>
+                    {request.notes && <p className="text-xs text-slate-400">{request.notes}</p>}
+                    {request.payment_reference && <p className="text-xs text-emerald-400 break-all">Payment reference: {request.payment_reference}</p>}
+                    {request.status === 'pending_review' && (
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input type="number" min="0.01" max="100000" step="0.01" value={adQuoteInputs[request.id] || ''} onChange={e => setAdQuoteInputs(prev => ({ ...prev, [request.id]: e.target.value }))} className={INPUT_CLS} placeholder="Set quote in EUR" />
+                        <button type="button" disabled={adActionLoading !== null} onClick={() => handleAdminAdStatus(request, 'awaiting_payment')} className="px-4 py-3 rounded-xl bg-[#F4A6C1] text-black text-xs font-black disabled:opacity-50">Send Quote</button>
+                        <button type="button" disabled={adActionLoading !== null} onClick={() => handleAdminAdStatus(request, 'rejected')} className="px-4 py-3 rounded-xl border border-red-500/30 text-red-400 text-xs font-black disabled:opacity-50">Reject</button>
+                      </div>
+                    )}
+                    {request.status === 'awaiting_payment' && (
+                      <button type="button" disabled={adActionLoading !== null} onClick={() => handleAdminAdStatus(request, 'rejected')} className="px-4 py-2 rounded-lg border border-red-500/30 text-red-400 text-xs font-bold">Reject Request</button>
+                    )}
+                    {request.status === 'payment_submitted' && (
+                      <button type="button" disabled={adActionLoading !== null} onClick={() => handleAdminAdStatus(request, 'active')} className="px-4 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-black">Verify Payment & Activate</button>
+                    )}
+                  </div>
+                ))}
+              </section>
 
               <div className={`p-3 rounded-xl flex items-start space-x-2 text-xs border ${
                 isBlueAdmin
@@ -4206,6 +4543,21 @@ export default function App() {
             </div>
           )}
 
+          <div className="mt-8 w-full">
+            {adPlacements.bottom ? (
+              <a href={adPlacements.bottom.website_url} target="_blank" rel="noopener noreferrer nofollow sponsored" className="relative block w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
+                <span className="absolute top-2 right-3 z-10 text-[9px] uppercase tracking-widest text-white bg-black/80 px-2 py-1 rounded font-mono">Sponsored</span>
+                <img src={adPlacements.bottom.banner_image_url} alt={adPlacements.bottom.business_name} loading="lazy" className="w-full h-[100px] md:h-[120px] object-cover" />
+              </a>
+            ) : (
+              <button type="button" onClick={() => setActiveTab('advertise')} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
+                <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">Advertisement</span>
+                <p className="text-sm font-bold text-white">Advertise at the bottom of DogeDrip</p>
+                <p className="text-xs text-slate-500 mt-1">Reserve this banner for your project.</p>
+                <span className="text-xs text-[#F4A6C1] font-bold mt-2">Advertise with us →</span>
+              </button>
+            )}
+          </div>
         </main>
       </div>
 

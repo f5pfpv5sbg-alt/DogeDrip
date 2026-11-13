@@ -295,6 +295,8 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   wheelBuy: { limit: 5, windowSeconds: 60 },
   streakCheckin: { limit: 3, windowSeconds: 60 },
   withdrawalCreate: { limit: 3, windowSeconds: 3600 },
+  adCreate: { limit: 3, windowSeconds: 86400 },
+  adPaymentReference: { limit: 5, windowSeconds: 86400 },
   adminRead: { limit: 60, windowSeconds: 60 },
   adminReject: { limit: 10, windowSeconds: 60 },
   adminApprove: { limit: 5, windowSeconds: 60 }
@@ -1873,6 +1875,37 @@ async function getAdminDailyStats(env) {
   };
 }
 
+function validatePublicHttpUrl(value, fieldName) {
+  if (typeof value !== "string" || value.length > 2048) {
+    throw new HttpError(400, `Invalid ${fieldName}`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new HttpError(400, `Invalid ${fieldName}`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    !["https:", "http:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    !hostname.includes(".") ||
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal") ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ||
+    hostname.includes(":")
+  ) {
+    throw new HttpError(400, `Only public HTTP or HTTPS URLs are allowed for ${fieldName}`);
+  }
+
+  return parsed.toString();
+}
+
 // ==========================================
 // MAIN API ROUTES
 // ==========================================
@@ -2575,6 +2608,198 @@ async function handleRequest(request, env, json) {
       success: true,
       withdrawals: result.results || []
     });
+  }
+
+  // ADVERTISING: USER REQUESTS AND LIVE PLACEMENTS
+
+  if (path === "/api/ads" && method === "GET") {
+    const user = await authenticate(request);
+    const result = await env.DB.prepare(`
+      SELECT id, business_name, contact_email, website_url, banner_image_url,
+             placement, duration_days, notes, status, quoted_price_eur,
+             payment_reference, active_until, created_at, updated_at
+      FROM advertising_requests
+      WHERE uid = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).bind(user.sub).all();
+
+    return json({ success: true, requests: result.results || [] });
+  }
+
+  if (path === "/api/ads" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ad_create", RATE_LIMIT_POLICIES.adCreate);
+
+    const body = await readJson(request);
+    const businessName = typeof body.business_name === "string" ? body.business_name.trim() : "";
+    const contactEmail = typeof body.contact_email === "string" ? body.contact_email.trim().toLowerCase() : "";
+    const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+    const placement = body.placement;
+    const durationDays = Number(body.duration_days);
+
+    if (businessName.length < 2 || businessName.length > 80) {
+      throw new HttpError(400, "Business or project name must be 2-80 characters.");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail) || contactEmail.length > 254) {
+      throw new HttpError(400, "Enter a valid contact email.");
+    }
+    if (!["top", "bottom"].includes(placement)) {
+      throw new HttpError(400, "Choose a valid advertising placement.");
+    }
+    if (![7, 14, 30].includes(durationDays)) {
+      throw new HttpError(400, "Choose a duration of 7, 14, or 30 days.");
+    }
+    if (notes.length > 500) {
+      throw new HttpError(400, "Campaign details cannot exceed 500 characters.");
+    }
+
+    const websiteUrl = validatePublicHttpUrl(body.website_url, "website URL");
+    const bannerImageUrl = validatePublicHttpUrl(body.banner_image_url, "banner image URL");
+
+    const inserted = await env.DB.prepare(`
+      INSERT INTO advertising_requests (
+        uid, business_name, contact_email, website_url, banner_image_url,
+        placement, duration_days, notes, status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_review')
+      RETURNING id
+    `).bind(
+      user.sub, businessName, contactEmail, websiteUrl, bannerImageUrl,
+      placement, durationDays, notes || null
+    ).first();
+
+    if (!inserted?.id) throw new HttpError(500, "Advertising request could not be saved.");
+
+    return json({ success: true, id: inserted.id, status: "pending_review" }, 201);
+  }
+
+  if (path === "/api/ads/placements" && method === "GET") {
+    await authenticate(request);
+    const result = await env.DB.prepare(`
+      SELECT id, business_name, website_url, banner_image_url, placement
+      FROM advertising_requests
+      WHERE status = 'active'
+        AND active_until IS NOT NULL
+        AND datetime(active_until) > datetime('now')
+      ORDER BY id DESC
+    `).all();
+
+    const placements = { top: null, bottom: null };
+    for (const ad of (result.results || [])) {
+      if (!placements[ad.placement]) placements[ad.placement] = ad;
+    }
+    return json({ success: true, placements });
+  }
+
+  const adPaymentMatch = path.match(/^\/api\/ads\/(\d+)\/payment$/);
+  if (adPaymentMatch && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ad_payment_reference", RATE_LIMIT_POLICIES.adPaymentReference);
+    const id = Number(adPaymentMatch[1]);
+    const body = await readJson(request);
+    const reference = typeof body.payment_reference === "string" ? body.payment_reference.trim() : "";
+
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid advertising request ID.");
+    if (reference.length < 5 || reference.length > 120) throw new HttpError(400, "Payment reference must be 5-120 characters.");
+
+    const updated = await env.DB.prepare(`
+      UPDATE advertising_requests
+      SET payment_reference = ?, status = 'payment_submitted', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND uid = ? AND status = 'awaiting_payment'
+    `).bind(reference, id, user.sub).run();
+
+    if (updated.meta.changes !== 1) {
+      throw new HttpError(409, "This request is not awaiting payment or does not belong to your account.");
+    }
+    return json({ success: true, status: "payment_submitted" });
+  }
+
+  // ADMIN: ADVERTISING REQUESTS
+
+  if (path === "/api/admin/ads" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ads_read", RATE_LIMIT_POLICIES.adminRead);
+
+    const result = await env.DB.prepare(`
+      SELECT a.id, a.uid, u.email AS account_email, a.business_name,
+             a.contact_email, a.website_url, a.banner_image_url,
+             a.placement, a.duration_days, a.notes, a.status,
+             a.quoted_price_eur, a.payment_reference, a.active_until,
+             a.created_at, a.updated_at
+      FROM advertising_requests a
+      LEFT JOIN users u ON u.uid = a.uid
+      ORDER BY
+        CASE a.status
+          WHEN 'pending_review' THEN 0
+          WHEN 'payment_submitted' THEN 1
+          WHEN 'awaiting_payment' THEN 2
+          WHEN 'active' THEN 3
+          ELSE 4
+        END,
+        a.id DESC
+      LIMIT 200
+    `).all();
+
+    return json({ success: true, requests: result.results || [] });
+  }
+
+  const adminAdMatch = path.match(/^\/api\/admin\/ads\/(\d+)$/);
+  if (adminAdMatch && method === "PUT") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ads_update", RATE_LIMIT_POLICIES.adminApprove);
+
+    const id = Number(adminAdMatch[1]);
+    const body = await readJson(request);
+    const status = body.status;
+
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid advertising request ID.");
+
+    if (status === "awaiting_payment") {
+      const quote = Number(body.quoted_price_eur);
+      if (!Number.isFinite(quote) || quote <= 0 || quote > 100000) {
+        throw new HttpError(400, "Enter a valid quote in EUR.");
+      }
+      const updated = await env.DB.prepare(`
+        UPDATE advertising_requests
+        SET status = 'awaiting_payment', quoted_price_eur = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'pending_review'
+      `).bind(Math.round(quote * 100) / 100, id).run();
+
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Request is no longer awaiting review.");
+      return json({ success: true, status });
+    }
+
+    if (status === "active") {
+      const updated = await env.DB.prepare(`
+        UPDATE advertising_requests
+        SET status = 'active',
+            active_until = datetime('now', '+' || duration_days || ' days'),
+            processed_by = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'payment_submitted'
+      `).bind(admin.uid, id).run();
+
+      if (updated.meta.changes !== 1) {
+        throw new HttpError(409, "Payment must be submitted before the ad can be activated.");
+      }
+      return json({ success: true, status, active_until: true });
+    }
+
+    if (status === "rejected") {
+      const updated = await env.DB.prepare(`
+        UPDATE advertising_requests
+        SET status = 'rejected', processed_by = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status IN ('pending_review', 'awaiting_payment', 'payment_submitted')
+      `).bind(admin.uid, id).run();
+
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Request cannot be rejected in its current status.");
+      return json({ success: true, status });
+    }
+
+    throw new HttpError(400, "Unsupported advertising request status.");
   }
 
   // ADMIN: DAILY STATS
