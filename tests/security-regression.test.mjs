@@ -81,3 +81,27 @@ test("FaucetPay payout IDs are persisted in the withdrawals schema", () => {
   assert.match(worker, /w\.faucetpay_payout_id/);
   assert.match(worker, /reconcile/);
 });
+
+
+
+test("FaucetPay status endpoint is admin-only and exposes only configuration booleans", () => {
+  assert.ok(worker.includes('if (path === "/api/admin/faucetpay/status" && method === "GET")'));
+  assert.ok(worker.includes('configured: typeof env.FAUCETPAY_API_KEY === "string" && env.FAUCETPAY_API_KEY.length > 0'));
+  assert.ok(worker.includes('payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true"'));
+  assert.match(worker, /requireAdmin\(user, env\)/);
+});
+
+test("admin UI never treats uncertain or legacy-approved withdrawals as paid", () => {
+  assert.ok(app.includes("w.status === 'approved' ? 'legacy-approved' : w.status"));
+  assert.ok(app.includes("w.status === 'payment_unknown' ? ("));
+  assert.ok(app.includes("w.status === 'paid'"));
+  assert.ok(app.includes("Payment confirmed"));
+});
+
+test("manual FaucetPay reconciliation requires explicit admin confirmation", () => {
+  assert.ok(app.includes("window.confirm(confirmation)"));
+  assert.ok(app.includes("handleAdminReconcile(w.id, 'paid')"));
+  assert.ok(app.includes("handleAdminReconcile(w.id, 'not_paid')"));
+  assert.ok(app.includes("Check FaucetPay payout history before choosing"));
+  assert.ok(app.includes("faucetpay_payout_id: payoutId"));
+});

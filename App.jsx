@@ -471,6 +471,11 @@ export default function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState('');
   const [adminActionLoading, setAdminActionLoading] = useState(null);
+  const [faucetPayStatus, setFaucetPayStatus] = useState(null);
+  const [faucetPayBalance, setFaucetPayBalance] = useState(null);
+  const [faucetPayCheckLoading, setFaucetPayCheckLoading] = useState(false);
+  const [faucetPayCheckError, setFaucetPayCheckError] = useState('');
+  const [reconcilePayoutIds, setReconcilePayoutIds] = useState({});
   const [adminStats, setAdminStats] = useState(null);
   const [adminStatsLoading, setAdminStatsLoading] = useState(false);
   const [adminStatsError, setAdminStatsError] = useState('');
@@ -2113,6 +2118,69 @@ export default function App() {
       setAdminStatsError(error.message || 'Could not refresh daily statistics.');
     } finally {
       setAdminStatsLoading(false);
+    }
+  };
+
+  const handleFaucetPayCheck = async () => {
+    if (!isDemoAdmin || faucetPayCheckLoading) return;
+
+    setFaucetPayCheckLoading(true);
+    setFaucetPayCheckError('');
+    setFaucetPayBalance(null);
+
+    try {
+      const status = await apiRequest('/api/admin/faucetpay/status');
+      setFaucetPayStatus(status);
+
+      if (!status.configured) {
+        throw new Error('FaucetPay API key is not configured on this Worker. Add it as a secret before testing payouts.');
+      }
+
+      const balance = await apiRequest('/api/admin/faucetpay/balance');
+      setFaucetPayBalance(Number(balance.balance_doge));
+    } catch (error) {
+      setFaucetPayCheckError(error.message || 'Could not verify FaucetPay configuration.');
+    } finally {
+      setFaucetPayCheckLoading(false);
+    }
+  };
+
+  const handleAdminReconcile = async (wId, resolution) => {
+    if (!isDemoAdmin || adminActionLoading !== null) return;
+
+    const payoutId = String(reconcilePayoutIds[wId] || '').trim();
+    if (resolution === 'paid' && !/^\d{1,32}$/.test(payoutId)) {
+      setAdminError('Enter the numeric payout ID shown in FaucetPay.');
+      return;
+    }
+
+    const confirmation = resolution === 'paid'
+      ? 'Confirm that you checked FaucetPay history and verified this exact payout ID was paid?'
+      : 'Confirm that you checked FaucetPay history and verified this withdrawal was NOT paid?';
+
+    if (typeof window === 'undefined' || !window.confirm(confirmation)) return;
+
+    setAdminActionLoading(wId);
+    setAdminError('');
+
+    try {
+      await apiRequest(
+        `/api/admin/withdrawals/${encodeURIComponent(wId)}/reconcile`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            resolution,
+            ...(resolution === 'paid' ? { faucetpay_payout_id: payoutId } : {})
+          })
+        }
+      );
+      await refreshAdminWithdrawals();
+      setReconcilePayoutIds(current => ({ ...current, [wId]: '' }));
+    } catch (error) {
+      setAdminError(error.message || 'Could not reconcile the FaucetPay payout.');
+      await refreshAdminWithdrawals();
+    } finally {
+      setAdminActionLoading(null);
     }
   };
 
@@ -4461,6 +4529,37 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="bg-black border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-slate-300">FaucetPay connection</h3>
+                    <p className="text-[11px] text-slate-500 mt-1">Read-only configuration and DOGE balance check. This does not send a payout.</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={faucetPayCheckLoading || !apiReady}
+                    onClick={handleFaucetPayCheck}
+                    className={`px-3 py-2 rounded-lg border text-xs font-bold disabled:opacity-50 ${adminActionBtn}`}
+                  >
+                    {faucetPayCheckLoading ? 'Checking...' : 'Check FaucetPay'}
+                  </button>
+                </div>
+                {faucetPayStatus && (
+                  <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
+                    <span className={faucetPayStatus.configured ? 'text-emerald-400' : 'text-red-400'}>
+                      API key: {faucetPayStatus.configured ? 'Configured' : 'Missing'}
+                    </span>
+                    <span className={faucetPayStatus.payouts_enabled ? 'text-emerald-400' : 'text-yellow-400'}>
+                      Automatic payouts: {faucetPayStatus.payouts_enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    {faucetPayBalance !== null && Number.isFinite(faucetPayBalance) && (
+                      <span className="text-white font-bold">FaucetPay DOGE: {faucetPayBalance.toFixed(8)}</span>
+                    )}
+                  </div>
+                )}
+                {faucetPayCheckError && <p className="text-xs text-red-300">{faucetPayCheckError}</p>}
+              </div>
+
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
                   Withdrawal Requests
@@ -4528,13 +4627,15 @@ export default function App() {
                             <td className="p-4">
                               <div className="flex flex-col items-start gap-1">
                                 <span className={`px-2 py-1 rounded-md text-[10px] uppercase font-black ${
-                                  w.status === 'paid' || w.status === 'approved'
+                                  w.status === 'paid'
                                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                                     : w.status === 'rejected'
                                       ? 'bg-red-500/10 text-red-400 border border-red-500/20'
-                                      : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                                      : w.status === 'payment_unknown'
+                                        ? 'bg-red-500/10 text-red-300 border border-red-500/30'
+                                        : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
                                 }`}>
-                                  {w.status}
+                                  {w.status === 'approved' ? 'legacy-approved' : w.status}
                                 </span>
                                 {w.faucetpayPayoutId && (
                                   <span className="text-[10px] text-slate-500 break-all">
@@ -4552,14 +4653,20 @@ export default function App() {
                             <td className="p-4">
                               {w.status === 'pending' ? (
                                 <div className="flex flex-wrap gap-2">
-                                  <button
-                                    type="button"
-                                    disabled={adminActionLoading !== null}
-                                    onClick={() => handleAdminApprove(w.id)}
-                                    className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${adminActionBtn}`}
-                                  >
-                                    {adminActionLoading === w.id ? '...' : 'Pay DOGE'}
-                                  </button>
+                                  {faucetPayStatus?.configured && faucetPayStatus?.payouts_enabled ? (
+                                    <button
+                                      type="button"
+                                      disabled={adminActionLoading !== null}
+                                      onClick={() => handleAdminApprove(w.id)}
+                                      className={`px-3 py-1 rounded-lg font-black transition-colors disabled:opacity-40 ${adminActionBtn}`}
+                                    >
+                                      {adminActionLoading === w.id ? '...' : 'Pay DOGE'}
+                                    </button>
+                                  ) : (
+                                    <span className="px-2 py-1 text-[10px] font-bold text-yellow-300 border border-yellow-500/20 rounded-lg">
+                                      Payouts disabled
+                                    </span>
+                                  )}
 
                                   <button
                                     type="button"
@@ -4570,10 +4677,33 @@ export default function App() {
                                     {adminActionLoading === w.id ? '...' : 'Reject'}
                                   </button>
                                 </div>
+                              ) : w.status === 'payment_unknown' ? (
+                                <div className="min-w-[220px] space-y-2">
+                                  <p className="text-[10px] text-red-300">Check FaucetPay payout history before choosing. Never retry an uncertain payment.</p>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    autoComplete="off"
+                                    value={reconcilePayoutIds[w.id] || ''}
+                                    onChange={event => setReconcilePayoutIds(current => ({ ...current, [w.id]: event.target.value.replace(/[^0-9]/g, '').slice(0, 32) }))}
+                                    placeholder="FaucetPay payout ID"
+                                    className="w-full bg-black border border-slate-700 rounded-lg px-2 py-2 text-xs text-white focus:border-[#F4A6C1] focus:outline-none"
+                                  />
+                                  <div className="flex flex-wrap gap-2">
+                                    <button type="button" disabled={adminActionLoading !== null} onClick={() => handleAdminReconcile(w.id, 'paid')} className={`px-2 py-1 rounded-lg text-[10px] font-bold disabled:opacity-40 ${adminActionBtn}`}>Confirm paid</button>
+                                    <button type="button" disabled={adminActionLoading !== null} onClick={() => handleAdminReconcile(w.id, 'not_paid')} className="px-2 py-1 rounded-lg border border-red-500/30 text-red-300 text-[10px] font-bold disabled:opacity-40">Confirm not paid</button>
+                                  </div>
+                                </div>
+                              ) : w.status === 'processing' ? (
+                                <span className="text-xs text-yellow-300">Processing — do not retry</span>
+                              ) : w.status === 'paid' ? (
+                                <span className="text-xs text-emerald-400">Payment confirmed</span>
+                              ) : w.status === 'approved' ? (
+                                <span className="text-xs text-yellow-300">Legacy status — verify manually</span>
+                              ) : w.status === 'rejected' ? (
+                                <span className="text-xs text-slate-500">Refunded</span>
                               ) : (
-                                <span className="text-slate-500">
-                                  Completed
-                                </span>
+                                <span className="text-xs text-slate-500">{w.status}</span>
                               )}
                             </td>
                           </tr>
@@ -4585,9 +4715,9 @@ export default function App() {
               </div>
 
               <p className="text-xs text-slate-500">
-                Approving or rejecting updates the D1 demo ledger.
+                FaucetPay payouts require a configured server-side API key and the explicit payout-enable flag.
+                Uncertain provider responses must be checked in FaucetPay history and reconciled manually before any retry.
                 Rejected requests are refunded by the Worker.
-                No cryptocurrency transaction is broadcast.
               </p>
             </div>
           )}

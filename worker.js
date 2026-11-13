@@ -2990,6 +2990,25 @@ async function handleRequest(request, env, json) {
     });
   }
 
+  // ADMIN: REPORT FAUCETPAY CONFIGURATION WITHOUT EXPOSING SECRETS
+
+  if (path === "/api/admin/faucetpay/status" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_faucetpay_status",
+      RATE_LIMIT_POLICIES.adminRead
+    );
+
+    return json({
+      success: true,
+      configured: typeof env.FAUCETPAY_API_KEY === "string" && env.FAUCETPAY_API_KEY.length > 0,
+      payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true"
+    });
+  }
+
   // ADMIN: READ FAUCETPAY DOGE BALANCE (SAFE, NO PAYOUT)
 
   if (path === "/api/admin/faucetpay/balance" && method === "GET") {
