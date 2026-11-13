@@ -390,7 +390,11 @@ async function verifyTurnstile(env, request, token, expectedAction) {
   try {
     const response = await fetch(
       "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-      { method: "POST", body: form }
+      {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(10000)
+      }
     );
 
     if (!response.ok) {
