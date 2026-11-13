@@ -61,7 +61,7 @@ function corsHeaders(request) {
 
   const headers = {
     "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400"
   };
@@ -271,6 +271,7 @@ async function requireAdmin(user, env) {
 }
 
 const RATE_LIMIT_POLICIES = Object.freeze({
+  registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
@@ -357,6 +358,73 @@ async function enforceRateLimit(env, identity, route, policy) {
     } catch (error) {
       console.warn("Rate limit cleanup skipped:", error);
     }
+  }
+}
+
+async function verifyTurnstile(env, request, token, expectedAction) {
+  if (
+    typeof env.TURNSTILE_SECRET_KEY !== "string" ||
+    !env.TURNSTILE_SECRET_KEY.trim()
+  ) {
+    console.error("Turnstile secret is not configured for this Worker environment.");
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  if (
+    typeof token !== "string" ||
+    token.length < 1 ||
+    token.length > 2048
+  ) {
+    throw new HttpError(400, "Security verification token is required.");
+  }
+
+  const form = new FormData();
+  form.set("secret", env.TURNSTILE_SECRET_KEY);
+  form.set("response", token);
+
+  const remoteIp = request.headers.get("CF-Connecting-IP");
+  if (remoteIp) form.set("remoteip", remoteIp);
+
+  let result;
+
+  try {
+    const response = await fetch(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(10000)
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Siteverify returned HTTP ${response.status}`);
+    }
+
+    result = await response.json();
+  } catch (error) {
+    console.error("Turnstile Siteverify request failed:", error);
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  if (
+    !result ||
+    result.success !== true ||
+    result.hostname !== "dogedrip.pages.dev" ||
+    result.action !== expectedAction
+  ) {
+    throw new HttpError(403, "Security verification failed. Please try again.");
+  }
+
+  const challengeTime = Date.parse(result.challenge_ts);
+  const ageMs = Date.now() - challengeTime;
+
+  if (
+    !Number.isFinite(challengeTime) ||
+    ageMs < -30000 ||
+    ageMs > 300000
+  ) {
+    throw new HttpError(403, "Security verification expired. Please try again.");
   }
 }
 
@@ -550,7 +618,17 @@ async function getAccount(env, uid, plan = PLAN_CONFIG.FREE) {
 // USER SYNCHRONIZATION
 // ==========================================
 
-async function syncUser(env, user, referredByCode) {
+async function syncUser(env, user, referredByCode, requestedUsername) {
+  const existingUsername = await env.DB.prepare(`
+    SELECT uid FROM users
+    WHERE username = ? COLLATE NOCASE AND uid != ?
+    LIMIT 1
+  `).bind(requestedUsername, user.sub).first();
+
+  if (existingUsername) {
+    throw new HttpError(409, "That username is already taken. Please choose another one.");
+  }
+
   let referrerCode = null;
 
   if (referredByCode) {
@@ -571,17 +649,19 @@ async function syncUser(env, user, referredByCode) {
         INSERT INTO users (
           uid,
           email,
+          username,
           ref_code,
           referred_by,
           email_verified,
           email_verified_at
         )
         VALUES (
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END
         )
         ON CONFLICT(uid) DO UPDATE SET
           email = excluded.email,
+          username = COALESCE(users.username, excluded.username),
           ref_code = COALESCE(users.ref_code, excluded.ref_code),
           email_verified = excluded.email_verified,
           email_verified_at = CASE
@@ -592,6 +672,7 @@ async function syncUser(env, user, referredByCode) {
       `).bind(
         user.sub,
         user.email,
+        requestedUsername,
         generateRefCode(),
         referrerCode,
         user.email_verified === true ? 1 : 0,
@@ -612,7 +693,7 @@ async function syncUser(env, user, referredByCode) {
   }
 
   return env.DB.prepare(`
-    SELECT ref_code, referred_by, plan
+    SELECT username, ref_code, referred_by, plan, created_at, email_verified, email_verified_at
     FROM users
     WHERE uid = ?
   `).bind(user.sub).first();
@@ -1871,6 +1952,28 @@ async function handleRequest(request, env, json) {
     }
   }
 
+  // PUBLIC REGISTRATION VERIFICATION
+
+  if (path === "/api/security/register" && method === "POST") {
+    const clientIp = request.headers.get("CF-Connecting-IP");
+
+    if (!clientIp) {
+      throw new HttpError(503, "Security verification is temporarily unavailable.");
+    }
+
+    await enforceRateLimit(
+      env,
+      `ip:${clientIp}`,
+      "registration",
+      RATE_LIMIT_POLICIES.registration
+    );
+
+    const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "register");
+
+    return json({ success: true });
+  }
+
   // REFERRAL VALIDATION
 
   if (path === "/api/referral/validate" && method === "GET") {
@@ -1928,10 +2031,16 @@ async function handleRequest(request, env, json) {
         ? body.referred_by.trim().toUpperCase()
         : "";
 
+    const rawUsername = typeof body.username === "string" ? body.username.trim() : "";
+    const requestedUsername = /^[A-Za-z0-9_]{3,20}$/.test(rawUsername)
+      ? rawUsername
+      : (user.email ? user.email.split("@")[0].slice(0, 20) : "User");
+
     const profile = await syncUser(
       env,
       user,
-      REF_CODE_REGEX.test(rawRef) ? rawRef : null
+      REF_CODE_REGEX.test(rawRef) ? rawRef : null,
+      requestedUsername
     );
 
     return json({
@@ -1941,8 +2050,59 @@ async function handleRequest(request, env, json) {
       ref_code: profile.ref_code,
       referred_by: profile.referred_by,
       plan: profile.plan || "FREE",
-      email_verified: user.email_verified === true
+      username: profile.username || requestedUsername,
+      created_at: profile.created_at,
+      email_verified: user.email_verified === true,
+      email_verified_at: profile.email_verified_at
     });
+  }
+
+  // USER PROFILE
+  if (path === "/api/profile" && method === "GET") {
+    const user = await authenticate(request, { requireVerifiedEmail: false });
+    const profile = await env.DB.prepare(`
+      SELECT username, created_at, email_verified_at, plan, ref_code, referred_by
+      FROM users WHERE uid = ?
+    `).bind(user.sub).first();
+    if (!profile) throw new HttpError(404, "User profile not found");
+    return json({
+      success: true,
+      profile: {
+        uid: user.sub,
+        username: profile.username || "",
+        email: user.email,
+        created_at: profile.created_at,
+        email_verified: user.email_verified === true,
+        email_verified_at: profile.email_verified_at,
+        plan: profile.plan || "FREE",
+        ref_code: profile.ref_code || "",
+        referred_by: profile.referred_by || null
+      }
+    });
+  }
+
+  if (path === "/api/profile" && method === "PUT") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "profile_update", {
+      limit: 5,
+      windowSeconds: 3600
+    });
+    const body = await readJson(request);
+    const username = typeof body.username === "string" ? body.username.trim() : "";
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) {
+      throw new HttpError(400, "Username must be 3-20 characters using letters, numbers, or underscore.");
+    }
+    try {
+      const result = await env.DB.prepare(`
+        UPDATE users SET username = ? WHERE uid = ?
+      `).bind(username, user.sub).run();
+      if (result.meta.changes !== 1) throw new HttpError(404, "User profile not found");
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      if (String(error.message).includes("UNIQUE")) throw new HttpError(409, "That username is already taken.");
+      throw error;
+    }
+    return json({ success: true, profile: { username }, message: "Username updated successfully." });
   }
 
   // REFERRAL STATS
@@ -2000,6 +2160,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "wheel_spin");
 
     return json(await handleWheelSpin(env, user.sub, body));
   }
@@ -2015,6 +2176,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "wheel_buy");
 
     return json(await handleWheelBuy(env, user.sub, body));
   }
@@ -2050,6 +2212,8 @@ async function handleRequest(request, env, json) {
         await buildClaimResponse(env, user.sub, plan, existing, true)
       );
     }
+
+    await verifyTurnstile(env, request, body.turnstile_token, "claim");
 
     let results;
 
@@ -2258,6 +2422,9 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.streakCheckin
     );
 
+    const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "daily_streak");
+
     return json(
       await handleStreakCheckin(env, user.sub)
     );
@@ -2306,6 +2473,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "withdrawal_create");
 
     const amount = body.amount_koinu;
 
