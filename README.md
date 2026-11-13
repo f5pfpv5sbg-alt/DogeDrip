@@ -47,3 +47,10 @@ Protected actions and their Turnstile action names:
 | `POST /api/withdrawals` | `withdrawal_create` |
 
 The Worker validates the Siteverify success flag, exact hostname, action, and a five-minute challenge age. Siteverify enforces token single-use. A missing secret or Siteverify outage returns HTTP 503; invalid, expired, or mismatched tokens are rejected.
+
+
+## User profiles
+
+User profile data is stored in D1. Firebase Authentication remains the identity provider. The authenticated profile API exposes account ID, email, account creation date, email-verification state, plan, and referral details. Users may update only their username; email, UID, role, balance, plan, referral code, and verification state are server-controlled.
+
+Before deploying the Worker, apply the D1 migration in `migrations/0002_user_profile.sql`. Usernames are 3–20 characters, limited to ASCII letters, numbers, and underscores, and are unique without regard to letter case. The profile read endpoint is available to authenticated but unverified users so they can see their verification status; profile updates require a verified email.
