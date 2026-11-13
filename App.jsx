@@ -2149,7 +2149,7 @@ export default function App() {
     if (!isDemoAdmin || adminActionLoading !== null) return;
 
     const payoutId = String(reconcilePayoutIds[wId] || '').trim();
-    if (resolution === 'paid' && !/^\\d{1,32}$/.test(payoutId)) {
+    if (resolution === 'paid' && !/^\d{1,32}$/.test(payoutId)) {
       setAdminError('Enter the numeric payout ID shown in FaucetPay.');
       return;
     }
