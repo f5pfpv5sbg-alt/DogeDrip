@@ -361,6 +361,115 @@ const SiteFooter = () => (
   </footer>
 );
 
+function MatrixRain() {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+
+    const context = canvas.getContext('2d', { alpha: true });
+    if (!context) return undefined;
+
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let animationFrame = 0;
+    let lastFrame = 0;
+    let width = 0;
+    let height = 0;
+    let columns = [];
+    const fontSize = window.innerWidth < 640 ? 13 : 15;
+    const columnGap = window.innerWidth < 640 ? 25 : 23;
+    const characters = '0123456789{}[]<>/\\=+-';
+    const randomCharacter = () => characters[Math.floor(Math.random() * characters.length)];
+
+    const resize = () => {
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.25);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.floor(width * pixelRatio);
+      canvas.height = Math.floor(height * pixelRatio);
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const count = Math.ceil(width / columnGap);
+      columns = Array.from({ length: count }, () => ({
+        y: -Math.random() * (height / fontSize),
+        speed: 0.25 + Math.random() * 0.55,
+        length: 5 + Math.floor(Math.random() * 9),
+        chars: Array.from({ length: 14 }, randomCharacter)
+      }));
+      draw(0, true);
+    };
+
+    const draw = (timestamp, staticFrame = false) => {
+      context.fillStyle = 'rgba(5, 5, 7, 0.12)';
+      context.fillRect(0, 0, width, height);
+      context.font = fontSize + 'px monospace';
+      context.textAlign = 'center';
+
+      columns.forEach((column, index) => {
+        const x = index * columnGap + columnGap / 2;
+        const headY = column.y * fontSize;
+
+        for (let trail = 0; trail < column.length; trail += 1) {
+          const charY = headY - trail * fontSize;
+          if (charY < -fontSize || charY > height + fontSize) continue;
+          const alpha = (1 - trail / column.length) * 0.30;
+          context.fillStyle = trail === 0
+            ? 'rgba(255, 220, 232, 0.48)'
+            : 'rgba(244, 166, 193, ' + alpha.toFixed(3) + ')';
+          context.fillText(column.chars[(Math.floor(column.y) + trail) % column.chars.length], x, charY);
+        }
+
+        if (!staticFrame) {
+          column.y += column.speed;
+          if (headY - column.length * fontSize > height && Math.random() > 0.985) {
+            column.y = -Math.random() * 18;
+            column.speed = 0.25 + Math.random() * 0.55;
+            column.length = 5 + Math.floor(Math.random() * 9);
+          }
+          if (Math.random() > 0.992) {
+            column.chars[Math.floor(Math.random() * column.chars.length)] = randomCharacter();
+          }
+        }
+      });
+    };
+
+    const animate = (timestamp) => {
+      if (document.hidden) {
+        animationFrame = window.requestAnimationFrame(animate);
+        return;
+      }
+      if (timestamp - lastFrame >= 42) {
+        draw(timestamp);
+        lastFrame = timestamp;
+      }
+      animationFrame = window.requestAnimationFrame(animate);
+    };
+
+    resize();
+    window.addEventListener('resize', resize, { passive: true });
+
+    if (!reducedMotion) {
+      animationFrame = window.requestAnimationFrame(animate);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 z-0 h-full w-full"
+    />
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('faucet');
 
@@ -2589,7 +2698,8 @@ export default function App() {
           : `Check In (+${formatDoge(streakInfo.nextRewardKoinu)} DOGE)`;
 
   return (
-    <div className="min-h-screen bg-transparent text-white flex flex-col font-sans">
+    <div className="relative z-10 min-h-screen bg-transparent text-white flex flex-col font-sans">
+      <MatrixRain />
       <style>{`
         .claim-celebration {
           position: absolute;
