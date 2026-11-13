@@ -4189,8 +4189,101 @@ export default function App() {
               </p>
             </div>
           )}
+
+          {activeTab === 'terms' && (
+            <section className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <p className="text-xs uppercase tracking-[0.2em] text-[#F4A6C1] font-bold mb-2">
+                  DOGEDRIP
+                </p>
+                <h1 className="text-2xl md:text-3xl font-black text-white font-['Space_Grotesk',sans-serif]">
+                  Terms of Service
+                </h1>
+                <p className="text-xs text-slate-500 mt-2">Last updated: November 13, 2026</p>
+              </div>
+
+              <div className="space-y-5 text-sm leading-7 text-slate-300">
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">1. Acceptance of these terms</h2>
+                  <p>By accessing or using DogeDrip, you agree to these Terms of Service. If you do not agree, do not use the platform. We may update these terms from time to time; the latest version will be published on this page.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">2. Eligibility and accounts</h2>
+                  <p>You must be at least 18 years old and legally permitted to use the service where you live. You are responsible for keeping your login details secure, providing accurate account information, and all activity carried out through your account. One person may not use multiple accounts to abuse rewards or promotions.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">3. Faucet rewards and platform balance</h2>
+                  <p>Claim amounts, cooldowns, limits, bonuses, missions, and other rewards may change or be paused. Rewards are subject to eligibility, platform rules, fraud checks, and available funding. A balance shown in the current DEMO environment is an internal test ledger only; it is not a cryptocurrency deposit, a blockchain transaction, or a promise of payment. No real DOGE payout is made by the current demo ledger.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">4. Withdrawals</h2>
+                  <p>Withdrawal features, when enabled for real payments, may have minimum amounts, verification requirements, processing times, network fees, and geographic restrictions. A request is not completed until it is approved and the relevant payment is confirmed. Never submit a wallet address that you do not control. The current demo environment does not broadcast cryptocurrency transactions.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">5. Plans and subscriptions</h2>
+                  <p>Plan descriptions and prices displayed on the platform are informational unless and until a working checkout clearly confirms a purchase. Any future paid subscription will be subject to the price, billing period, renewal, cancellation, and refund terms shown at checkout and applicable consumer-protection law. Do not assume a plan is active based only on a displayed plan card.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">6. Prohibited activity</h2>
+                  <p>You must not use bots, scripts, exploits, multiple accounts, false identities, payment abuse, or other methods to manipulate claims, referrals, games, balances, or platform systems. You must not interfere with the service, attempt unauthorized access, or use DogeDrip for unlawful activity. We may restrict or suspend accounts involved in suspected abuse, subject to applicable law.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">7. Availability and changes</h2>
+                  <p>We may modify, suspend, or discontinue features to maintain, secure, or improve the service. We do not guarantee uninterrupted access, a particular reward amount, or continuous availability of any feature.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">8. Risks and limitation of liability</h2>
+                  <p>Cryptocurrency values and networks can be volatile and may involve irreversible transactions, fees, delays, or loss. DogeDrip does not provide financial, investment, tax, or legal advice. To the extent permitted by applicable law, the platform is provided without guarantees that it will always be available or error-free. Nothing in these terms excludes liability that cannot legally be excluded.</p>
+                </section>
+
+                <section>
+                  <h2 className="text-white font-bold text-base mb-1">9. Contact</h2>
+                  <p>For support or questions about these terms, contact <a href="mailto:support.dogedrip@gmail.com" className="text-[#F4A6C1] hover:underline">support.dogedrip@gmail.com</a>.</p>
+                </section>
+              </div>
+
+              <div className="pt-4 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('faucet')}
+                  className="text-sm font-bold text-[#F4A6C1] hover:underline"
+                >
+                  Back to Doge Faucet
+                </button>
+              </div>
+            </section>
+          )}
         </main>
       </div>
+
+      <footer className="w-full border-t border-slate-800 bg-black">
+        <div className="max-w-7xl mx-auto px-4 py-5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+          <a
+            href="mailto:support.dogedrip@gmail.com"
+            className="hover:text-[#F4A6C1] transition-colors"
+          >
+            Support: support.dogedrip@gmail.com
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('terms');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="hover:text-[#F4A6C1] transition-colors"
+          >
+            Terms of Service
+          </button>
+          <span>© {new Date().getFullYear()} DogeDrip. All rights reserved.</span>
+        </div>
+      </footer>
     </div>
   );
 }
