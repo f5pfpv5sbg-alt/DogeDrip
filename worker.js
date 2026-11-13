@@ -271,6 +271,7 @@ async function requireAdmin(user, env) {
 }
 
 const RATE_LIMIT_POLICIES = Object.freeze({
+  registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
@@ -1932,6 +1933,28 @@ async function handleRequest(request, env, json) {
         error: "Database connection failed"
       }, 500);
     }
+  }
+
+  // PUBLIC REGISTRATION VERIFICATION
+
+  if (path === "/api/security/register" && method === "POST") {
+    const clientIp = request.headers.get("CF-Connecting-IP");
+
+    if (!clientIp) {
+      throw new HttpError(503, "Security verification is temporarily unavailable.");
+    }
+
+    await enforceRateLimit(
+      env,
+      `ip:${clientIp}`,
+      "registration",
+      RATE_LIMIT_POLICIES.registration
+    );
+
+    const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "register");
+
+    return json({ success: true });
   }
 
   // REFERRAL VALIDATION
