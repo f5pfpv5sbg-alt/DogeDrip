@@ -360,6 +360,69 @@ async function enforceRateLimit(env, identity, route, policy) {
   }
 }
 
+async function verifyTurnstile(env, request, token, expectedAction) {
+  if (
+    typeof env.TURNSTILE_SECRET_KEY !== "string" ||
+    !env.TURNSTILE_SECRET_KEY.trim()
+  ) {
+    console.error("Turnstile secret is not configured for this Worker environment.");
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  if (
+    typeof token !== "string" ||
+    token.length < 1 ||
+    token.length > 2048
+  ) {
+    throw new HttpError(400, "Security verification token is required.");
+  }
+
+  const form = new FormData();
+  form.set("secret", env.TURNSTILE_SECRET_KEY);
+  form.set("response", token);
+
+  const remoteIp = request.headers.get("CF-Connecting-IP");
+  if (remoteIp) form.set("remoteip", remoteIp);
+
+  let result;
+
+  try {
+    const response = await fetch(
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+      { method: "POST", body: form }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Siteverify returned HTTP ${response.status}`);
+    }
+
+    result = await response.json();
+  } catch (error) {
+    console.error("Turnstile Siteverify request failed:", error);
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  if (
+    !result ||
+    result.success !== true ||
+    result.hostname !== "dogedrip.pages.dev" ||
+    result.action !== expectedAction
+  ) {
+    throw new HttpError(403, "Security verification failed. Please try again.");
+  }
+
+  const challengeTime = Date.parse(result.challenge_ts);
+  const ageMs = Date.now() - challengeTime;
+
+  if (
+    !Number.isFinite(challengeTime) ||
+    ageMs < -30000 ||
+    ageMs > 300000
+  ) {
+    throw new HttpError(403, "Security verification expired. Please try again.");
+  }
+}
+
 async function readJson(request) {
   const contentLength = Number(request.headers.get("Content-Length") || 0);
 
@@ -2000,6 +2063,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "wheel_spin");
 
     return json(await handleWheelSpin(env, user.sub, body));
   }
@@ -2015,6 +2079,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "wheel_buy");
 
     return json(await handleWheelBuy(env, user.sub, body));
   }
@@ -2050,6 +2115,8 @@ async function handleRequest(request, env, json) {
         await buildClaimResponse(env, user.sub, plan, existing, true)
       );
     }
+
+    await verifyTurnstile(env, request, body.turnstile_token, "claim");
 
     let results;
 
@@ -2258,6 +2325,9 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.streakCheckin
     );
 
+    const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "daily_streak");
+
     return json(
       await handleStreakCheckin(env, user.sub)
     );
@@ -2306,6 +2376,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstile(env, request, body.turnstile_token, "withdrawal_create");
 
     const amount = body.amount_koinu;
 
