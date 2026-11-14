@@ -179,3 +179,39 @@ test("Lucky Wheel migration creates every persistence table and keeps payouts di
   assert.ok(wheelMigration.includes("VALUES (1, 0, 0, 0)"));
   assert.ok(wheelMigration.includes("UNIQUE (uid, request_id)"));
 });
+
+
+test("Worker applies restrictive security headers to JSON and preflight responses", () => {
+  for (const header of [
+    '"X-Content-Type-Options": "nosniff"',
+    '"X-Frame-Options": "DENY"',
+    '"Referrer-Policy": "no-referrer"',
+    '"Permissions-Policy": "camera=(), microphone=(), geolocation=()"',
+    '"Content-Security-Policy": "default-src \'none\'; frame-ancestors \'none\'; base-uri \'none\'"',
+    '"Strict-Transport-Security": "max-age=31536000; includeSubDomains"'
+  ]) {
+    assert.ok(worker.includes(header), `missing security header: ${header}`);
+  }
+  assert.match(worker, /headers:\s*\{ \.\.\.JSON_HEADERS, \.\.\.cors \}/);
+  assert.match(worker, /headers: JSON_HEADERS/);
+});
+
+test("Lucky Wheel read endpoints are authenticated and rate-limited", () => {
+  assert.match(worker, /wheelRead:\s*\{ limit: 120, windowSeconds: 60 \}/);
+  for (const endpoint of ["/api/wheel/state", "/api/wheel/history"]) {
+    const start = worker.indexOf(`path === "${endpoint}"`);
+    assert.ok(start >= 0, `missing ${endpoint}`);
+    const route = worker.slice(start, start + 550);
+    assert.ok(route.includes("authenticate(request)"), `${endpoint} must authenticate`);
+    assert.ok(route.includes('"wheel_read"'), `${endpoint} must be rate-limited`);
+    assert.ok(route.includes("enforceRateLimit("), `${endpoint} must call rate limiter`);
+  }
+});
+
+test("Scheduled cleanup removes expired rate-limit buckets and old daily activity", () => {
+  assert.match(worker, /async scheduled\(controller, env, ctx\)/);
+  assert.match(worker, /ctx\.waitUntil\(/);
+  assert.match(worker, /DELETE FROM api_rate_limits[\s\S]{0,100}updated_at < datetime\('now', '-1 day'\)/);
+  assert.match(worker, /DELETE FROM user_daily_activity[\s\S]{0,100}utc_date < date\('now', '-90 days'\)/);
+  assert.match(worker, /Promise\.allSettled\(/);
+});
