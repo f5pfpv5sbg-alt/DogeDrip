@@ -1995,6 +1995,52 @@ async function faucetPayRequest(env, endpoint, parameters) {
   return payload;
 }
 
+async function verifyTurnstileToken(token, request, env) {
+  if (typeof env.TURNSTILE_SECRET !== "string" || !env.TURNSTILE_SECRET) {
+    throw new HttpError(503, "Registration security is not configured.");
+  }
+
+  if (typeof token !== "string" || token.length < 1 || token.length > 2048) {
+    throw new HttpError(400, "Complete the security verification and try again.");
+  }
+
+  const form = new URLSearchParams();
+  form.set("secret", env.TURNSTILE_SECRET);
+  form.set("response", token);
+
+  const clientIp = getTrustedClientIp(request);
+  if (clientIp) form.set("remoteip", clientIp);
+
+  let response;
+  try {
+    response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch {
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw new HttpError(503, "Security verification is temporarily unavailable.");
+  }
+
+  const allowedHostnames = new Set(["dogedrip.pages.dev", "localhost", "127.0.0.1"]);
+  if (
+    !response.ok ||
+    result?.success !== true ||
+    result?.action !== "signup" ||
+    !allowedHostnames.has(result?.hostname)
+  ) {
+    throw new HttpError(403, "Security verification failed. Please try again.");
+  }
+}
+
 function getTrustedClientIp(request) {
   const value = request.headers.get("CF-Connecting-IP") || "";
   return value.length <= 45 && /^[0-9a-fA-F:.]+$/.test(value)
@@ -2045,6 +2091,9 @@ async function handleRequest(request, env, json) {
       "registration",
       RATE_LIMIT_POLICIES.registration
     );
+
+    const registrationBody = await readJson(request);
+    await verifyTurnstileToken(registrationBody.turnstileToken, request, env);
 
     return json({ success: true });
   }
