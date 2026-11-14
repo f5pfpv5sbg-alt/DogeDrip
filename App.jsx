@@ -64,6 +64,7 @@ const auth = getAuth(firebaseApp);
 const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
+const TURNSTILE_SITE_KEY = "0x4AAAAAAF-3dKe3-VPYCryx";
 
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
@@ -374,12 +375,89 @@ export default function App() {
   const [profileUsernameInput, setProfileUsernameInput] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [authMode, setAuthMode] = useState('login');
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileError, setTurnstileError] = useState('');
+  const turnstileContainerRef = useRef(null);
+  const turnstileWidgetIdRef = useRef(null);
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
   const [verifyMsg, setVerifyMsg] = useState('');
   const [verificationResendSeconds, setVerificationResendSeconds] = useState(0);
   const [verificationSending, setVerificationSending] = useState(false);
   const [verificationChecking, setVerificationChecking] = useState(false);
+
+  useEffect(() => {
+    if (authMode !== 'register') {
+      setTurnstileToken('');
+      setTurnstileError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    let script = document.querySelector('script[data-dogedrip-turnstile]');
+
+    const renderTurnstile = () => {
+      if (cancelled || !window.turnstile || !turnstileContainerRef.current) return;
+      if (turnstileWidgetIdRef.current !== null) return;
+
+      try {
+        turnstileWidgetIdRef.current = window.turnstile.render(
+          turnstileContainerRef.current,
+          {
+            sitekey: TURNSTILE_SITE_KEY,
+            action: 'signup',
+            theme: 'dark',
+            callback: token => {
+              setTurnstileToken(token);
+              setTurnstileError('');
+            },
+            'expired-callback': () => setTurnstileToken(''),
+            'error-callback': () => {
+              setTurnstileToken('');
+              setTurnstileError('Security check failed. Please reload the check.');
+              return true;
+            }
+          }
+        );
+      } catch {
+        setTurnstileError('Could not load the security check. Refresh the page and try again.');
+      }
+    };
+
+    const handleScriptError = () => {
+      if (!cancelled) setTurnstileError('Could not load the security check. Check your connection.');
+    };
+
+    setTurnstileToken('');
+    setTurnstileError('');
+
+    if (window.turnstile) {
+      renderTurnstile();
+    } else {
+      if (!script) {
+        script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.async = true;
+        script.defer = true;
+        script.dataset.dogedripTurnstile = 'true';
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', renderTurnstile);
+      script.addEventListener('error', handleScriptError);
+    }
+
+    return () => {
+      cancelled = true;
+      if (script) {
+        script.removeEventListener('load', renderTurnstile);
+        script.removeEventListener('error', handleScriptError);
+      }
+      if (turnstileWidgetIdRef.current !== null && window.turnstile) {
+        window.turnstile.remove(turnstileWidgetIdRef.current);
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, [authMode]);
 
   useEffect(() => {
     if (verificationResendSeconds <= 0) return undefined;
@@ -1301,6 +1379,11 @@ export default function App() {
       return;
     }
 
+    if (!turnstileToken) {
+      setAuthError('Please complete the Cloudflare security check.');
+      return;
+    }
+
     setIsLoadingAuth(true);
 
     if (referralCode) {
@@ -1341,7 +1424,7 @@ export default function App() {
       const registrationResponse = await fetch(`${API_URL}/api/security/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        body: JSON.stringify({ turnstileToken })
       });
       const registrationData = await registrationResponse.json().catch(() => ({}));
 
@@ -1394,6 +1477,10 @@ export default function App() {
     } catch (error) {
       pendingReferralRef.current = null;
       pendingUsernameRef.current = '';
+      setTurnstileToken('');
+      if (turnstileWidgetIdRef.current !== null && window.turnstile) {
+        window.turnstile.reset(turnstileWidgetIdRef.current);
+      }
       setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
@@ -2456,9 +2543,20 @@ export default function App() {
                 />
               </div>
 
+              <div className="space-y-2">
+                <label className={LABEL_CLS}>Security Verification</label>
+                <div
+                  ref={turnstileContainerRef}
+                  className="min-h-[65px] flex items-center justify-center"
+                />
+                {turnstileError && (
+                  <p role="alert" className="text-xs text-red-400">{turnstileError}</p>
+                )}
+              </div>
+
               <button
                 type="submit"
-                disabled={isLoadingAuth}
+                disabled={isLoadingAuth || !turnstileToken}
                 className={PRIMARY_BTN}
               >
                 <UserPlus className="w-4 h-4" />
