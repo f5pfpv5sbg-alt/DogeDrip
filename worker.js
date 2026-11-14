@@ -62,7 +62,12 @@ const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const JSON_HEADERS = {
   "Content-Type": "application/json",
   "Cache-Control": "no-store",
-  "X-Content-Type-Options": "nosniff"
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains"
 };
 
 class HttpError extends Error {
@@ -292,6 +297,7 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   referralValidate: { limit: 30, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
+  wheelRead: { limit: 120, windowSeconds: 60 },
   wheelSpin: { limit: 15, windowSeconds: 60 },
   wheelBuy: { limit: 5, windowSeconds: 60 },
   streakCheckin: { limit: 3, windowSeconds: 60 },
@@ -2240,6 +2246,13 @@ async function handleRequest(request, env, json) {
   if (path === "/api/wheel/state" && method === "GET") {
     const user = await authenticate(request);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "wheel_read",
+      RATE_LIMIT_POLICIES.wheelRead
+    );
+
     return json(await handleWheelState(env, user.sub));
   }
 
@@ -2275,6 +2288,13 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/wheel/history" && method === "GET") {
     const user = await authenticate(request);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "wheel_read",
+      RATE_LIMIT_POLICIES.wheelRead
+    );
 
     return json(await handleWheelHistory(env, user.sub));
   }
@@ -3564,6 +3584,27 @@ async function handleRequest(request, env, json) {
 // ==========================================
 
 export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil((async () => {
+      const cleanupResults = await Promise.allSettled([
+        env.DB.prepare(`
+          DELETE FROM api_rate_limits
+          WHERE updated_at < datetime('now', '-1 day')
+        `).run(),
+        env.DB.prepare(`
+          DELETE FROM user_daily_activity
+          WHERE utc_date < date('now', '-90 days')
+        `).run()
+      ]);
+
+      for (const result of cleanupResults) {
+        if (result.status === "rejected") {
+          console.error("Scheduled data cleanup failed:", result.reason);
+        }
+      }
+    })());
+  },
+
   async fetch(request, env) {
     const cors = corsHeaders(request);
 
