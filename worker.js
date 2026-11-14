@@ -3632,7 +3632,7 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: cors
+        headers: { ...JSON_HEADERS, ...cors }
       });
     }
 
