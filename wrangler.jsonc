@@ -3,6 +3,9 @@
   "name": "dogedrip-api",
   "main": "worker.js",
   "compatibility_date": "2026-11-06",
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
