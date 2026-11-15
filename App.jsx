@@ -1123,7 +1123,13 @@ export default function App() {
 
         if (cancelled) return;
 
-        setReferralStats({ invited: Number(data.invited_count || 0) });
+        setReferralStats({
+          invited: Number(data.invited_count || 0),
+          commissionEnabled: data.commission_enabled === true,
+          commissionRateBps: Number(data.commission_rate_bps || 1500),
+          commissionEarnedKoinu: Number(data.commission_earned_koinu || 0),
+          recentCommissions: Array.isArray(data.recent_commissions) ? data.recent_commissions : []
+        });
 
         if (data.ref_code) {
           setRefCode(data.ref_code);
@@ -4224,10 +4230,10 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Referral Program (DEMO)
+                  Referral Program
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Share your referral code. Invited users are counted from real registrations.
+                  Earn a 15% DOGE commission when verified referrals complete Faucet claims. Commissions are paid only while the separately funded referral reserve is active.
                 </p>
               </div>
 
@@ -4238,7 +4244,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Your Referral Code
@@ -4263,10 +4269,22 @@ export default function App() {
 
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Commission
+                    Commission Rate
                   </span>
-                  <div className="text-2xl font-black font-mono text-slate-500 mt-1">
-                    Not enabled
+                  <div className="text-2xl font-black font-mono text-[#F4A6C1] mt-1">
+                    {referralStats ? `${(referralStats.commissionRateBps / 100).toFixed(0)}%` : '...'}
+                  </div>
+                  <p className={`text-xs mt-1 ${referralStats?.commissionEnabled ? "text-emerald-400" : "text-slate-500"}`}>
+                    {referralStats ? (referralStats.commissionEnabled ? "Active" : "Paused — reserve not funded") : "Loading status"}
+                  </p>
+                </div>
+
+                <div className="bg-black border border-slate-800 rounded-2xl p-5">
+                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                    Total Earned
+                  </span>
+                  <div className="text-2xl font-black font-mono text-white mt-1">
+                    {referralStats ? `${formatDoge(referralStats.commissionEarnedKoinu)} DOGE` : "..."}
                   </div>
                 </div>
               </div>
@@ -4297,6 +4315,27 @@ export default function App() {
                 )}
               </div>
 
+              <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-3">
+                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                  Recent Commissions
+                </h3>
+                {!referralStats?.recentCommissions?.length ? (
+                  <p className="text-sm text-slate-500">No referral commissions yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {referralStats.recentCommissions.map((commission) => (
+                      <div key={commission.id} className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2 last:border-0">
+                        <div className="min-w-0">
+                          <p className="text-sm text-white truncate">{commission.referred_username}</p>
+                          <p className="text-xs text-slate-500">{formatDate(commission.created_at)}</p>
+                        </div>
+                        <span className="text-sm font-mono font-bold text-[#F4A6C1] whitespace-nowrap">+{formatDoge(commission.amount_koinu)} DOGE</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
                 <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
                   How Referrals Work
@@ -4311,10 +4350,13 @@ export default function App() {
                     with others.
                   </li>
                   <li>
-                    Each new account that registers with your code counts as one invited user.
+                    Only users who verify their email count as invited users.
                   </li>
                   <li>
-                    Referral commissions are not enabled yet.
+                    You earn 15% of each verified referral’s successful Faucet claim.
+                  </li>
+                  <li>
+                    Commissions are credited to your DOGE balance only when the separate referral reserve is funded and active. They never use funds reserved for other users.
                   </li>
                 </ul>
               </div>
