@@ -75,7 +75,8 @@ test("finance audit reports withdrawals that are missing a matching negative led
   const end = worker.indexOf("// ADMIN: DAILY STATS", start);
   const route = worker.slice(start, end);
   assert.ok(start >= 0 && end > start, "finance audit route must exist");
-  assert.match(route, /withdrawalsWithoutLedger/);
+  assert.match(route, /withdrawalsWithoutDebitLedger/);
+  assert.match(route, /rejectedWithoutRefundLedger/);
   assert.match(route, /lt\.reference_type = 'withdrawal'/);
   assert.match(route, /lt\.reference_id = CAST\(w\.id AS TEXT\)/);
   assert.match(route, /lt\.amount_koinu = -w\.amount_koinu/);
@@ -412,7 +413,8 @@ test("Turnstile is required and action-bound for login, claim, wheel, and withdr
   assert.match(worker, /api\/security\/login/);
   assert.match(worker, /verifyTurnstileToken\(loginBody\.turnstileToken, request, env, "login"\)/);
   for (const action of ["claim", "wheel_spin", "wheel_buy", "withdraw"]) {
-    assert.match(worker, new RegExp(`verifyTurnstileToken\\(body\\.turnstileToken, request, env, "${action}"\\)`));
+    assert.match(worker, new RegExp(`verifyTurnstileTokenassert.match(route, /without_debit_ledger_count: Number\\(withdrawalsWithoutDebitLedger\\?\\.count \\|\\| 0\\)/);
+  assert.match(route, /rejected_without_refund_ledger_count: Number\\(rejectedWithoutRefundLedger\\?\\.count \\|\\| 0\\)/);(body\\.turnstileToken, request, env, "${action}"\\)`));
   }
   assert.match(worker, /result\?\.action !== expectedAction/);
   for (const action of ["login", "claim", "wheel_spin", "wheel_buy", "withdraw"]) {
