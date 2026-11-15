@@ -232,3 +232,16 @@ test("Faucet claim button does not describe the live D1 reward ledger as a demo"
 test("Faucet claim button does not describe the live D1 reward ledger as a demo", () => {
   assert.doesNotMatch(app, /Claim \\S+ DOGE \\(Demo\\)/);
 });
+
+
+test("Daily streak reward is manual and never triggered by a regular Faucet claim", () => {
+  const claimStart = app.indexOf("const handleClaim = async () =>");
+  const streakHandlerStart = app.indexOf("const handleStreakCheckin = async () =>");
+  assert.ok(claimStart >= 0 && streakHandlerStart > claimStart);
+  const claimHandler = app.slice(claimStart, streakHandlerStart);
+  assert.ok(claimHandler.includes("apiRequest('/api/streak')"));
+  assert.ok(!claimHandler.includes("apiRequest('/api/streak/checkin'"));
+  assert.match(app, /onClick=\{handleStreakCheckin\}/);
+  assert.match(app, /Claim your daily streak reward manually once each UTC day/);
+  assert.match(app, /Regular Faucet Claims do not collect this bonus/);
+});
