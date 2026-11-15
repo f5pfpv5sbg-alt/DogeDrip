@@ -2264,37 +2264,55 @@ async function handleRequest(request, env, json) {
   if (path === "/api/referrals" && method === "GET") {
     const user = await authenticate(request);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "referrals_read",
+      RATE_LIMIT_POLICIES.referralsRead
+    );
+
     const account = await env.DB.prepare(`
-      SELECT ref_code, referred_by
-      FROM users
-      WHERE uid = ?
+      SELECT ref_code, referred_by FROM users WHERE uid = ?
     `).bind(user.sub).first();
 
-    if (!account) {
-      throw new HttpError(404, "User not found");
-    }
+    if (!account) throw new HttpError(404, "User not found");
 
-    let invitedCount = 0;
+    const [invited, earned, reserve, recent] = await Promise.all([
+      env.DB.prepare(`
+        SELECT COUNT(*) AS total FROM users
+        WHERE referred_by = ? AND email_verified = 1
+      `).bind(account.ref_code).first(),
 
-    if (account.ref_code) {
-      const row = await env.DB.prepare(`
-        SELECT COUNT(*) AS total
-        FROM users
-        WHERE referred_by = ?
-          AND email_verified = 1
-      `).bind(account.ref_code).first();
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(amount_koinu), 0) AS total
+        FROM referral_commissions WHERE referrer_uid = ?
+      `).bind(user.sub).first(),
 
-      invitedCount = row ? Number(row.total) : 0;
-    }
+      env.DB.prepare(`
+        SELECT payouts_enabled FROM referral_reserve WHERE id = 1
+      `).first(),
+
+      env.DB.prepare(`
+        SELECT rc.id, rc.amount_koinu, rc.created_at,
+          COALESCE(referred.username, 'Referred user') AS referred_username
+        FROM referral_commissions rc
+        JOIN users referred ON referred.uid = rc.referred_uid
+        WHERE rc.referrer_uid = ?
+        ORDER BY rc.id DESC LIMIT 20
+      `).bind(user.sub).all()
+    ]);
 
     return json({
       success: true,
       ref_code: account.ref_code,
       referred_by: account.referred_by,
-      invited_count: invitedCount
+      invited_count: Number(invited?.total || 0),
+      commission_rate_bps: 1500,
+      commission_enabled: Number(reserve?.payouts_enabled) === 1,
+      commission_earned_koinu: Number(earned?.total || 0),
+      recent_commissions: recent.results || []
     });
   }
-
   // LUCKY WHEEL ROUTES
 
   if (path === "/api/wheel/state" && method === "GET") {
