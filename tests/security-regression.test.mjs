@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [worker, app, wheelMigration] = await Promise.all([
+const [worker, app, wheelMigration, referralMigration] = await Promise.all([
   readFile(new URL("../worker.js", import.meta.url), "utf8"),
   readFile(new URL("../App.jsx", import.meta.url), "utf8"),
-  readFile(new URL("../migrations/0005_lucky_wheel.sql", import.meta.url), "utf8")
+  readFile(new URL("../migrations/0005_lucky_wheel.sql", import.meta.url), "utf8"),
+  readFile(new URL("../migrations/0006_referral_commissions.sql", import.meta.url), "utf8")
 ]);
 
 test("authenticated API requests require a verified Firebase email by default", () => {
@@ -282,4 +283,52 @@ test("Faucet dashboard avoids duplicate reward, wallet balance, and daily claim 
   const plansPanel = app.slice(plansStart, walletStart);
   assert.ok(!plansPanel.includes("Claims today"));
   assert.ok(!plansPanel.includes("claimsTodayText"));
+});
+
+
+test("referral codes can only be validated for verified referrers", () => {
+  const start = worker.indexOf('if (path === "/api/referral/validate" && method === "GET")');
+  const end = worker.indexOf("// AUTH SYNC", start);
+  assert.ok(start >= 0 && end > start);
+  assert.match(worker.slice(start, end), /email_verified = 1/);
+  assert.match(worker, /AND email_verified = 1[\s\S]{0,80}AND lower\(email\) != lower\(\?\)/);
+});
+
+test("referral commissions use a separate reserve that starts empty and disabled", () => {
+  assert.match(referralMigration, /CREATE TABLE IF NOT EXISTS referral_reserve/);
+  assert.match(referralMigration, /available_koinu INTEGER NOT NULL DEFAULT 0 CHECK \(available_koinu >= 0\)/);
+  assert.match(referralMigration, /payouts_enabled INTEGER NOT NULL DEFAULT 0/);
+  assert.match(referralMigration, /VALUES \(1, 0, 0\)/);
+  assert.match(referralMigration, /claim_id INTEGER NOT NULL UNIQUE/);
+  assert.match(referralMigration, /CHECK \(referred_uid != referrer_uid\)/);
+});
+
+test("15 percent referral commission is paid atomically only from funded reserve", () => {
+  const start = worker.indexOf('if (path === "/api/claim" && method === "POST")');
+  const end = worker.indexOf("// CLAIM HISTORY", start);
+  const route = worker.slice(start, end);
+  assert.match(route, /CAST\(\(c\.amount_koinu \* 1500\) \/ 10000 AS INTEGER\)/);
+  assert.match(route, /reserve\.payouts_enabled = 1/);
+  assert.match(route, /reserve\.available_koinu >=/);
+  assert.match(route, /r\.email_verified = 1 AND r\.uid != referred\.uid/);
+  assert.match(route, /UPDATE referral_reserve[\s\S]*?available_koinu = available_koinu -/);
+  assert.match(route, /UPDATE users[\s\S]*?balance_koinu = balance_koinu \+/);
+  assert.match(route, /\x27referral_commission\x27/);
+  assert.match(route, /referral_claim:\x27 \|\| rc\.claim_id/);
+  assert.match(route, /NOT EXISTS \([\s\S]*?lt\.idempotency_key = \x27referral_claim:/);
+});
+
+test("referral dashboard is rate-limited and returns commission totals and recent history", () => {
+  assert.match(worker, /referralsRead: \{ limit: 60, windowSeconds: 60 \}/);
+  const start = worker.indexOf('if (path === "/api/referrals" && method === "GET")');
+  const end = worker.indexOf("// LUCKY WHEEL ROUTES", start);
+  const route = worker.slice(start, end);
+  assert.match(route, /authenticate\(request\)/);
+  assert.match(route, /enforceRateLimit\(/);
+  assert.match(route, /commission_rate_bps: 1500/);
+  assert.match(route, /commission_earned_koinu/);
+  assert.match(route, /recent_commissions/);
+  assert.ok(app.includes("Total Earned"));
+  assert.ok(app.includes("Recent Commissions"));
+  assert.ok(app.includes("commissionEnabled"));
 });
