@@ -118,7 +118,10 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /requireAdmin\(user, env\)/);
   assert.match(route, /users_with_balance_without_ledger/);
   assert.match(route, /claims_without_ledger_count/);
+  assert.match(route, /referral_commissions_without_ledger_count/);
+  assert.match(route, /referral_ledger_without_commission_count/);
   assert.match(route, /reference_type = 'claim'/);
+  assert.match(route, /reference_type = 'referral_commission'/);
   assert.match(route, /user_balance_mismatches/);
   assert.match(route, /arithmetic_mismatches/);
   assert.match(route, /legacy_approved_without_payout_id_count/);
@@ -132,6 +135,8 @@ test("Admin dashboard displays financial integrity warnings without changing bal
   assert.ok(app.includes("External reserve funding: NOT VERIFIED"));
   assert.ok(app.includes("Unledgered Accounts"));
   assert.ok(app.includes("Claims Missing Ledger"));
+  assert.ok(app.includes("Referral Commissions Missing Ledger"));
+  assert.ok(app.includes("Referral Ledger Without Commission"));
   assert.ok(app.includes("Legacy Approved"));
 });
 
@@ -143,6 +148,9 @@ test("referral links prefill registration and expose a shareable link", () => {
   assert.match(app, /setAuthMode\('register'\)/);
   assert.ok(app.includes("navigator.clipboard.writeText(referralUrl)"));
   assert.ok(app.includes("Your Referral Link"));
+  assert.ok(app.includes("dogedrip_referral_attribution"));
+  assert.ok(app.includes("30 * 24 * 60 * 60 * 1000"));
+  assert.ok(app.includes("pendingReferralRef.current = code"));
 });
 
 test("referral dashboard endpoint is implemented and authenticated on both sides", () => {
@@ -331,4 +339,16 @@ test("referral dashboard is rate-limited and returns commission totals and recen
   assert.ok(app.includes("Total Earned"));
   assert.ok(app.includes("Recent Commissions"));
   assert.ok(app.includes("commissionEnabled"));
+});
+
+
+test("admin daily payouts and profit include paid referral commissions", () => {
+  const start = worker.indexOf("async function getAdminDailyStats");
+  const end = worker.indexOf("function validatePublicHttpUrl", start);
+  const stats = worker.slice(start, end);
+  assert.match(stats, /FROM referral_commissions[\s\S]*?WHERE date\(created_at\) = \?/);
+  assert.match(stats, /payoutsKoinu = claimsKoinu \+ wheelPrizesKoinu \+ streakKoinu \+ referralCommissionsKoinu/);
+  assert.match(stats, /referral_commissions_koinu: referralCommissionsKoinu/);
+  assert.match(stats, /referral_available_koinu/);
+  assert.ok(app.includes("Referrals"));
 });
