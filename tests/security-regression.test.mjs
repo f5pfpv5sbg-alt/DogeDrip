@@ -352,3 +352,16 @@ test("admin daily payouts and profit include paid referral commissions", () => {
   assert.match(stats, /referral_available_koinu/);
   assert.ok(app.includes("Referrals"));
 });
+
+
+test("Turnstile is required and action-bound for login, claim, wheel, and withdrawals", () => {
+  assert.match(worker, /api\/security\/login/);
+  assert.match(worker, /verifyTurnstileToken\(loginBody\.turnstileToken, request, env, "login"\)/);
+  for (const action of ["claim", "wheel_spin", "wheel_buy", "withdraw"]) {
+    assert.match(worker, new RegExp(`verifyTurnstileToken\\(body\\.turnstileToken, request, env, "${action}"\\)`));
+  }
+  assert.match(worker, /result\?\.action !== expectedAction/);
+  for (const action of ["login", "claim", "wheel_spin", "wheel_buy", "withdraw"]) {
+    assert.ok(app.includes(`action="${action}"`), `Missing frontend Turnstile widget for ${action}`);
+  }
+});
