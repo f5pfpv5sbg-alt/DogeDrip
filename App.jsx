@@ -1355,15 +1355,15 @@ export default function App() {
   }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
 
   useEffect(() => {
-    if (!firebaseUser || !apiReady || !isDemoAdmin) {
-      setAdminStats(null);
-      setAdminStatsError('');
-      return;
+    if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'admin') {
+      return undefined;
     }
 
     let cancelled = false;
 
     const loadAdminStats = async () => {
+      if (document.visibilityState !== 'visible') return;
+
       setAdminStatsLoading(true);
       setAdminStatsError('');
 
@@ -1385,11 +1385,15 @@ export default function App() {
     };
 
     loadAdminStats();
+    const intervalId = window.setInterval(loadAdminStats, 60000);
+    document.addEventListener('visibilitychange', loadAdminStats);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', loadAdminStats);
     };
-  }, [firebaseUser, apiReady, isDemoAdmin, accountSyncTick, apiRequest]);
+  }, [firebaseUser, apiReady, isDemoAdmin, activeTab, accountSyncTick, apiRequest]);
 
   useEffect(() => {
     const timer = setInterval(() => {
