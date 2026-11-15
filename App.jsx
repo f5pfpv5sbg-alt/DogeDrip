@@ -110,7 +110,7 @@ const PLAN_CATALOG = [
       '0.0005 DOGE per claim',
       '50-second claim cooldown',
       'Free Lucky Wheel',
-      'Daily streak bonus with Claim',
+      'Manual Daily Streak Bonus check-in',
       'Return Bonuses',
       'Missions & Challenges',
       'Advertisements'
@@ -1692,30 +1692,19 @@ export default function App() {
       }, 2200);
 
       const reward = Number(data.amount_koinu) / KOINU;
-      let dailyBonusText = '';
 
+      // Refresh streak status only. The daily reward is credited exclusively
+      // when the user presses the separate Daily Streak Bonus check-in button.
       try {
         const currentStreak = await apiRequest('/api/streak');
         applyStreakData(currentStreak);
-
-        if (currentStreak.can_checkin === true) {
-          const checkinData = await apiRequest('/api/streak/checkin', {
-            method: 'POST'
-          });
-
-          applyStreakData(checkinData);
-          applyAccountData(checkinData);
-
-          if (checkinData.already_checked_in !== true && isNum(checkinData.reward_koinu)) {
-            dailyBonusText = ` + Daily Bonus: ${formatDoge(checkinData.reward_koinu)} DOGE (Day ${Number(checkinData.streak_day)})`;
-          }
-        }
+        setStreakError('');
       } catch (streakError) {
-        setStreakError(streakError.message || 'Daily bonus could not be processed. It can be retried with your next successful claim.');
+        setStreakError(streakError.message || 'Could not refresh your daily streak.');
       }
 
       showClaimMessage(
-        `Claim successful! +${reward.toFixed(6)} DOGE${dailyBonusText}`,
+        `Claim successful! +${reward.toFixed(6)} DOGE`,
         false
       );
 
@@ -3180,7 +3169,7 @@ export default function App() {
                   <div>
                     <h3 className="text-sm font-black text-white font-['Space_Grotesk',sans-serif]">Daily Streak Bonus</h3>
                     <p className="text-xs text-slate-400 mt-1">
-                      Earn your daily streak reward automatically with your first successful Claim each UTC day.
+                      Claim your daily streak reward manually once each UTC day. Regular Faucet Claims do not collect this bonus.
                     </p>
                   </div>
                   <CalendarCheck className="w-6 h-6 text-[#F4A6C1] shrink-0" />
@@ -3212,6 +3201,19 @@ export default function App() {
                     Today's daily bonus has been credited to your balance.
                   </p>
                 )}
+                {streakMsg && (
+                  <p className={`text-xs font-bold ${streakMsgIsError ? 'text-red-400' : 'text-emerald-400'}`} role="status">
+                    {streakMsg}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={handleStreakCheckin}
+                  disabled={!canStreakCheckin}
+                  className="w-full rounded-xl px-4 py-3 font-black text-sm uppercase tracking-wide bg-[#F4A6C1] text-black hover:bg-[#f7bad0] disabled:opacity-40 disabled:cursor-not-allowed transition"
+                >
+                  {streakButtonLabel}
+                </button>
               </div>
 
               <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
