@@ -259,8 +259,13 @@ test("Faucet dashboard avoids duplicate reward, wallet balance, and daily claim 
   }
 
   assert.match(faucetPanel, /onClick=\{handleClaim\}/);
-  assert.match(faucetPanel, /label="Cooldown"/);
+  assert.doesNotMatch(faucetPanel, /label="Cooldown"/);
+  assert.doesNotMatch(faucetPanel, /label="Daily Limit"/);
+  assert.match(faucetPanel, /Cooldown Active: \{cooldownLeft\}s remaining/);
   assert.match(faucetPanel, /label="Daily Reset \(UTC\)"/);
+  assert.match(app, /const formatClaimAmount = \(amount\)/);
+  assert.match(faucetPanel, /formatClaimAmount\(claimAmount\)/);
+  assert.doesNotMatch(faucetPanel, /claimAmount\.toFixed\(6\)/);
 
   const plansStart = app.indexOf("{activeTab === 'plans' && (");
   const walletStart = app.indexOf("{activeTab === 'wallet' && (", plansStart);

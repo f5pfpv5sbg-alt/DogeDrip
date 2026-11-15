@@ -242,6 +242,9 @@ const formatDate = (value) => {
 const formatDoge = (koinu) =>
   isNum(koinu) ? String(Number((Number(koinu) / KOINU).toFixed(8))) : '...';
 
+const formatClaimAmount = (amount) =>
+  isNum(amount) ? String(Number(Number(amount).toFixed(8))) : '...';
+
 const mapWithdrawal = (w) => ({
   id: w.id,
   userId: w.uid || w.userId || '',
@@ -2735,7 +2738,7 @@ export default function App() {
           ? 'Daily Limit Reached'
           : cooldownLeft > 0
             ? `Available in ${cooldownLeft}s`
-            : `Claim ${claimAmount.toFixed(6)} DOGE`;
+            : `Claim ${formatClaimAmount(claimAmount)} DOGE`;
 
   const wheelReady =
     !wheelBackendMissing && wheelPrizes.length >= 2 && wheelSpins !== null;
@@ -3099,7 +3102,7 @@ export default function App() {
                 </h2>
                 <p className="text-sm text-slate-400">
                   {rulesReady
-                    ? `${planName ? `Your ${planName} plan earns` : 'You earn'} a simulated testnet reward of ${claimAmount.toFixed(6)} DOGE per claim${
+                    ? `${planName ? `Your ${planName} plan earns` : 'You earn'} a simulated testnet reward of ${formatClaimAmount(claimAmount)} DOGE per claim${
                         cooldownSeconds === 0
                           ? ' with no cooldown.'
                           : ` every ${cooldownSeconds} seconds.`
@@ -3118,21 +3121,12 @@ export default function App() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <StatTile
                   label="Active Plan"
                   value={planName || (accountLoaded ? 'Not reported' : '...')}
                   sub={accountLoaded && !planName ? 'Server did not send a plan' : undefined}
                   valueCls={activeCatalogEntry ? activeCatalogEntry.accentText : 'text-white'}
-                />
-                <StatTile
-                  label="Cooldown"
-                  value={formatCooldown(cooldownSeconds)}
-                />
-                <StatTile
-                  label="Daily Limit"
-                  value={dailyLimit !== null ? dailyLimit : (accountLoaded ? 'N/A' : '...')}
-                  sub={accountLoaded && dailyLimit === null ? 'Not reported by server' : undefined}
                 />
                 <StatTile
                   label="Daily Reset (UTC)"
