@@ -229,10 +229,6 @@ test("Faucet claim button does not describe the live D1 reward ledger as a demo"
   assert.ok(!app.includes("DOGE (Demo)"));
 });
 
-test("Faucet claim button does not describe the live D1 reward ledger as a demo", () => {
-  assert.doesNotMatch(app, /Claim \\S+ DOGE \\(Demo\\)/);
-});
-
 
 test("Daily streak reward is manual and never triggered by a regular Faucet claim", () => {
   const claimStart = app.indexOf("const handleClaim = async () =>");
