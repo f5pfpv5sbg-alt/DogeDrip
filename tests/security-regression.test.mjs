@@ -215,3 +215,29 @@ test("Scheduled cleanup removes expired rate-limit buckets and old daily activit
   assert.match(worker, /DELETE FROM user_daily_activity[\s\S]{0,100}utc_date < date\('now', '-90 days'\)/);
   assert.match(worker, /Promise\.allSettled\(/);
 });
+
+
+test("Faucet claim IDs survive uncertain failures and are cleared only after confirmation or a 4xx rejection", () => {
+  assert.ok(app.includes("sessionStorage.getItem(claimRequestStorageKey)"));
+  assert.ok(app.includes("sessionStorage.setItem(claimRequestStorageKey, claimRequestIdRef.current)"));
+  assert.ok(app.includes("typeof error.status === 'number' && error.status < 500"));
+  assert.ok(app.includes("Keep the same ID after network/5xx failures"));
+  assert.ok(app.includes("window.sessionStorage.removeItem(claimRequestStorageKey)"));
+});
+
+test("Faucet claim button does not describe the live D1 reward ledger as a demo", () => {
+  assert.ok(!app.includes("DOGE (Demo)"));
+});
+
+
+test("Daily streak reward is manual and never triggered by a regular Faucet claim", () => {
+  const claimStart = app.indexOf("const handleClaim = async () =>");
+  const streakHandlerStart = app.indexOf("const handleStreakCheckin = async () =>");
+  assert.ok(claimStart >= 0 && streakHandlerStart > claimStart);
+  const claimHandler = app.slice(claimStart, streakHandlerStart);
+  assert.ok(claimHandler.includes("apiRequest('/api/streak')"));
+  assert.ok(!claimHandler.includes("apiRequest('/api/streak/checkin'"));
+  assert.match(app, /onClick=\{handleStreakCheckin\}/);
+  assert.match(app, /Claim your daily streak reward manually once each UTC day/);
+  assert.match(app, /Regular Faucet Claims do not collect this bonus/);
+});
