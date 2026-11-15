@@ -1948,9 +1948,9 @@ export default function App() {
       resetSecurityToken('wheel_spin');
     } catch (error) {
       resetSecurityToken('wheel_spin');
-      if (typeof error.status === 'number') {
-        wheelSpinRequestIdRef.current = null;
-      }
+      // Keep the same request ID after any failed response. The Worker may
+      // have committed the spin before a response/network failure occurred.
+      // Reusing the ID makes the retry idempotent and prevents double rewards.
 
       if (error.status === 404) {
         setWheelBackendMissing(true);
@@ -2083,9 +2083,8 @@ export default function App() {
       await refreshWheelData();
     } catch (error) {
       resetSecurityToken('wheel_buy');
-      if (typeof error.status === 'number') {
-        wheelBuyRequestRef.current = null;
-      }
+      // Keep the same request ID after any failed response. A purchase may
+      // already be committed, so retries must reuse its idempotency key.
 
       if (error.status === 404) {
         setWheelBackendMissing(true);
