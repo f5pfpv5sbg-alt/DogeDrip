@@ -420,6 +420,7 @@ function TurnstileWidget({ action, onToken, resetKey = 0 }) {
         window.turnstile.remove(widgetIdRef.current);
         widgetIdRef.current = null;
       }
+      onTokenRef.current('');
     };
   }, [action]);
 
@@ -3354,7 +3355,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleClaim}
-                  disabled={!canClaim}
+                  disabled={!canClaim || !securityTokens.claim}
                   className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   {isClaiming
@@ -3559,7 +3560,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleWheelSpin}
-                  disabled={!canSpin}
+                  disabled={!canSpin || !securityTokens.wheel_spin}
                   className="w-full max-w-sm bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-4 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 flex items-center justify-center space-x-2 text-base font-['Space_Grotesk',sans-serif] tracking-wide"
                 >
                   {isSpinning
@@ -3666,7 +3667,7 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => handleBuyPack(pack)}
-                            disabled={!apiReady || isSpinning || buyingPackId !== null || cannotAfford || wheelBuyPaused}
+                            disabled={!apiReady || !securityTokens.wheel_buy || isSpinning || buyingPackId !== null || cannotAfford || wheelBuyPaused}
                             className="w-full bg-[#F4A6C1]/10 hover:bg-[#F4A6C1]/20 border border-[#F4A6C1]/40 text-[#F4A6C1] disabled:opacity-40 disabled:cursor-not-allowed font-black py-2 rounded-lg text-xs transition-colors font-['Space_Grotesk',sans-serif]"
                           >
                             {buyingPackId === pack.id
@@ -4218,7 +4219,7 @@ export default function App() {
                   />
                   <button
                     type="submit"
-                    disabled={isWithdrawing || !apiReady}
+                    disabled={isWithdrawing || !apiReady || !securityTokens.withdraw}
                     className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 text-black font-black py-3 rounded-xl transition-all shadow-lg shadow-[#F4A6C1]/20 text-sm font-['Space_Grotesk',sans-serif] tracking-wide"
                   >
                     {isWithdrawing
