@@ -135,6 +135,15 @@ test("Admin dashboard displays financial integrity warnings without changing bal
 });
 
 
+test("referral links prefill registration and expose a shareable link", () => {
+  assert.match(app, /new URLSearchParams\(window\.location\.search\)/);
+  assert.match(app, /params\.get\('ref'\)/);
+  assert.match(app, /setRegRefCode\(incomingCode\)/);
+  assert.match(app, /setAuthMode\('register'\)/);
+  assert.ok(app.includes("navigator.clipboard.writeText(referralUrl)"));
+  assert.ok(app.includes("Your Referral Link"));
+});
+
 test("referral dashboard endpoint is implemented and authenticated on both sides", () => {
   assert.ok(app.includes("apiRequest('/api/referrals')"));
   const start = worker.indexOf('if (path === "/api/referrals" && method === "GET")');
