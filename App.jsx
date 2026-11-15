@@ -1635,9 +1635,29 @@ export default function App() {
     setClaimIsError(false);
 
     const claimSession = authEventRef.current;
+    const claimRequestStorageKey = `dogedrip:claim-request:${firebaseUser.uid}`;
 
     if (!claimRequestIdRef.current) {
-      claimRequestIdRef.current = newRequestId();
+      let storedRequestId = null;
+
+      try {
+        const candidate = window.sessionStorage.getItem(claimRequestStorageKey);
+        if (typeof candidate === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(candidate)) {
+          storedRequestId = candidate;
+        }
+      } catch {
+        // Session storage may be unavailable; the in-memory request ID still protects retries.
+      }
+
+      claimRequestIdRef.current = storedRequestId || newRequestId();
+
+      if (!storedRequestId) {
+        try {
+          window.sessionStorage.setItem(claimRequestStorageKey, claimRequestIdRef.current);
+        } catch {
+          // Keep the request ID in memory if browser storage is unavailable.
+        }
+      }
     }
 
     const requestId = claimRequestIdRef.current;
@@ -1655,6 +1675,11 @@ export default function App() {
       });
 
       claimRequestIdRef.current = null;
+      try {
+        window.sessionStorage.removeItem(claimRequestStorageKey);
+      } catch {
+        // A completed claim is still confirmed by the server.
+      }
 
       if (claimSession !== authEventRef.current) return;
 
@@ -1712,8 +1737,16 @@ export default function App() {
         applyAccountData(accountResult.value);
       }
     } catch (error) {
-      if (typeof error.status === 'number') {
+      // Keep the same ID after network/5xx failures: the server may have
+      // committed the claim before its response failed. Replaying that ID is safe.
+      // A 4xx response is a confirmed rejection, so a fresh attempt may use a new ID.
+      if (typeof error.status === 'number' && error.status < 500) {
         claimRequestIdRef.current = null;
+        try {
+          window.sessionStorage.removeItem(claimRequestStorageKey);
+        } catch {
+          // Storage cleanup is best-effort.
+        }
       }
 
       if (claimSession !== authEventRef.current) return;
@@ -2721,7 +2754,7 @@ export default function App() {
           ? 'Daily Limit Reached'
           : cooldownLeft > 0
             ? `Available in ${cooldownLeft}s`
-            : `Claim ${claimAmount.toFixed(6)} DOGE (Demo)`;
+            : `Claim ${claimAmount.toFixed(6)} DOGE`;
 
   const wheelReady =
     !wheelBackendMissing && wheelPrizes.length >= 2 && wheelSpins !== null;
