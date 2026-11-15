@@ -2289,7 +2289,7 @@ async function handleRequest(request, env, json) {
       `).bind(user.sub).first(),
 
       env.DB.prepare(`
-        SELECT payouts_enabled FROM referral_reserve WHERE id = 1
+        SELECT payouts_enabled, available_koinu FROM referral_reserve WHERE id = 1
       `).first(),
 
       env.DB.prepare(`
@@ -2308,7 +2308,7 @@ async function handleRequest(request, env, json) {
       referred_by: account.referred_by,
       invited_count: Number(invited?.total || 0),
       commission_rate_bps: 1500,
-      commission_enabled: Number(reserve?.payouts_enabled) === 1,
+      commission_enabled: Number(reserve?.payouts_enabled) === 1 && Number(reserve?.available_koinu || 0) >= 7500,
       commission_earned_koinu: Number(earned?.total || 0),
       recent_commissions: recent.results || []
     });
