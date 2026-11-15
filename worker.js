@@ -1830,11 +1830,10 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
-      SELECT COUNT(*) AS total
+      SELECT COUNT(DISTINCT uid) AS total
       FROM user_daily_activity
-      WHERE utc_date = ?
-        AND last_seen_at >= datetime('now', '-5 minutes')
-    `).bind(today).first(),
+      WHERE last_seen_at >= datetime('now', '-5 minutes')
+    `).first(),
 
     env.DB.prepare(`
       SELECT
