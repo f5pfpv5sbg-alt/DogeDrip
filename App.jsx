@@ -490,6 +490,16 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const incomingCode = (params.get('ref') || '').trim().toUpperCase();
+
+    if (REF_CODE_REGEX.test(incomingCode)) {
+      setRegRefCode(incomingCode);
+      setAuthMode('register');
+    }
+  }, []);
+
   const [minWithdrawal, setMinWithdrawal] = useState(1);
 
   const [planInfo, setPlanInfo] = useState(null);
@@ -516,6 +526,7 @@ export default function App() {
   const [referralStats, setReferralStats] = useState(null);
   const [referralLoading, setReferralLoading] = useState(false);
   const [referralError, setReferralError] = useState('');
+  const [referralCopyMessage, setReferralCopyMessage] = useState('');
 
   const [wheelPrizes, setWheelPrizes] = useState([]);
   const [wheelPacks, setWheelPacks] = useState([]);
@@ -1338,6 +1349,19 @@ export default function App() {
       }
     };
   }, []);
+
+  const handleCopyReferralLink = async () => {
+    if (!REF_CODE_REGEX.test(refCode)) return;
+
+    const referralUrl = `${window.location.origin}/?ref=${encodeURIComponent(refCode)}`;
+
+    try {
+      await navigator.clipboard.writeText(referralUrl);
+      setReferralCopyMessage('Referral link copied.');
+    } catch {
+      setReferralCopyMessage('Copy unavailable. Select and copy the link manually.');
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -4245,6 +4269,32 @@ export default function App() {
                     Not enabled
                   </div>
                 </div>
+              </div>
+
+              <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-3">
+                <label className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                  Your Referral Link
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={refCode ? `${window.location.origin}/?ref=${encodeURIComponent(refCode)}` : ''}
+                    placeholder="Referral link will appear here"
+                    className={`${INPUT_CLS} font-mono text-xs`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyReferralLink}
+                    disabled={!REF_CODE_REGEX.test(refCode)}
+                    className="px-5 py-3 rounded-xl bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black text-xs font-black whitespace-nowrap"
+                  >
+                    Copy Link
+                  </button>
+                </div>
+                {referralCopyMessage && (
+                  <p role="status" className="text-xs text-slate-400">{referralCopyMessage}</p>
+                )}
               </div>
 
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
