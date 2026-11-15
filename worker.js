@@ -297,6 +297,7 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   referralValidate: { limit: 30, windowSeconds: 60 },
   referralsRead: { limit: 60, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
+  activityHeartbeat: { limit: 5, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
   wheelRead: { limit: 120, windowSeconds: 60 },
   wheelSpin: { limit: 15, windowSeconds: 60 },
@@ -1740,6 +1741,7 @@ async function getAdminDailyStats(env) {
     wdRejected,
     balances,
     activity,
+    onlineUsers,
     adRevenue,
     faucetReserve,
     wheelReserve,
@@ -1828,6 +1830,13 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
+      SELECT COUNT(*) AS total
+      FROM user_daily_activity
+      WHERE utc_date = ?
+        AND last_seen_at >= datetime('now', '-5 minutes')
+    `).bind(today).first(),
+
+    env.DB.prepare(`
       SELECT
         COALESCE(SUM(quoted_price_eur), 0) AS total,
         COUNT(*) AS count
@@ -1890,6 +1899,7 @@ async function getAdminDailyStats(env) {
     date: today,
     registered_today: registeredToday,
     active_users_today: Number(activity?.active_users || 0),
+    currently_online: Number(onlineUsers?.total || 0),
     login_sessions_today: Number(activity?.login_sessions || 0),
     verified_ad_revenue_eur: Number(adRevenue?.total || 0),
     verified_ad_campaigns_today: Number(adRevenue?.count || 0),
@@ -2241,6 +2251,32 @@ async function handleRequest(request, env, json) {
       email_verified: user.email_verified === true,
       email_verified_at: profile.email_verified_at
     });
+  }
+
+  // VERIFIED USER ACTIVITY HEARTBEAT
+  if (path === "/api/activity/heartbeat" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "activity_heartbeat",
+      RATE_LIMIT_POLICIES.activityHeartbeat
+    );
+
+    await env.DB.prepare(`
+      INSERT INTO user_daily_activity (
+        utc_date,
+        uid,
+        session_count,
+        first_seen_at,
+        last_seen_at
+      )
+      VALUES (date('now'), ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(utc_date, uid) DO UPDATE SET
+        last_seen_at = CURRENT_TIMESTAMP
+    `).bind(user.sub).run();
+
+    return json({ success: true });
   }
 
   // USER PROFILE

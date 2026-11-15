@@ -697,6 +697,26 @@ export default function App() {
     return data;
   }, [firebaseUser]);
 
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.emailVerified !== true || !apiReady) {
+      return undefined;
+    }
+
+    const sendHeartbeat = () => {
+      if (document.visibilityState !== 'visible') return;
+      apiRequest('/api/activity/heartbeat', { method: 'POST' }).catch(() => {});
+    };
+
+    sendHeartbeat();
+    const intervalId = window.setInterval(sendHeartbeat, 120000);
+    document.addEventListener('visibilitychange', sendHeartbeat);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', sendHeartbeat);
+    };
+  }, [firebaseUser, apiReady, apiRequest]);
+
   const applyAccountData = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
@@ -1335,15 +1355,15 @@ export default function App() {
   }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
 
   useEffect(() => {
-    if (!firebaseUser || !apiReady || !isDemoAdmin) {
-      setAdminStats(null);
-      setAdminStatsError('');
-      return;
+    if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'admin') {
+      return undefined;
     }
 
     let cancelled = false;
 
     const loadAdminStats = async () => {
+      if (document.visibilityState !== 'visible') return;
+
       setAdminStatsLoading(true);
       setAdminStatsError('');
 
@@ -1365,11 +1385,15 @@ export default function App() {
     };
 
     loadAdminStats();
+    const intervalId = window.setInterval(loadAdminStats, 60000);
+    document.addEventListener('visibilitychange', loadAdminStats);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', loadAdminStats);
     };
-  }, [firebaseUser, apiReady, isDemoAdmin, accountSyncTick, apiRequest]);
+  }, [firebaseUser, apiReady, isDemoAdmin, activeTab, accountSyncTick, apiRequest]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -4645,6 +4669,16 @@ export default function App() {
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
                     sub="Verified users with an app session today"
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="Currently Online"
+                    value={
+                      adminStats
+                        ? Number(adminStats.currently_online || 0)
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub="Verified users active in the last 5 minutes"
                     valueCls={adminAccentText}
                   />
                   <StatTile
