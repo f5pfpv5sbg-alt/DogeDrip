@@ -70,7 +70,7 @@ test("withdrawal creation debits the balance, inserts a pending request and reco
   assert.match(route, /results\[0\]\.meta\.changes !== 1[\s\S]{0,160}results\[2\]\.meta\.changes !== 1/);
 });
 
-test("finance audit reports withdrawals that are missing a matching negative ledger transaction", () => {
+test("finance audit separately detects missing withdrawal debits and rejected-withdrawal refunds", () => {
   const start = worker.indexOf('if (path === "/api/admin/finance/audit" && method === "GET")');
   const end = worker.indexOf("// ADMIN: DAILY STATS", start);
   const route = worker.slice(start, end);
@@ -80,7 +80,10 @@ test("finance audit reports withdrawals that are missing a matching negative led
   assert.match(route, /lt\.reference_type = 'withdrawal'/);
   assert.match(route, /lt\.reference_id = CAST\(w\.id AS TEXT\)/);
   assert.match(route, /lt\.amount_koinu = -w\.amount_koinu/);
-  assert.match(route, /without_ledger_count: Number\(withdrawalsWithoutLedger\?\.count \|\| 0\)/);
+  assert.match(route, /lt\.transaction_type = 'withdrawal_refund'/);
+  assert.match(route, /lt\.amount_koinu = w\.amount_koinu/);
+  assert.match(route, /without_debit_ledger_count: Number\(withdrawalsWithoutDebitLedger\?\.count \|\| 0\)/);
+  assert.match(route, /rejected_without_refund_ledger_count: Number\(rejectedWithoutRefundLedger\?\.count \|\| 0\)/);
 });
 
 test("FaucetPay payouts are disabled unless an explicit server-side flag is enabled", () => {
