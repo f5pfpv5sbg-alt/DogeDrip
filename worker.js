@@ -2446,7 +2446,75 @@ async function handleRequest(request, env, json) {
             THEN abs(-9223372036854775808)
             ELSE 1
           END
-        `)
+        `),
+
+        env.DB.prepare(`
+          INSERT INTO referral_commissions (claim_id, referred_uid, referrer_uid, amount_koinu, rate_bps)
+          SELECT c.id, c.uid, r.uid,
+            CAST((c.amount_koinu * 1500) / 10000 AS INTEGER), 1500
+          FROM claims c
+          JOIN users referred ON referred.uid = c.uid
+          JOIN users r ON r.ref_code = referred.referred_by
+            AND r.email_verified = 1 AND r.uid != referred.uid
+          JOIN referral_reserve reserve ON reserve.id = 1
+            AND reserve.payouts_enabled = 1
+          WHERE c.uid = ? AND c.request_id = ?
+            AND c.amount_koinu > 0
+            AND CAST((c.amount_koinu * 1500) / 10000 AS INTEGER) > 0
+            AND reserve.available_koinu >= CAST((c.amount_koinu * 1500) / 10000 AS INTEGER)
+            AND changes() = 1
+        `).bind(user.sub, requestId),
+
+        env.DB.prepare(`
+          UPDATE referral_reserve
+          SET available_koinu = available_koinu - (
+            SELECT amount_koinu FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          ), updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND payouts_enabled = 1 AND changes() = 1
+            AND available_koinu >= (
+              SELECT amount_koinu FROM referral_commissions
+              WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+            )
+        `).bind(user.sub, requestId, user.sub, requestId),
+
+        env.DB.prepare(`
+          UPDATE users
+          SET balance_koinu = balance_koinu + (
+            SELECT amount_koinu FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          )
+          WHERE uid = (
+            SELECT referrer_uid FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          ) AND changes() = 1
+        `).bind(user.sub, requestId, user.sub, requestId),
+
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid, transaction_type, amount_koinu, balance_before_koinu,
+            balance_after_koinu, reference_type, reference_id, idempotency_key
+          )
+          SELECT u.uid, 'referral_commission', rc.amount_koinu,
+            u.balance_koinu - rc.amount_koinu, u.balance_koinu,
+            'referral_commission', CAST(rc.id AS TEXT),
+            'referral_claim:' || rc.claim_id
+          FROM referral_commissions rc
+          JOIN users u ON u.uid = rc.referrer_uid
+          WHERE rc.claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+            AND changes() = 1
+        `).bind(user.sub, requestId),
+
+        env.DB.prepare(`
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM referral_commissions rc
+            WHERE rc.claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM ledger_transactions lt
+                WHERE lt.idempotency_key = 'referral_claim:' || rc.claim_id
+              )
+          ) THEN abs(-9223372036854775808) ELSE 1 END
+        `).bind(user.sub, requestId)
       ]);
     } catch (error) {
       const concurrentClaim = await getExistingClaim(
