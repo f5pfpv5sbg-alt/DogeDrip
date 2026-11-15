@@ -4534,6 +4534,8 @@ export default function App() {
                         <StatTile label="Outstanding Withdrawals" value={`${formatDoge(financeAudit.liabilities.outstanding_withdrawals_koinu)} DOGE`} sub="Pending, processing or unknown" />
                         <StatTile label="Unledgered Accounts" value={financeAudit.ledger.users_with_balance_without_ledger} sub={`${formatDoge(financeAudit.ledger.unledgered_balance_koinu)} DOGE without ledger entries`} valueCls={financeAudit.ledger.users_with_balance_without_ledger > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Claims Missing Ledger" value={financeAudit.ledger.claims_without_ledger_count} sub={`${formatDoge(financeAudit.ledger.claims_without_ledger_koinu)} DOGE not journaled`} valueCls={financeAudit.ledger.claims_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Referral Commissions Missing Ledger" value={financeAudit.ledger.referral_commissions_without_ledger_count} sub={`${formatDoge(financeAudit.ledger.referral_commissions_without_ledger_koinu)} DOGE not journaled`} valueCls={financeAudit.ledger.referral_commissions_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Referral Ledger Without Commission" value={financeAudit.ledger.referral_ledger_without_commission_count} sub={`${formatDoge(financeAudit.ledger.referral_ledger_without_commission_koinu)} DOGE unmatched`} valueCls={financeAudit.ledger.referral_ledger_without_commission_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Balance Mismatches" value={financeAudit.ledger.user_balance_mismatches} sub="Latest ledger balance vs account balance" valueCls={financeAudit.ledger.user_balance_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Ledger Arithmetic Errors" value={financeAudit.ledger.arithmetic_mismatches} sub={`${financeAudit.ledger.transactions_count} ledger rows checked`} valueCls={financeAudit.ledger.arithmetic_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Legacy Approved" value={financeAudit.withdrawals.legacy_approved_without_payout_id_count} sub={`${formatDoge(financeAudit.withdrawals.legacy_approved_without_payout_id_koinu)} DOGE without FaucetPay ID`} valueCls={financeAudit.withdrawals.legacy_approved_without_payout_id_count > 0 ? 'text-yellow-300' : 'text-emerald-400'} />
@@ -4541,7 +4543,7 @@ export default function App() {
                       <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
                         <p className="text-xs font-bold text-yellow-300">External reserve funding: NOT VERIFIED</p>
                         <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
-                        <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE</p>
+                        <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE · Referral reserve: {formatDoge(financeAudit.reserves.referral_available_koinu)} DOGE</p>
                       </div>
                     </>
                   )}
@@ -4607,7 +4609,7 @@ export default function App() {
                     }
                     sub={
                       adminStats?.breakdown
-                        ? `Claims ${formatDoge(adminStats.breakdown.claims_koinu)} · Wheel ${formatDoge(adminStats.breakdown.wheel_prizes_koinu)} · Check-in ${formatDoge(adminStats.breakdown.streak_koinu)}`
+                        ? `Claims ${formatDoge(adminStats.breakdown.claims_koinu)} · Wheel ${formatDoge(adminStats.breakdown.wheel_prizes_koinu)} · Check-in ${formatDoge(adminStats.breakdown.streak_koinu)} · Referrals ${formatDoge(adminStats.breakdown.referral_commissions_koinu || 0)}`
                         : undefined
                     }
                     valueCls="text-red-400"
