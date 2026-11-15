@@ -500,7 +500,6 @@ export default function App() {
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [claimStatus, setClaimStatus] = useState('');
   const [claimIsError, setClaimIsError] = useState(false);
-  const [showClaimEffect, setShowClaimEffect] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [demoClaims, setDemoClaims] = useState([]);
 
@@ -1683,12 +1682,6 @@ export default function App() {
       if (claimSession !== authEventRef.current) return;
 
       applyAccountData(data);
-
-      setShowClaimEffect(true);
-
-      window.setTimeout(() => {
-        setShowClaimEffect(false);
-      }, 2200);
 
       const reward = Number(data.amount_koinu) / KOINU;
 
@@ -3201,18 +3194,6 @@ export default function App() {
               </div>
 
               <div className="relative overflow-hidden bg-black border border-slate-800 rounded-2xl p-8 flex flex-col items-center justify-center text-center space-y-6">
-                {showClaimEffect && (
-                  <div className="claim-celebration" aria-hidden="true">
-                    <div className="claim-glow" />
-                    <span className="claim-coin coin-1">+$</span>
-                    <span className="claim-coin coin-2">Ð</span>
-                    <span className="claim-coin coin-3">+$</span>
-                    <span className="claim-coin coin-4">Ð</span>
-                    <span className="claim-coin coin-5">+$</span>
-                    <div className="claim-message">REWARD CLAIMED!</div>
-                  </div>
-                )}
-
                 <div className="bg-[#F4A6C1]/10 p-4 rounded-2xl border border-[#F4A6C1]/20 text-[#F4A6C1]">
                   <Award className="w-10 h-10" />
                 </div>
