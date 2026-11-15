@@ -365,3 +365,15 @@ test("Turnstile is required and action-bound for login, claim, wheel, and withdr
     assert.ok(app.includes(`action="${action}"`), `Missing frontend Turnstile widget for ${action}`);
   }
 });
+
+
+test("admin online users metric is based on verified five-minute heartbeats", () => {
+  assert.match(worker, /path === "\/api\/activity\/heartbeat"/);
+  assert.match(worker, /RATE_LIMIT_POLICIES\.activityHeartbeat/);
+  assert.match(worker, /last_seen_at = CURRENT_TIMESTAMP/);
+  assert.match(worker, /last_seen_at >= datetime\('now', '-5 minutes'\)/);
+  assert.match(worker, /currently_online: Number\(onlineUsers\?\.total \|\| 0\)/);
+  assert.match(app, /api\/activity\/heartbeat/);
+  assert.ok(app.includes('label="Currently Online"'));
+  assert.match(app, /setInterval\(sendHeartbeat, 120000\)/);
+});
