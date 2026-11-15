@@ -1733,6 +1733,7 @@ async function getAdminDailyStats(env) {
     wheelPrizes,
     wheelBuys,
     streaks,
+    referralCommissions,
     wdPending,
     wdRequested,
     wdApproved,
@@ -1778,6 +1779,12 @@ async function getAdminDailyStats(env) {
         COUNT(*) AS count
       FROM daily_streaks
       WHERE last_checkin_date = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM referral_commissions
+      WHERE date(created_at) = ?
     `).bind(today).first(),
 
     env.DB.prepare(`
@@ -1840,6 +1847,12 @@ async function getAdminDailyStats(env) {
       SELECT available_koinu, locked_koinu, payouts_enabled
       FROM wheel_reserve
       WHERE id = 1
+    `).first(),
+
+    env.DB.prepare(`
+      SELECT available_koinu, payouts_enabled
+      FROM referral_reserve
+      WHERE id = 1
     `).first()
   ]);
 
@@ -1867,8 +1880,9 @@ async function getAdminDailyStats(env) {
   const claimsKoinu = Number(claims?.total || 0);
   const wheelPrizesKoinu = Number(wheelPrizes?.total || 0);
   const streakKoinu = Number(streaks?.total || 0);
+  const referralCommissionsKoinu = Number(referralCommissions?.total || 0);
   const incomeKoinu = Number(wheelBuys?.total || 0);
-  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu;
+  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu + referralCommissionsKoinu;
 
   return {
     success: true,
@@ -1888,6 +1902,8 @@ async function getAdminDailyStats(env) {
       wheel_spins_count: Number(wheelPrizes?.count || 0),
       streak_koinu: streakKoinu,
       streak_checkins_count: Number(streaks?.count || 0),
+      referral_commissions_koinu: referralCommissionsKoinu,
+      referral_commissions_count: Number(referralCommissions?.count || 0),
       wheel_purchases_koinu: incomeKoinu,
       wheel_purchases_count: Number(wheelBuys?.count || 0)
     },
@@ -1906,7 +1922,9 @@ async function getAdminDailyStats(env) {
       faucet_payouts_enabled: Number(faucetReserve?.payouts_enabled) === 1,
       wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
       wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
-      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1
+      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1,
+      referral_available_koinu: Number(referralReserve?.available_koinu || 0),
+      referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1
     }
   };
 }
@@ -3118,7 +3136,8 @@ async function handleRequest(request, env, json) {
       withdrawalRows,
       legacyApproved,
       faucetReserve,
-      wheelReserve
+      wheelReserve,
+      referralReserve
     ] = await Promise.all([
       env.DB.prepare(`
         SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS users_count
