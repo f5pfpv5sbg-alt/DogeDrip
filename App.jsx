@@ -490,6 +490,49 @@ export default function App() {
   const [authSuccess, setAuthSuccess] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
+  useEffect(() => {
+    const storageKey = 'dogedrip_referral_attribution';
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    const params = new URLSearchParams(window.location.search);
+    const incomingCode = (params.get('ref') || '').trim().toUpperCase();
+    let storedCode = '';
+
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(storageKey) || 'null');
+      if (
+        saved &&
+        REF_CODE_REGEX.test(saved.code) &&
+        Number.isFinite(saved.expiresAt) &&
+        saved.expiresAt > Date.now()
+      ) {
+        storedCode = saved.code;
+      } else if (saved) {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // Storage may be unavailable; direct referral links still work.
+    }
+
+    const code = REF_CODE_REGEX.test(incomingCode) ? incomingCode : storedCode;
+
+    if (code) {
+      setRegRefCode(code);
+      pendingReferralRef.current = code;
+
+      if (REF_CODE_REGEX.test(incomingCode)) {
+        setAuthMode('register');
+        try {
+          window.localStorage.setItem(
+            storageKey,
+            JSON.stringify({ code, expiresAt })
+          );
+        } catch {
+          // The code remains available for this page session.
+        }
+      }
+    }
+  }, []);
+
   const [minWithdrawal, setMinWithdrawal] = useState(1);
 
   const [planInfo, setPlanInfo] = useState(null);
@@ -516,6 +559,7 @@ export default function App() {
   const [referralStats, setReferralStats] = useState(null);
   const [referralLoading, setReferralLoading] = useState(false);
   const [referralError, setReferralError] = useState('');
+  const [referralCopyMessage, setReferralCopyMessage] = useState('');
 
   const [wheelPrizes, setWheelPrizes] = useState([]);
   const [wheelPacks, setWheelPacks] = useState([]);
@@ -873,6 +917,11 @@ export default function App() {
         if (!isMounted || eventId !== authEventRef.current) return;
 
         pendingReferralRef.current = null;
+        try {
+          window.localStorage.removeItem('dogedrip_referral_attribution');
+        } catch {
+          // Storage may be unavailable.
+        }
         setRefCode(syncData.ref_code || '');
         if (syncData.username) setProfileUsernameInput(syncData.username);
 
@@ -1112,7 +1161,13 @@ export default function App() {
 
         if (cancelled) return;
 
-        setReferralStats({ invited: Number(data.invited_count || 0) });
+        setReferralStats({
+          invited: Number(data.invited_count || 0),
+          commissionEnabled: data.commission_enabled === true,
+          commissionRateBps: Number(data.commission_rate_bps || 1500),
+          commissionEarnedKoinu: Number(data.commission_earned_koinu || 0),
+          recentCommissions: Array.isArray(data.recent_commissions) ? data.recent_commissions : []
+        });
 
         if (data.ref_code) {
           setRefCode(data.ref_code);
@@ -1338,6 +1393,19 @@ export default function App() {
       }
     };
   }, []);
+
+  const handleCopyReferralLink = async () => {
+    if (!REF_CODE_REGEX.test(refCode)) return;
+
+    const referralUrl = `${window.location.origin}/?ref=${encodeURIComponent(refCode)}`;
+
+    try {
+      await navigator.clipboard.writeText(referralUrl);
+      setReferralCopyMessage('Referral link copied.');
+    } catch {
+      setReferralCopyMessage('Copy unavailable. Select and copy the link manually.');
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -4200,10 +4268,10 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Referral Program (DEMO)
+                  Referral Program
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Share your referral code. Invited users are counted from real registrations.
+                  Earn a 15% DOGE commission when verified referrals complete Faucet claims. Commissions are paid only while the separately funded referral reserve is active.
                 </p>
               </div>
 
@@ -4214,7 +4282,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
                     Your Referral Code
@@ -4239,12 +4307,71 @@ export default function App() {
 
                 <div className="bg-black border border-slate-800 rounded-2xl p-5">
                   <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                    Commission
+                    Commission Rate
                   </span>
-                  <div className="text-2xl font-black font-mono text-slate-500 mt-1">
-                    Not enabled
+                  <div className="text-2xl font-black font-mono text-[#F4A6C1] mt-1">
+                    {referralStats ? `${(referralStats.commissionRateBps / 100).toFixed(0)}%` : '...'}
+                  </div>
+                  <p className={`text-xs mt-1 ${referralStats?.commissionEnabled ? "text-emerald-400" : "text-slate-500"}`}>
+                    {referralStats ? (referralStats.commissionEnabled ? "Active" : "Paused — reserve not funded") : "Loading status"}
+                  </p>
+                </div>
+
+                <div className="bg-black border border-slate-800 rounded-2xl p-5">
+                  <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                    Total Earned
+                  </span>
+                  <div className="text-2xl font-black font-mono text-white mt-1">
+                    {referralStats ? `${formatDoge(referralStats.commissionEarnedKoinu)} DOGE` : "..."}
                   </div>
                 </div>
+              </div>
+
+              <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-3">
+                <label className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
+                  Your Referral Link
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={refCode ? `${window.location.origin}/?ref=${encodeURIComponent(refCode)}` : ''}
+                    placeholder="Referral link will appear here"
+                    className={`${INPUT_CLS} font-mono text-xs`}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyReferralLink}
+                    disabled={!REF_CODE_REGEX.test(refCode)}
+                    className="px-5 py-3 rounded-xl bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black text-xs font-black whitespace-nowrap"
+                  >
+                    Copy Link
+                  </button>
+                </div>
+                {referralCopyMessage && (
+                  <p role="status" className="text-xs text-slate-400">{referralCopyMessage}</p>
+                )}
+              </div>
+
+              <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-3">
+                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
+                  Recent Commissions
+                </h3>
+                {!referralStats?.recentCommissions?.length ? (
+                  <p className="text-sm text-slate-500">No referral commissions yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {referralStats.recentCommissions.map((commission) => (
+                      <div key={commission.id} className="flex items-center justify-between gap-3 border-b border-slate-800 pb-2 last:border-0">
+                        <div className="min-w-0">
+                          <p className="text-sm text-white truncate">{commission.referred_username}</p>
+                          <p className="text-xs text-slate-500">{formatDate(commission.created_at)}</p>
+                        </div>
+                        <span className="text-sm font-mono font-bold text-[#F4A6C1] whitespace-nowrap">+{formatDoge(commission.amount_koinu)} DOGE</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4">
@@ -4261,10 +4388,13 @@ export default function App() {
                     with others.
                   </li>
                   <li>
-                    Each new account that registers with your code counts as one invited user.
+                    Only users who verify their email count as invited users.
                   </li>
                   <li>
-                    Referral commissions are not enabled yet.
+                    You earn 15% of each verified referral’s successful Faucet claim.
+                  </li>
+                  <li>
+                    Commissions are credited to your DOGE balance only when the separate referral reserve is funded and active. They never use funds reserved for other users.
                   </li>
                 </ul>
               </div>
@@ -4404,6 +4534,8 @@ export default function App() {
                         <StatTile label="Outstanding Withdrawals" value={`${formatDoge(financeAudit.liabilities.outstanding_withdrawals_koinu)} DOGE`} sub="Pending, processing or unknown" />
                         <StatTile label="Unledgered Accounts" value={financeAudit.ledger.users_with_balance_without_ledger} sub={`${formatDoge(financeAudit.ledger.unledgered_balance_koinu)} DOGE without ledger entries`} valueCls={financeAudit.ledger.users_with_balance_without_ledger > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Claims Missing Ledger" value={financeAudit.ledger.claims_without_ledger_count} sub={`${formatDoge(financeAudit.ledger.claims_without_ledger_koinu)} DOGE not journaled`} valueCls={financeAudit.ledger.claims_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Referral Commissions Missing Ledger" value={financeAudit.ledger.referral_commissions_without_ledger_count} sub={`${formatDoge(financeAudit.ledger.referral_commissions_without_ledger_koinu)} DOGE not journaled`} valueCls={financeAudit.ledger.referral_commissions_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="Referral Ledger Without Commission" value={financeAudit.ledger.referral_ledger_without_commission_count} sub={`${formatDoge(financeAudit.ledger.referral_ledger_without_commission_koinu)} DOGE unmatched`} valueCls={financeAudit.ledger.referral_ledger_without_commission_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Balance Mismatches" value={financeAudit.ledger.user_balance_mismatches} sub="Latest ledger balance vs account balance" valueCls={financeAudit.ledger.user_balance_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Ledger Arithmetic Errors" value={financeAudit.ledger.arithmetic_mismatches} sub={`${financeAudit.ledger.transactions_count} ledger rows checked`} valueCls={financeAudit.ledger.arithmetic_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Legacy Approved" value={financeAudit.withdrawals.legacy_approved_without_payout_id_count} sub={`${formatDoge(financeAudit.withdrawals.legacy_approved_without_payout_id_koinu)} DOGE without FaucetPay ID`} valueCls={financeAudit.withdrawals.legacy_approved_without_payout_id_count > 0 ? 'text-yellow-300' : 'text-emerald-400'} />
@@ -4411,7 +4543,7 @@ export default function App() {
                       <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
                         <p className="text-xs font-bold text-yellow-300">External reserve funding: NOT VERIFIED</p>
                         <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
-                        <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE</p>
+                        <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE · Referral reserve: {formatDoge(financeAudit.reserves.referral_available_koinu)} DOGE</p>
                       </div>
                     </>
                   )}
@@ -4477,7 +4609,7 @@ export default function App() {
                     }
                     sub={
                       adminStats?.breakdown
-                        ? `Claims ${formatDoge(adminStats.breakdown.claims_koinu)} · Wheel ${formatDoge(adminStats.breakdown.wheel_prizes_koinu)} · Check-in ${formatDoge(adminStats.breakdown.streak_koinu)}`
+                        ? `Claims ${formatDoge(adminStats.breakdown.claims_koinu)} · Wheel ${formatDoge(adminStats.breakdown.wheel_prizes_koinu)} · Check-in ${formatDoge(adminStats.breakdown.streak_koinu)} · Referrals ${formatDoge(adminStats.breakdown.referral_commissions_koinu || 0)}`
                         : undefined
                     }
                     valueCls="text-red-400"

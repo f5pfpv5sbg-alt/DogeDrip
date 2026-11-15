@@ -295,6 +295,7 @@ async function requireAdmin(user, env) {
 const RATE_LIMIT_POLICIES = Object.freeze({
   registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
+  referralsRead: { limit: 60, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
   wheelRead: { limit: 120, windowSeconds: 60 },
@@ -593,8 +594,11 @@ async function syncUser(env, user, referredByCode, requestedUsername) {
     const referrer = await env.DB.prepare(`
       SELECT ref_code
       FROM users
-      WHERE ref_code = ? AND uid != ?
-    `).bind(referredByCode, user.sub).first();
+      WHERE ref_code = ?
+        AND uid != ?
+        AND email_verified = 1
+        AND lower(email) != lower(?)
+    `).bind(referredByCode, user.sub, user.email).first();
 
     referrerCode = referrer ? referrer.ref_code : null;
   }
@@ -1729,6 +1733,7 @@ async function getAdminDailyStats(env) {
     wheelPrizes,
     wheelBuys,
     streaks,
+    referralCommissions,
     wdPending,
     wdRequested,
     wdApproved,
@@ -1737,7 +1742,8 @@ async function getAdminDailyStats(env) {
     activity,
     adRevenue,
     faucetReserve,
-    wheelReserve
+    wheelReserve,
+    referralReserve
   ] = await Promise.all([
     env.DB.prepare(`
       SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
@@ -1774,6 +1780,12 @@ async function getAdminDailyStats(env) {
         COUNT(*) AS count
       FROM daily_streaks
       WHERE last_checkin_date = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM referral_commissions
+      WHERE date(created_at) = ?
     `).bind(today).first(),
 
     env.DB.prepare(`
@@ -1836,6 +1848,12 @@ async function getAdminDailyStats(env) {
       SELECT available_koinu, locked_koinu, payouts_enabled
       FROM wheel_reserve
       WHERE id = 1
+    `).first(),
+
+    env.DB.prepare(`
+      SELECT available_koinu, payouts_enabled
+      FROM referral_reserve
+      WHERE id = 1
     `).first()
   ]);
 
@@ -1863,8 +1881,9 @@ async function getAdminDailyStats(env) {
   const claimsKoinu = Number(claims?.total || 0);
   const wheelPrizesKoinu = Number(wheelPrizes?.total || 0);
   const streakKoinu = Number(streaks?.total || 0);
+  const referralCommissionsKoinu = Number(referralCommissions?.total || 0);
   const incomeKoinu = Number(wheelBuys?.total || 0);
-  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu;
+  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu + referralCommissionsKoinu;
 
   return {
     success: true,
@@ -1884,6 +1903,8 @@ async function getAdminDailyStats(env) {
       wheel_spins_count: Number(wheelPrizes?.count || 0),
       streak_koinu: streakKoinu,
       streak_checkins_count: Number(streaks?.count || 0),
+      referral_commissions_koinu: referralCommissionsKoinu,
+      referral_commissions_count: Number(referralCommissions?.count || 0),
       wheel_purchases_koinu: incomeKoinu,
       wheel_purchases_count: Number(wheelBuys?.count || 0)
     },
@@ -1902,7 +1923,9 @@ async function getAdminDailyStats(env) {
       faucet_payouts_enabled: Number(faucetReserve?.payouts_enabled) === 1,
       wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
       wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
-      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1
+      wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1,
+      referral_available_koinu: Number(referralReserve?.available_koinu || 0),
+      referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1
     }
   };
 }
@@ -2124,6 +2147,7 @@ async function handleRequest(request, env, json) {
       SELECT 1 AS ok
       FROM users
       WHERE ref_code = ?
+        AND email_verified = 1
     `).bind(code).first();
 
     return json({
@@ -2259,37 +2283,55 @@ async function handleRequest(request, env, json) {
   if (path === "/api/referrals" && method === "GET") {
     const user = await authenticate(request);
 
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "referrals_read",
+      RATE_LIMIT_POLICIES.referralsRead
+    );
+
     const account = await env.DB.prepare(`
-      SELECT ref_code, referred_by
-      FROM users
-      WHERE uid = ?
+      SELECT ref_code, referred_by FROM users WHERE uid = ?
     `).bind(user.sub).first();
 
-    if (!account) {
-      throw new HttpError(404, "User not found");
-    }
+    if (!account) throw new HttpError(404, "User not found");
 
-    let invitedCount = 0;
+    const [invited, earned, reserve, recent] = await Promise.all([
+      env.DB.prepare(`
+        SELECT COUNT(*) AS total FROM users
+        WHERE referred_by = ? AND email_verified = 1
+      `).bind(account.ref_code).first(),
 
-    if (account.ref_code) {
-      const row = await env.DB.prepare(`
-        SELECT COUNT(*) AS total
-        FROM users
-        WHERE referred_by = ?
-          AND email_verified = 1
-      `).bind(account.ref_code).first();
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(amount_koinu), 0) AS total
+        FROM referral_commissions WHERE referrer_uid = ?
+      `).bind(user.sub).first(),
 
-      invitedCount = row ? Number(row.total) : 0;
-    }
+      env.DB.prepare(`
+        SELECT payouts_enabled, available_koinu FROM referral_reserve WHERE id = 1
+      `).first(),
+
+      env.DB.prepare(`
+        SELECT rc.id, rc.amount_koinu, rc.created_at,
+          COALESCE(referred.username, 'Referred user') AS referred_username
+        FROM referral_commissions rc
+        JOIN users referred ON referred.uid = rc.referred_uid
+        WHERE rc.referrer_uid = ?
+        ORDER BY rc.id DESC LIMIT 20
+      `).bind(user.sub).all()
+    ]);
 
     return json({
       success: true,
       ref_code: account.ref_code,
       referred_by: account.referred_by,
-      invited_count: invitedCount
+      invited_count: Number(invited?.total || 0),
+      commission_rate_bps: 1500,
+      commission_enabled: Number(reserve?.payouts_enabled) === 1 && Number(reserve?.available_koinu || 0) >= 7500,
+      commission_earned_koinu: Number(earned?.total || 0),
+      recent_commissions: recent.results || []
     });
   }
-
   // LUCKY WHEEL ROUTES
 
   if (path === "/api/wheel/state" && method === "GET") {
@@ -2441,7 +2483,75 @@ async function handleRequest(request, env, json) {
             THEN abs(-9223372036854775808)
             ELSE 1
           END
-        `)
+        `),
+
+        env.DB.prepare(`
+          INSERT INTO referral_commissions (claim_id, referred_uid, referrer_uid, amount_koinu, rate_bps)
+          SELECT c.id, c.uid, r.uid,
+            CAST((c.amount_koinu * 1500) / 10000 AS INTEGER), 1500
+          FROM claims c
+          JOIN users referred ON referred.uid = c.uid
+          JOIN users r ON r.ref_code = referred.referred_by
+            AND r.email_verified = 1 AND r.uid != referred.uid
+          JOIN referral_reserve reserve ON reserve.id = 1
+            AND reserve.payouts_enabled = 1
+          WHERE c.uid = ? AND c.request_id = ?
+            AND c.amount_koinu > 0
+            AND CAST((c.amount_koinu * 1500) / 10000 AS INTEGER) > 0
+            AND reserve.available_koinu >= CAST((c.amount_koinu * 1500) / 10000 AS INTEGER)
+            AND changes() = 1
+        `).bind(user.sub, requestId),
+
+        env.DB.prepare(`
+          UPDATE referral_reserve
+          SET available_koinu = available_koinu - (
+            SELECT amount_koinu FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          ), updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND payouts_enabled = 1 AND changes() = 1
+            AND available_koinu >= (
+              SELECT amount_koinu FROM referral_commissions
+              WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+            )
+        `).bind(user.sub, requestId, user.sub, requestId),
+
+        env.DB.prepare(`
+          UPDATE users
+          SET balance_koinu = balance_koinu + (
+            SELECT amount_koinu FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          )
+          WHERE uid = (
+            SELECT referrer_uid FROM referral_commissions
+            WHERE claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+          ) AND changes() = 1
+        `).bind(user.sub, requestId, user.sub, requestId),
+
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid, transaction_type, amount_koinu, balance_before_koinu,
+            balance_after_koinu, reference_type, reference_id, idempotency_key
+          )
+          SELECT u.uid, 'referral_commission', rc.amount_koinu,
+            u.balance_koinu - rc.amount_koinu, u.balance_koinu,
+            'referral_commission', CAST(rc.id AS TEXT),
+            'referral_claim:' || rc.claim_id
+          FROM referral_commissions rc
+          JOIN users u ON u.uid = rc.referrer_uid
+          WHERE rc.claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+            AND changes() = 1
+        `).bind(user.sub, requestId),
+
+        env.DB.prepare(`
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM referral_commissions rc
+            WHERE rc.claim_id = (SELECT id FROM claims WHERE uid = ? AND request_id = ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM ledger_transactions lt
+                WHERE lt.idempotency_key = 'referral_claim:' || rc.claim_id
+              )
+          ) THEN abs(-9223372036854775808) ELSE 1 END
+        `).bind(user.sub, requestId)
       ]);
     } catch (error) {
       const concurrentClaim = await getExistingClaim(
@@ -3021,13 +3131,16 @@ async function handleRequest(request, env, json) {
       liability,
       unledgeredBalances,
       claimsWithoutLedger,
+      referralCommissionsWithoutLedger,
+      referralLedgerWithoutCommission,
       balanceMismatches,
       arithmeticMismatches,
       ledgerCount,
       withdrawalRows,
       legacyApproved,
       faucetReserve,
-      wheelReserve
+      wheelReserve,
+      referralReserve
     ] = await Promise.all([
       env.DB.prepare(`
         SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS users_count
@@ -3049,6 +3162,29 @@ async function handleRequest(request, env, json) {
           WHERE lt.reference_type = 'claim'
             AND lt.reference_id = CAST(c.id AS TEXT)
         )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(rc.amount_koinu), 0) AS total_koinu
+        FROM referral_commissions rc
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ledger_transactions lt
+          WHERE lt.reference_type = 'referral_commission'
+            AND lt.reference_id = CAST(rc.id AS TEXT)
+            AND lt.uid = rc.referrer_uid
+            AND lt.amount_koinu = rc.amount_koinu
+            AND lt.idempotency_key = 'referral_claim:' || rc.claim_id
+        )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(lt.amount_koinu), 0) AS total_koinu
+        FROM ledger_transactions lt
+        WHERE lt.transaction_type = 'referral_commission'
+          AND NOT EXISTS (
+            SELECT 1 FROM referral_commissions rc
+            WHERE lt.reference_id = CAST(rc.id AS TEXT)
+              AND lt.uid = rc.referrer_uid
+              AND lt.amount_koinu = rc.amount_koinu
+          )
       `).first(),
       env.DB.prepare(`
         SELECT COUNT(*) AS count
@@ -3082,7 +3218,8 @@ async function handleRequest(request, env, json) {
           AND faucetpay_payout_id IS NULL
       `).first(),
       env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM faucet_reserve WHERE id = 1`).first(),
-      env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first()
+      env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first(),
+      env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM referral_reserve WHERE id = 1`).first()
     ]);
 
     const withdrawalsByStatus = Object.create(null);
@@ -3112,6 +3249,10 @@ async function handleRequest(request, env, json) {
         unledgered_balance_koinu: Number(unledgeredBalances?.total_koinu || 0),
         claims_without_ledger_count: Number(claimsWithoutLedger?.count || 0),
         claims_without_ledger_koinu: Number(claimsWithoutLedger?.total_koinu || 0),
+        referral_commissions_without_ledger_count: Number(referralCommissionsWithoutLedger?.count || 0),
+        referral_commissions_without_ledger_koinu: Number(referralCommissionsWithoutLedger?.total_koinu || 0),
+        referral_ledger_without_commission_count: Number(referralLedgerWithoutCommission?.count || 0),
+        referral_ledger_without_commission_koinu: Number(referralLedgerWithoutCommission?.total_koinu || 0),
         user_balance_mismatches: Number(balanceMismatches?.count || 0),
         arithmetic_mismatches: Number(arithmeticMismatches?.count || 0)
       },
@@ -3126,6 +3267,8 @@ async function handleRequest(request, env, json) {
         wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
         wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
         wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1,
+        referral_available_koinu: Number(referralReserve?.available_koinu || 0),
+        referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1,
         external_funding_verified: false
       }
     });
