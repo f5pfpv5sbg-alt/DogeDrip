@@ -151,7 +151,7 @@ test("referral dashboard endpoint is implemented and authenticated on both sides
   const end = worker.indexOf("// LUCKY WHEEL ROUTES", start);
   assert.ok(start >= 0 && end > start, "referral API route must exist");
   assert.ok(worker.slice(start, end).includes("authenticate(request)"));
-  assert.match(worker.slice(start, end), /invited_count: invitedCount/);
+  assert.match(worker.slice(start, end), /invited_count: Number\(invited\?\.total \|\| 0\)/);
 });
 
 test("Lucky Wheel frontend endpoints have matching authenticated Worker routes", () => {
