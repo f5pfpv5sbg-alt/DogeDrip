@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS wheel_prizes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   prize_key TEXT NOT NULL UNIQUE,
   amount_koinu INTEGER NOT NULL CHECK (amount_koinu >= 0),
-  probability_weight INTEGER NOT NULL CHECK (probability_weight > 0),
+  probability_weight INTEGER NOT NULL CHECK (probability_weight >= 0),
   display_order INTEGER NOT NULL DEFAULT 0
 );
 
