@@ -377,3 +377,9 @@ test("admin online users metric is based on verified five-minute heartbeats", ()
   assert.ok(app.includes('label="Currently Online"'));
   assert.match(app, /setInterval\(sendHeartbeat, 120000\)/);
 });
+
+
+test("currently online metric includes users active across UTC midnight", () => {
+  assert.match(worker, /SELECT COUNT\(DISTINCT uid\) AS total[\\s\\S]*?FROM user_daily_activity[\\s\\S]*?last_seen_at >= datetime\('now', '-5 minutes'\)/);
+  assert.doesNotMatch(worker, /FROM user_daily_activity\\s+WHERE utc_date = \\?[\\s\\S]{0,100}last_seen_at >= datetime\('now', '-5 minutes'\)/);
+});
