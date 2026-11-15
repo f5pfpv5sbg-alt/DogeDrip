@@ -491,12 +491,45 @@ export default function App() {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
   useEffect(() => {
+    const storageKey = 'dogedrip_referral_attribution';
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
     const params = new URLSearchParams(window.location.search);
     const incomingCode = (params.get('ref') || '').trim().toUpperCase();
+    let storedCode = '';
 
-    if (REF_CODE_REGEX.test(incomingCode)) {
-      setRegRefCode(incomingCode);
-      setAuthMode('register');
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(storageKey) || 'null');
+      if (
+        saved &&
+        REF_CODE_REGEX.test(saved.code) &&
+        Number.isFinite(saved.expiresAt) &&
+        saved.expiresAt > Date.now()
+      ) {
+        storedCode = saved.code;
+      } else if (saved) {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // Storage may be unavailable; direct referral links still work.
+    }
+
+    const code = REF_CODE_REGEX.test(incomingCode) ? incomingCode : storedCode;
+
+    if (code) {
+      setRegRefCode(code);
+      pendingReferralRef.current = code;
+
+      if (REF_CODE_REGEX.test(incomingCode)) {
+        setAuthMode('register');
+        try {
+          window.localStorage.setItem(
+            storageKey,
+            JSON.stringify({ code, expiresAt })
+          );
+        } catch {
+          // The code remains available for this page session.
+        }
+      }
     }
   }, []);
 
@@ -884,6 +917,11 @@ export default function App() {
         if (!isMounted || eventId !== authEventRef.current) return;
 
         pendingReferralRef.current = null;
+        try {
+          window.localStorage.removeItem('dogedrip_referral_attribution');
+        } catch {
+          // Storage may be unavailable.
+        }
         setRefCode(syncData.ref_code || '');
         if (syncData.username) setProfileUsernameInput(syncData.username);
 
