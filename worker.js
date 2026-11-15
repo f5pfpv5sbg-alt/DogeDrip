@@ -3190,6 +3190,7 @@ async function handleRequest(request, env, json) {
       arithmeticMismatches,
       ledgerCount,
       withdrawalRows,
+      withdrawalsWithoutLedger,
       legacyApproved,
       faucetReserve,
       wheelReserve,
@@ -3265,6 +3266,19 @@ async function handleRequest(request, env, json) {
         GROUP BY status
       `).all(),
       env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu
+        FROM withdrawals w
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM ledger_transactions lt
+          WHERE lt.uid = w.uid
+            AND lt.reference_type = 'withdrawal'
+            AND lt.reference_id = CAST(w.id AS TEXT)
+            AND lt.transaction_type = 'withdrawal'
+            AND lt.amount_koinu = -w.amount_koinu
+        )
+      `).first(),
+      env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
         FROM withdrawals
         WHERE status = 'approved'
@@ -3311,6 +3325,8 @@ async function handleRequest(request, env, json) {
       },
       withdrawals: {
         by_status: withdrawalsByStatus,
+        without_ledger_count: Number(withdrawalsWithoutLedger?.count || 0),
+        without_ledger_koinu: Number(withdrawalsWithoutLedger?.total_koinu || 0),
         legacy_approved_without_payout_id_count: Number(legacyApproved?.count || 0),
         legacy_approved_without_payout_id_koinu: Number(legacyApproved?.total_koinu || 0)
       },
