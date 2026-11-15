@@ -2018,9 +2018,9 @@ async function faucetPayRequest(env, endpoint, parameters) {
   return payload;
 }
 
-async function verifyTurnstileToken(token, request, env) {
+async function verifyTurnstileToken(token, request, env, expectedAction = 'signup') {
   if (typeof env.TURNSTILE_SECRET !== "string" || !env.TURNSTILE_SECRET) {
-    throw new HttpError(503, "Registration security is not configured.");
+    throw new HttpError(503, "Security verification is not configured.");
   }
 
   if (typeof token !== "string" || token.length < 1 || token.length > 2048) {
@@ -2057,7 +2057,7 @@ async function verifyTurnstileToken(token, request, env) {
   if (
     !response.ok ||
     result?.success !== true ||
-    result?.action !== "signup" ||
+    result?.action !== expectedAction ||
     !allowedHostnames.has(result?.hostname)
   ) {
     throw new HttpError(403, "Security verification failed. Please try again.");
@@ -2116,8 +2116,21 @@ async function handleRequest(request, env, json) {
     );
 
     const registrationBody = await readJson(request);
-    await verifyTurnstileToken(registrationBody.turnstileToken, request, env);
+    await verifyTurnstileToken(registrationBody.turnstileToken, request, env, "signup");
 
+    return json({ success: true });
+  }
+
+  // PUBLIC LOGIN RATE LIMIT + TURNSTILE
+  if (path === "/api/security/login" && method === "POST") {
+    const clientIp = request.headers.get("CF-Connecting-IP");
+    if (!clientIp) throw new HttpError(503, "Login security is temporarily unavailable.");
+    await enforceRateLimit(env, `ip:${clientIp}`, "login_security", {
+      limit: 20,
+      windowSeconds: 60
+    });
+    const loginBody = await readJson(request);
+    await verifyTurnstileToken(loginBody.turnstileToken, request, env, "login");
     return json({ success: true });
   }
 
@@ -2358,6 +2371,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstileToken(body.turnstileToken, request, env, "wheel_spin");
 
     return json(await handleWheelSpin(env, user.sub, body));
   }
@@ -2373,6 +2387,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstileToken(body.turnstileToken, request, env, "wheel_buy");
 
     return json(await handleWheelBuy(env, user.sub, body));
   }
@@ -2405,6 +2420,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstileToken(body.turnstileToken, request, env, "claim");
     const requestId = getRequestId(body);
     const plan = await getUserPlan(env, user.sub);
 
@@ -2739,6 +2755,7 @@ async function handleRequest(request, env, json) {
     );
 
     const body = await readJson(request);
+    await verifyTurnstileToken(body.turnstileToken, request, env, "withdraw");
 
     const amount = body.amount_koinu;
 
