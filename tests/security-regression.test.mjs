@@ -215,3 +215,16 @@ test("Scheduled cleanup removes expired rate-limit buckets and old daily activit
   assert.match(worker, /DELETE FROM user_daily_activity[\s\S]{0,100}utc_date < date\('now', '-90 days'\)/);
   assert.match(worker, /Promise\.allSettled\(/);
 });
+
+
+test("Faucet claim IDs survive uncertain failures and are cleared only after confirmation or a 4xx rejection", () => {
+  assert.match(app, /sessionStorage\.getItem\(claimRequestStorageKey\)/);
+  assert.match(app, /sessionStorage\.setItem\(claimRequestStorageKey, claimRequestIdRef\.current\)/);
+  assert.match(app, /claimRequestIdRef\.current = null;[\\s\\S]{0,180}sessionStorage\.removeItem\(claimRequestStorageKey\)/);
+  assert.match(app, /error\.status === 'number' && error\.status < 500/);
+  assert.doesNotMatch(app, /error\.status === 'number'\)\\s*\\{\\s*claimRequestIdRef\.current = null/);
+});
+
+test("Faucet claim button does not describe the live D1 reward ledger as a demo", () => {
+  assert.doesNotMatch(app, /Claim \\S+ DOGE \\(Demo\\)/);
+});
