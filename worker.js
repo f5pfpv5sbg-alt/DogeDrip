@@ -295,6 +295,7 @@ async function requireAdmin(user, env) {
 const RATE_LIMIT_POLICIES = Object.freeze({
   registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
+  referralsRead: { limit: 60, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
   wheelRead: { limit: 120, windowSeconds: 60 },
@@ -593,8 +594,11 @@ async function syncUser(env, user, referredByCode, requestedUsername) {
     const referrer = await env.DB.prepare(`
       SELECT ref_code
       FROM users
-      WHERE ref_code = ? AND uid != ?
-    `).bind(referredByCode, user.sub).first();
+      WHERE ref_code = ?
+        AND uid != ?
+        AND email_verified = 1
+        AND lower(email) != lower(?)
+    `).bind(referredByCode, user.sub, user.email).first();
 
     referrerCode = referrer ? referrer.ref_code : null;
   }
@@ -2124,6 +2128,7 @@ async function handleRequest(request, env, json) {
       SELECT 1 AS ok
       FROM users
       WHERE ref_code = ?
+        AND email_verified = 1
     `).bind(code).first();
 
     return json({
