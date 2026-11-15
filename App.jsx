@@ -367,6 +367,78 @@ const SiteFooter = () => (
   </footer>
 );
 
+function TurnstileWidget({ action, onToken, resetKey = 0 }) {
+  const containerRef = useRef(null);
+  const widgetIdRef = useRef(null);
+  const onTokenRef = useRef(onToken);
+
+  useEffect(() => {
+    onTokenRef.current = onToken;
+  }, [onToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let script = document.querySelector('script[data-dogedrip-turnstile]');
+
+    const renderWidget = () => {
+      if (cancelled || !window.turnstile || !containerRef.current || widgetIdRef.current !== null) return;
+      try {
+        widgetIdRef.current = window.turnstile.render(containerRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          action,
+          theme: 'dark',
+          callback: token => onTokenRef.current(token),
+          'expired-callback': () => onTokenRef.current(''),
+          'error-callback': () => {
+            onTokenRef.current('');
+            return true;
+          }
+        });
+      } catch {
+        onTokenRef.current('');
+      }
+    };
+
+    if (window.turnstile) {
+      renderWidget();
+    } else {
+      if (!script) {
+        script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.async = true;
+        script.defer = true;
+        script.dataset.dogedripTurnstile = 'true';
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', renderWidget);
+    }
+
+    return () => {
+      cancelled = true;
+      if (script) script.removeEventListener('load', renderWidget);
+      if (widgetIdRef.current !== null && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current);
+        widgetIdRef.current = null;
+      }
+    };
+  }, [action]);
+
+  useEffect(() => {
+    onTokenRef.current('');
+    if (widgetIdRef.current !== null && window.turnstile) {
+      window.turnstile.reset(widgetIdRef.current);
+    }
+  }, [resetKey]);
+
+  return (
+    <div className="space-y-2">
+      <label className={LABEL_CLS}>Security Verification</label>
+      <div ref={containerRef} className="min-h-[65px] flex items-center justify-center" />
+      <p className="text-[10px] text-slate-500">Cloudflare security check</p>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('faucet');
 
@@ -378,89 +450,25 @@ export default function App() {
   const [profileUsernameInput, setProfileUsernameInput] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [authMode, setAuthMode] = useState('login');
-  const [turnstileToken, setTurnstileToken] = useState('');
-  const [turnstileError, setTurnstileError] = useState('');
-  const turnstileContainerRef = useRef(null);
-  const turnstileWidgetIdRef = useRef(null);
+  const [securityTokens, setSecurityTokens] = useState({
+    signup: '', login: '', claim: '', withdraw: '', wheel_spin: '', wheel_buy: ''
+  });
+  const [securityResets, setSecurityResets] = useState({
+    signup: 0, login: 0, claim: 0, withdraw: 0, wheel_spin: 0, wheel_buy: 0
+  });
+  const setSecurityToken = useCallback((action, token) => {
+    setSecurityTokens(current => ({ ...current, [action]: token }));
+  }, []);
+  const resetSecurityToken = useCallback((action) => {
+    setSecurityTokens(current => ({ ...current, [action]: '' }));
+    setSecurityResets(current => ({ ...current, [action]: current[action] + 1 }));
+  }, []);
   const [apiReady, setApiReady] = useState(false);
   const [apiError, setApiError] = useState('');
   const [verifyMsg, setVerifyMsg] = useState('');
   const [verificationResendSeconds, setVerificationResendSeconds] = useState(0);
   const [verificationSending, setVerificationSending] = useState(false);
   const [verificationChecking, setVerificationChecking] = useState(false);
-
-  useEffect(() => {
-    if (authMode !== 'register') {
-      setTurnstileToken('');
-      setTurnstileError('');
-      return undefined;
-    }
-
-    let cancelled = false;
-    let script = document.querySelector('script[data-dogedrip-turnstile]');
-
-    const renderTurnstile = () => {
-      if (cancelled || !window.turnstile || !turnstileContainerRef.current) return;
-      if (turnstileWidgetIdRef.current !== null) return;
-
-      try {
-        turnstileWidgetIdRef.current = window.turnstile.render(
-          turnstileContainerRef.current,
-          {
-            sitekey: TURNSTILE_SITE_KEY,
-            action: 'signup',
-            theme: 'dark',
-            callback: token => {
-              setTurnstileToken(token);
-              setTurnstileError('');
-            },
-            'expired-callback': () => setTurnstileToken(''),
-            'error-callback': () => {
-              setTurnstileToken('');
-              setTurnstileError('Security check failed. Please reload the check.');
-              return true;
-            }
-          }
-        );
-      } catch {
-        setTurnstileError('Could not load the security check. Refresh the page and try again.');
-      }
-    };
-
-    const handleScriptError = () => {
-      if (!cancelled) setTurnstileError('Could not load the security check. Check your connection.');
-    };
-
-    setTurnstileToken('');
-    setTurnstileError('');
-
-    if (window.turnstile) {
-      renderTurnstile();
-    } else {
-      if (!script) {
-        script = document.createElement('script');
-        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-        script.async = true;
-        script.defer = true;
-        script.dataset.dogedripTurnstile = 'true';
-        document.head.appendChild(script);
-      }
-      script.addEventListener('load', renderTurnstile);
-      script.addEventListener('error', handleScriptError);
-    }
-
-    return () => {
-      cancelled = true;
-      if (script) {
-        script.removeEventListener('load', renderTurnstile);
-        script.removeEventListener('error', handleScriptError);
-      }
-      if (turnstileWidgetIdRef.current !== null && window.turnstile) {
-        window.turnstile.remove(turnstileWidgetIdRef.current);
-        turnstileWidgetIdRef.current = null;
-      }
-    };
-  }, [authMode]);
 
   useEffect(() => {
     if (verificationResendSeconds <= 0) return undefined;
@@ -1414,6 +1422,21 @@ export default function App() {
     setIsLoadingAuth(true);
 
     try {
+      if (!securityTokens.login) {
+        throw new Error('Please complete the Cloudflare security check.');
+      }
+
+      const securityResponse = await fetch(`${API_URL}/api/security/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnstileToken: securityTokens.login })
+      });
+      const securityData = await securityResponse.json().catch(() => ({}));
+      resetSecurityToken('login');
+      if (!securityResponse.ok || securityData.success !== true) {
+        throw new Error(securityData.error || 'Login security verification failed.');
+      }
+
       await signInWithEmailAndPassword(
         auth,
         emailInput.trim().toLowerCase(),
@@ -1425,6 +1448,7 @@ export default function App() {
     } catch (error) {
       setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
+      resetSecurityToken('login');
       setIsLoadingAuth(false);
     }
   };
@@ -1448,7 +1472,7 @@ export default function App() {
       return;
     }
 
-    if (!turnstileToken) {
+    if (!securityTokens.signup) {
       setAuthError('Please complete the Cloudflare security check.');
       return;
     }
@@ -1493,7 +1517,7 @@ export default function App() {
       const registrationResponse = await fetch(`${API_URL}/api/security/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ turnstileToken })
+        body: JSON.stringify({ turnstileToken: securityTokens.signup })
       });
       const registrationData = await registrationResponse.json().catch(() => ({}));
 
@@ -1504,6 +1528,7 @@ export default function App() {
         );
       }
 
+      resetSecurityToken('signup');
       const credential = await createUserWithEmailAndPassword(
         auth,
         trimmedEmail,
@@ -1546,10 +1571,7 @@ export default function App() {
     } catch (error) {
       pendingReferralRef.current = null;
       pendingUsernameRef.current = '';
-      setTurnstileToken('');
-      if (turnstileWidgetIdRef.current !== null && window.turnstile) {
-        window.turnstile.reset(turnstileWidgetIdRef.current);
-      }
+      resetSecurityToken('signup');
       setAuthError(error.message.replace('Firebase: ', ''));
     } finally {
       setIsLoadingAuth(false);
@@ -1683,6 +1705,10 @@ export default function App() {
 
   const handleClaim = async () => {
     if (claimInFlightRef.current || isClaiming) return;
+    if (!securityTokens.claim) {
+      showClaimMessage('Complete the Cloudflare security check before claiming.', true);
+      return;
+    }
 
     if (!firebaseUser || !apiReady) {
       showClaimMessage('Database is not ready. Please try again.', true);
@@ -1740,7 +1766,7 @@ export default function App() {
     try {
       const data = await apiRequest('/api/claim', {
         method: 'POST',
-        body: JSON.stringify({ request_id: requestId })
+        body: JSON.stringify({ request_id: requestId, turnstileToken: securityTokens.claim })
       });
 
       claimRequestIdRef.current = null;
@@ -1828,6 +1854,7 @@ export default function App() {
         showClaimMessage(error.message || 'Could not complete claim.', true);
       }
     } finally {
+      resetSecurityToken('claim');
       claimInFlightRef.current = false;
       setIsClaiming(false);
     }
@@ -1857,6 +1884,11 @@ export default function App() {
 
   const handleWheelSpin = async () => {
     if (spinInFlightRef.current || isSpinning) return;
+    if (!securityTokens.wheel_spin) {
+      setWheelMsgIsError(true);
+      setWheelMsg('Complete the Cloudflare security check before spinning.');
+      return;
+    }
 
     if (!firebaseUser || !apiReady) {
       setWheelMsgIsError(true);
@@ -1885,10 +1917,12 @@ export default function App() {
     try {
       data = await apiRequest('/api/wheel/spin', {
         method: 'POST',
-        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current })
+        body: JSON.stringify({ request_id: wheelSpinRequestIdRef.current, turnstileToken: securityTokens.wheel_spin })
       });
       wheelSpinRequestIdRef.current = null;
+      resetSecurityToken('wheel_spin');
     } catch (error) {
+      resetSecurityToken('wheel_spin');
       if (typeof error.status === 'number') {
         wheelSpinRequestIdRef.current = null;
       }
@@ -1968,6 +2002,11 @@ export default function App() {
 
   const handleBuyPack = async (pack) => {
     if (!pack || spinInFlightRef.current || isSpinning || buyingPackId !== null) return;
+    if (!securityTokens.wheel_buy) {
+      setWheelMsgIsError(true);
+      setWheelMsg('Complete the Cloudflare security check before buying spins.');
+      return;
+    }
 
     if (!firebaseUser || !apiReady) {
       setWheelMsgIsError(true);
@@ -2000,11 +2039,13 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           pack_id: pack.id,
-          request_id: wheelBuyRequestRef.current.requestId
+          request_id: wheelBuyRequestRef.current.requestId,
+          turnstileToken: securityTokens.wheel_buy
         })
       });
 
       wheelBuyRequestRef.current = null;
+      resetSecurityToken('wheel_buy');
 
       applyAccountData(data);
       applyWheelSpins(data.spins);
@@ -2016,6 +2057,7 @@ export default function App() {
 
       await refreshWheelData();
     } catch (error) {
+      resetSecurityToken('wheel_buy');
       if (typeof error.status === 'number') {
         wheelBuyRequestRef.current = null;
       }
@@ -2132,6 +2174,11 @@ export default function App() {
       return;
     }
 
+    if (!securityTokens.withdraw) {
+      setWithdrawMsg('Complete the Cloudflare security check before requesting a withdrawal.');
+      return;
+    }
+
     setIsWithdrawing(true);
 
     try {
@@ -2139,7 +2186,8 @@ export default function App() {
         method: 'POST',
         body: JSON.stringify({
           amount_koinu: amountKoinu,
-          wallet_address: withdrawAddress.trim()
+          wallet_address: withdrawAddress.trim(),
+          turnstileToken: securityTokens.withdraw
         })
       });
 
@@ -2160,6 +2208,7 @@ export default function App() {
     } catch (error) {
       setWithdrawMsg(error.message || 'Withdrawal request failed.');
     } finally {
+      resetSecurityToken('withdraw');
       setIsWithdrawing(false);
     }
   };
@@ -2559,9 +2608,14 @@ export default function App() {
                 />
               </div>
 
+              <TurnstileWidget
+                action="login"
+                onToken={token => setSecurityToken('login', token)}
+                resetKey={securityResets.login}
+              />
               <button
                 type="submit"
-                disabled={isLoadingAuth}
+                disabled={isLoadingAuth || !securityTokens.login}
                 className={PRIMARY_BTN}
               >
                 <span>
@@ -2628,20 +2682,15 @@ export default function App() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className={LABEL_CLS}>Security Verification</label>
-                <div
-                  ref={turnstileContainerRef}
-                  className="min-h-[65px] flex items-center justify-center"
-                />
-                {turnstileError && (
-                  <p role="alert" className="text-xs text-red-400">{turnstileError}</p>
-                )}
-              </div>
+              <TurnstileWidget
+                action="signup"
+                onToken={token => setSecurityToken('signup', token)}
+                resetKey={securityResets.signup}
+              />
 
               <button
                 type="submit"
-                disabled={isLoadingAuth || !turnstileToken}
+                disabled={isLoadingAuth || !securityTokens.signup}
                 className={PRIMARY_BTN}
               >
                 <UserPlus className="w-4 h-4" />
@@ -3297,6 +3346,11 @@ export default function App() {
                   </div>
                 )}
 
+                <TurnstileWidget
+                  action="claim"
+                  onToken={token => setSecurityToken('claim', token)}
+                  resetKey={securityResets.claim}
+                />
                 <button
                   type="button"
                   onClick={handleClaim}
@@ -3497,6 +3551,11 @@ export default function App() {
                   </div>
                 </div>
 
+                <TurnstileWidget
+                  action="wheel_spin"
+                  onToken={token => setSecurityToken('wheel_spin', token)}
+                  resetKey={securityResets.wheel_spin}
+                />
                 <button
                   type="button"
                   onClick={handleWheelSpin}
@@ -3567,6 +3626,12 @@ export default function App() {
                     Paid from DEMO balance
                   </span>
                 </div>
+
+                <TurnstileWidget
+                  action="wheel_buy"
+                  onToken={token => setSecurityToken('wheel_buy', token)}
+                  resetKey={securityResets.wheel_buy}
+                />
 
                 {wheelPacks.length === 0 ? (
                   <p className="text-sm text-slate-500 text-center py-4">
@@ -4146,6 +4211,11 @@ export default function App() {
                     />
                   </div>
 
+                  <TurnstileWidget
+                    action="withdraw"
+                    onToken={token => setSecurityToken('withdraw', token)}
+                    resetKey={securityResets.withdraw}
+                  />
                   <button
                     type="submit"
                     disabled={isWithdrawing || !apiReady}
