@@ -144,7 +144,7 @@ test("Admin dashboard displays financial integrity warnings without changing bal
 test("referral links prefill registration and expose a shareable link", () => {
   assert.match(app, /new URLSearchParams\(window\.location\.search\)/);
   assert.match(app, /params\.get\('ref'\)/);
-  assert.match(app, /setRegRefCode\(incomingCode\)/);
+  assert.match(app, /setRegRefCode\(code\)/);
   assert.match(app, /setAuthMode\('register'\)/);
   assert.ok(app.includes("navigator.clipboard.writeText(referralUrl)"));
   assert.ok(app.includes("Your Referral Link"));
