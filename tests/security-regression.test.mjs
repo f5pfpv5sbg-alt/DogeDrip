@@ -241,3 +241,31 @@ test("Daily streak reward is manual and never triggered by a regular Faucet clai
   assert.match(app, /Claim your daily streak reward manually once each UTC day/);
   assert.match(app, /Regular Faucet Claims do not collect this bonus/);
 });
+
+test("Faucet dashboard avoids duplicate reward, wallet balance, and daily claim counters", () => {
+  const faucetStart = app.indexOf("{activeTab === 'faucet' && (");
+  const wheelStart = app.indexOf("{activeTab === 'wheel' && (", faucetStart);
+  assert.ok(faucetStart >= 0 && wheelStart > faucetStart);
+  const faucetPanel = app.slice(faucetStart, wheelStart);
+
+  for (const label of [
+    'label="Reward / Claim"',
+    'label="Balance"',
+    'label="Claims Used Today"',
+    'Simulated Testnet Reward',
+    'REWARD CLAIMED!'
+  ]) {
+    assert.ok(!faucetPanel.includes(label), `Faucet panel must not show ${label}`);
+  }
+
+  assert.match(faucetPanel, /onClick=\{handleClaim\}/);
+  assert.match(faucetPanel, /label="Cooldown"/);
+  assert.match(faucetPanel, /label="Daily Reset \(UTC\)"/);
+
+  const plansStart = app.indexOf("{activeTab === 'plans' && (");
+  const walletStart = app.indexOf("{activeTab === 'wallet' && (", plansStart);
+  assert.ok(plansStart >= 0 && walletStart > plansStart);
+  const plansPanel = app.slice(plansStart, walletStart);
+  assert.ok(!plansPanel.includes("Claims today"));
+  assert.ok(!plansPanel.includes("claimsTodayText"));
+});
