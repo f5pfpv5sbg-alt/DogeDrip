@@ -597,7 +597,6 @@ export default function App() {
   const cooldownSeconds = isNum(planInfo?.cooldownSeconds)
     ? planInfo.cooldownSeconds
     : null;
-  const dailyUsed = isNum(planInfo?.dailyUsed) ? planInfo.dailyUsed : null;
   const dailyLimit = isNum(planInfo?.dailyLimit) ? planInfo.dailyLimit : null;
   const dailyRemaining = isNum(planInfo?.dailyRemaining)
     ? planInfo.dailyRemaining
@@ -3134,23 +3133,8 @@ export default function App() {
                   valueCls={activeCatalogEntry ? activeCatalogEntry.accentText : 'text-white'}
                 />
                 <StatTile
-                  label="Reward / Claim"
-                  value={claimAmount !== null ? `${claimAmount.toFixed(6)}` : '...'}
-                  sub="DOGE (demo)"
-                />
-                <StatTile
                   label="Cooldown"
                   value={formatCooldown(cooldownSeconds)}
-                />
-                <StatTile
-                  label="Balance"
-                  value={`${demoBalance.toFixed(6)}`}
-                  sub="DOGE (demo)"
-                />
-                <StatTile
-                  label="Claims Used Today"
-                  value={dailyUsed !== null ? dailyUsed : (accountLoaded ? 'N/A' : '...')}
-                  sub={accountLoaded && dailyUsed === null ? 'Not reported by server' : undefined}
                 />
                 <StatTile
                   label="Daily Limit"
@@ -3233,17 +3217,6 @@ export default function App() {
                   <Award className="w-10 h-10" />
                 </div>
 
-                <div>
-                  <span className="text-xs uppercase tracking-widest text-slate-500 font-mono font-bold">
-                    Simulated Testnet Reward
-                  </span>
-                  <div className="text-3xl font-black font-mono text-white mt-1">
-                    {claimAmount !== null ? `${claimAmount.toFixed(6)} DOGE` : '...'}
-                  </div>
-                  <span className="inline-block mt-2 px-2 py-0.5 bg-[#F4A6C1]/10 text-[#F4A6C1] text-[10px] font-mono rounded border border-[#F4A6C1]/20 uppercase font-bold">
-                    DEMO BALANCES ONLY
-                  </span>
-                </div>
 
                 {dailyLimitReached && (
                   <div className="w-full max-w-sm bg-red-500/10 border border-red-500/20 p-4 rounded-xl space-y-1">
@@ -3252,9 +3225,6 @@ export default function App() {
                       <span>Daily claim limit reached</span>
                     </div>
                     <p className="text-xs text-slate-400">
-                      {dailyUsed !== null && dailyLimit !== null
-                        ? `You used ${dailyUsed} of ${dailyLimit} claims today. `
-                        : ''}
                       Claiming is available again in {formatDuration(resetSeconds)} (00:00 UTC).
                     </p>
                   </div>
@@ -3753,14 +3723,6 @@ export default function App() {
                       ? dailyLimit
                       : p.dailyLimit;
 
-                  let claimsTodayText = '—';
-                  if (isActive) {
-                    claimsTodayText =
-                      dailyUsed !== null && dailyRemaining !== null
-                        ? `${dailyUsed} used · ${dailyRemaining} left`
-                        : 'Not reported';
-                  }
-
                   let statusText = 'Not active';
                   if (isActive) {
                     statusText = 'Active';
@@ -3838,12 +3800,6 @@ export default function App() {
                           <span className="text-slate-400">Daily claim limit</span>
                           <span className="font-mono font-black text-white">
                             {limit}
-                          </span>
-                        </li>
-                        <li className="flex items-center justify-between border-b border-slate-800/60 pb-2">
-                          <span className="text-slate-400">Claims today</span>
-                          <span className="font-mono font-black text-white">
-                            {claimsTodayText}
                           </span>
                         </li>
                         <li className="flex items-center justify-between pb-1">
