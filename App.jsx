@@ -697,6 +697,26 @@ export default function App() {
     return data;
   }, [firebaseUser]);
 
+  useEffect(() => {
+    if (!firebaseUser || firebaseUser.emailVerified !== true || !apiReady) {
+      return undefined;
+    }
+
+    const sendHeartbeat = () => {
+      if (document.visibilityState !== 'visible') return;
+      apiRequest('/api/activity/heartbeat', { method: 'POST' }).catch(() => {});
+    };
+
+    sendHeartbeat();
+    const intervalId = window.setInterval(sendHeartbeat, 120000);
+    document.addEventListener('visibilitychange', sendHeartbeat);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', sendHeartbeat);
+    };
+  }, [firebaseUser, apiReady, apiRequest]);
+
   const applyAccountData = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
 
@@ -4645,6 +4665,16 @@ export default function App() {
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
                     sub="Verified users with an app session today"
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="Currently Online"
+                    value={
+                      adminStats
+                        ? Number(adminStats.currently_online || 0)
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub="Verified users active in the last 5 minutes"
                     valueCls={adminAccentText}
                   />
                   <StatTile
