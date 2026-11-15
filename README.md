@@ -31,6 +31,36 @@ The D1 migration in `migrations/0002_user_profile.sql` adds the username column 
 
 The authenticated referral dashboard reads `GET /api/referrals`. The public referral-code validator uses `GET /api/referral/validate`.
 
+### Referral commissions
+
+Verified referrals earn the referrer 15% of each successful Faucet claim. Referral attribution is immutable after the account's first D1 synchronization; self-referrals and unverified referrers are rejected. Commission credits are written in the same atomic D1 batch as the referred user's claim, referrer balance update, reserve deduction, and ledger transaction. Each claim can create at most one commission.
+
+Referral rewards use a dedicated `referral_reserve`, separate from the Faucet reserve and user withdrawal liabilities. Migration `0006_referral_commissions.sql` creates this reserve with zero DOGE and commissions disabled. Apply migrations before deploying the Worker:
+
+```bash
+npx wrangler d1 migrations apply dogedrip-db --remote
+```
+
+Do not enable commissions until DOGE has actually been deposited into the platform's referral payout funding account and the amount has been reconciled. Example only: after confirming a deposit of 1 DOGE, the owner can enable a 1 DOGE referral reserve in the D1 console:
+
+```sql
+UPDATE referral_reserve
+SET available_koinu = available_koinu + 100000000,
+    payouts_enabled = 1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = 1;
+```
+
+The value is in koinu (100,000,000 = 1 DOGE). To pause new commissions without deleting history:
+
+```sql
+UPDATE referral_reserve
+SET payouts_enabled = 0, updated_at = CURRENT_TIMESTAMP
+WHERE id = 1;
+```
+
+Only fund this reserve with DOGE held separately for referral rewards. Never transfer user withdrawal liabilities or Faucet reserve funds into it.
+
 The Lucky Wheel uses these authenticated Worker routes:
 
 - `GET /api/wheel/state` — prizes, available spins, account balance, and reserve status.
