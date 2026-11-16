@@ -507,7 +507,7 @@ test("FaucetPay subscription callback verifies provider token and exact order de
 
 test("verified paid subscription orders can safely recover a missing activation after a partial callback retry", () => {
   assert.match(worker, /async function ensureSubscriptionForPaidOrder/);
-  assert.match(worker, /if \\(order\\.status === "paid"\\)/);
+  assert.match(worker, /if \(order\.status === "paid"\)/);
   assert.match(worker, /already backed by a previously verified provider callback/);
   assert.match(worker, /await ensureSubscriptionForPaidOrder\(env, order, callbackTransactionId\)/);
   assert.match(worker, /latestOrder\?\.status === "paid"[\s\S]{0,180}ensureSubscriptionForPaidOrder/);
