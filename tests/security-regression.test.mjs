@@ -417,7 +417,6 @@ test("Turnstile is required and action-bound for login, claim, wheel, and withdr
   assert.match(worker, /verifyTurnstileToken\(loginBody\.turnstileToken, request, env, "login"\)/);
   for (const action of ["claim", "wheel_spin", "wheel_buy", "withdraw"]) {
     assert.match(worker, new RegExp(`verifyTurnstileToken\\(body\\.turnstileToken, request, env, "${action}"\\)`));
-  assert.match(route, /rejected_without_refund_ledger_count: Number\\(rejectedWithoutRefundLedger\\?\\.count \\|\\| 0\\)/);(body\\.turnstileToken, request, env, "${action}"\\)`));
   }
   assert.match(worker, /result\?\.action !== expectedAction/);
   for (const action of ["login", "claim", "wheel_spin", "wheel_buy", "withdraw"]) {
