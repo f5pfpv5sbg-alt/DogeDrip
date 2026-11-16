@@ -20,7 +20,9 @@ import {
   Sparkles,
   Ticket,
   CalendarCheck,
-  UserCircle
+  UserCircle,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 // FIREBASE
@@ -442,6 +444,23 @@ function TurnstileWidget({ action, onToken, resetKey = 0 }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('faucet');
+  const [theme, setTheme] = useState(() => {
+    try {
+      return window.localStorage.getItem('dogedrip-theme') === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem('dogedrip-theme', theme);
+    } catch {
+      // Theme still applies for the current session when storage is unavailable.
+    }
+  }, [theme]);
+
 
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -3111,6 +3130,17 @@ export default function App() {
                 DEMO
               </span>
             </div>
+
+            <button
+              type="button"
+              onClick={() => setTheme(current => current === 'dark' ? 'light' : 'dark')}
+              className="p-2 bg-black hover:bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              aria-pressed={theme === 'light'}
+            >
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
 
             <button
               type="button"
