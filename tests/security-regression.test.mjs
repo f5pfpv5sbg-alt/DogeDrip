@@ -505,6 +505,15 @@ test("FaucetPay subscription callback verifies provider token and exact order de
   assert.match(worker, /already_processed: true/);
 });
 
+test("verified paid subscription orders can safely recover a missing activation after a partial callback retry", () => {
+  assert.match(worker, /async function ensureSubscriptionForPaidOrder/);
+  assert.match(worker, /if \(order\.status === 'paid'\)/);
+  assert.match(worker, /already backed by a previously verified provider callback/);
+  assert.match(worker, /await ensureSubscriptionForPaidOrder\(env, order, callbackTransactionId\)/);
+  assert.match(worker, /latestOrder\?\.status === "paid"[\s\S]{0,180}ensureSubscriptionForPaidOrder/);
+  assert.match(worker, /NOT EXISTS \(SELECT 1 FROM subscriptions WHERE payment_order_id = \?\)/);
+});
+
 test("FaucetPay checkout cannot be used until merchant credentials and USDT prices are configured", () => {
   const start = worker.indexOf('if (path === "/api/subscriptions/checkout" && method === "POST")');
   const end = worker.indexOf("// HEALTH CHECK", start);
