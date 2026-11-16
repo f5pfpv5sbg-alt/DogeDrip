@@ -146,6 +146,10 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /requireAdmin\(user, env\)/);
   assert.match(route, /users_with_balance_without_ledger/);
   assert.match(route, /claims_without_ledger_count/);
+  assert.match(route, /WHERE c\.request_id IS NOT NULL/);
+  assert.match(route, /legacyClaimsWithoutLedger/);
+  assert.match(route, /legacy_claims_without_ledger_count/);
+  assert.match(route, /WHERE c\.request_id IS NULL/);
   assert.match(route, /referral_commissions_without_ledger_count/);
   assert.match(route, /referral_ledger_without_commission_count/);
   assert.match(route, /lt\.uid = c\.uid/);
