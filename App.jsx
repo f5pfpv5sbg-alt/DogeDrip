@@ -626,6 +626,7 @@ export default function App() {
   const [adPaymentRefs, setAdPaymentRefs] = useState({});
   const [adQuoteInputs, setAdQuoteInputs] = useState({});
   const [adActionLoading, setAdActionLoading] = useState(null);
+  const [jumpToAdvertisingPlans, setJumpToAdvertisingPlans] = useState(false);
   const [adForm, setAdForm] = useState({
     business_name: '',
     contact_email: '',
@@ -635,6 +636,19 @@ export default function App() {
     duration_days: '7',
     notes: ''
   });
+
+  const openAdvertisingPlans = () => {
+    setActiveTab('plans');
+    setJumpToAdvertisingPlans(true);
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'plans' || !jumpToAdvertisingPlans) return;
+    const section = document.getElementById('advertising-plans');
+    if (!section) return;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setJumpToAdvertisingPlans(false);
+  }, [activeTab, jumpToAdvertisingPlans]);
 
   const adminEmail = firebaseUser?.email?.trim().toLowerCase() || '';
 
@@ -3250,7 +3264,7 @@ export default function App() {
                 <img src={adPlacements.top.banner_image_url} alt={adPlacements.top.business_name} loading="lazy" className="w-full h-[100px] md:h-[120px] object-cover" />
               </a>
             ) : (
-              <button type="button" onClick={() => setActiveTab('advertise')} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
+              <button type="button" onClick={openAdvertisingPlans} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
                 <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">Advertisement</span>
                 <p className="text-sm md:text-base font-bold text-white">Advertise Your Brand on DogeDrip</p>
                 <p className="text-xs text-slate-500 mt-1">Reach crypto users and promote your project here.</p>
@@ -4016,7 +4030,7 @@ export default function App() {
                 })}
               </div>
 
-              <div className="border-t border-slate-800 pt-7 space-y-5">
+              <div id="advertising-plans" className="border-t border-slate-800 pt-7 space-y-5 scroll-mt-6">
                 <div>
                   <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
                     Advertising Plans
@@ -5114,7 +5128,7 @@ export default function App() {
                 <img src={adPlacements.bottom.banner_image_url} alt={adPlacements.bottom.business_name} loading="lazy" className="w-full h-[100px] md:h-[120px] object-cover" />
               </a>
             ) : (
-              <button type="button" onClick={() => setActiveTab('advertise')} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
+              <button type="button" onClick={openAdvertisingPlans} className="relative w-full min-h-[100px] md:min-h-[120px] bg-black border border-slate-800 rounded-2xl flex flex-col items-center justify-center text-center p-4 overflow-hidden hover:border-[#F4A6C1]/50 transition-colors">
                 <span className="absolute top-2 right-3 text-[9px] uppercase tracking-widest text-slate-600 font-mono">Advertisement</span>
                 <p className="text-sm font-bold text-white">Advertise at the bottom of DogeDrip</p>
                 <p className="text-xs text-slate-500 mt-1">Reserve this banner for your project.</p>
