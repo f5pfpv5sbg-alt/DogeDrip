@@ -420,10 +420,22 @@ test("admin daily payouts and profit include paid referral commissions", () => {
   const end = worker.indexOf("function validatePublicHttpUrl", start);
   const stats = worker.slice(start, end);
   assert.match(stats, /FROM referral_commissions[\s\S]*?WHERE date\(created_at\) = \?/);
-  assert.match(stats, /payoutsKoinu = claimsKoinu \+ wheelPrizesKoinu \+ streakKoinu \+ referralCommissionsKoinu/);
+  assert.match(stats, /rewardsCreditedKoinu =/);
+  assert.match(stats, /profit_koinu: null/);
+  assert.match(stats, /external_doge_revenue_verified: false/);
+  assert.match(stats, /profit_status: "unavailable_unverified_external_revenue_and_expenses"/);
+  assert.match(stats, /wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu/);
+  assert.match(stats, /ad_payment_verification_status: "manual_review_not_provider_verified"/);
   assert.match(stats, /referral_commissions_koinu: referralCommissionsKoinu/);
   assert.match(stats, /referral_available_koinu/);
   assert.ok(app.includes("Referrals"));
+  assert.ok(app.includes("Wheel Purchases (Internal)"));
+  assert.ok(app.includes("Rewards Credited Today"));
+  assert.ok(app.includes("Unavailable until external DOGE revenue and expenses are verified"));
+  assert.ok(app.includes("Ad Campaign Value Today (Unverified)"));
+  assert.ok(!app.includes("Won Today (Income)"));
+  assert.ok(!app.includes("Lost Today (Paid Out)"));
+  assert.ok(!app.includes("Verified Ad Revenue Today"));
 });
 
 
