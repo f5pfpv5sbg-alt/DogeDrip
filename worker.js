@@ -3186,6 +3186,9 @@ async function handleRequest(request, env, json) {
       claimsWithoutLedger,
       referralCommissionsWithoutLedger,
       referralLedgerWithoutCommission,
+      wheelPrizesWithoutLedger,
+      wheelPurchasesWithoutLedger,
+      wheelLedgerWithoutSource,
       balanceMismatches,
       arithmeticMismatches,
       ledgerCount,
@@ -3243,6 +3246,54 @@ async function handleRequest(request, env, json) {
             WHERE lt.reference_id = CAST(rc.id AS TEXT)
               AND lt.uid = rc.referrer_uid
               AND lt.amount_koinu = rc.amount_koinu
+          )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(ws.prize_koinu), 0) AS total_koinu
+        FROM wheel_spins ws
+        WHERE ws.prize_koinu > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM ledger_transactions lt
+            WHERE lt.uid = ws.uid
+              AND lt.transaction_type = 'wheel_prize'
+              AND lt.reference_type = 'wheel_spin'
+              AND lt.reference_id = CAST(ws.id AS TEXT)
+              AND lt.amount_koinu = ws.prize_koinu
+              AND lt.idempotency_key = 'wheel_spin:' || ws.uid || ':' || ws.request_id
+          )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(wp.cost_koinu), 0) AS total_koinu
+        FROM wheel_purchases wp
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ledger_transactions lt
+          WHERE lt.uid = wp.uid
+            AND lt.transaction_type = 'wheel_purchase'
+            AND lt.reference_type = 'wheel_purchase'
+            AND lt.reference_id = CAST(wp.id AS TEXT)
+            AND lt.amount_koinu = -wp.cost_koinu
+            AND lt.idempotency_key = 'wheel_purchase:' || wp.uid || ':' || wp.request_id
+        )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(lt.amount_koinu), 0) AS total_koinu
+        FROM ledger_transactions lt
+        WHERE lt.transaction_type IN ('wheel_prize', 'wheel_purchase')
+          AND NOT EXISTS (
+            SELECT 1 FROM wheel_spins ws
+            WHERE lt.transaction_type = 'wheel_prize'
+              AND lt.uid = ws.uid
+              AND lt.reference_type = 'wheel_spin'
+              AND lt.reference_id = CAST(ws.id AS TEXT)
+              AND lt.amount_koinu = ws.prize_koinu
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM wheel_purchases wp
+            WHERE lt.transaction_type = 'wheel_purchase'
+              AND lt.uid = wp.uid
+              AND lt.reference_type = 'wheel_purchase'
+              AND lt.reference_id = CAST(wp.id AS TEXT)
+              AND lt.amount_koinu = -wp.cost_koinu
           )
       `).first(),
       env.DB.prepare(`
@@ -3340,6 +3391,12 @@ async function handleRequest(request, env, json) {
         referral_commissions_without_ledger_koinu: Number(referralCommissionsWithoutLedger?.total_koinu || 0),
         referral_ledger_without_commission_count: Number(referralLedgerWithoutCommission?.count || 0),
         referral_ledger_without_commission_koinu: Number(referralLedgerWithoutCommission?.total_koinu || 0),
+        wheel_prizes_without_ledger_count: Number(wheelPrizesWithoutLedger?.count || 0),
+        wheel_prizes_without_ledger_koinu: Number(wheelPrizesWithoutLedger?.total_koinu || 0),
+        wheel_purchases_without_ledger_count: Number(wheelPurchasesWithoutLedger?.count || 0),
+        wheel_purchases_without_ledger_koinu: Number(wheelPurchasesWithoutLedger?.total_koinu || 0),
+        wheel_ledger_without_source_count: Number(wheelLedgerWithoutSource?.count || 0),
+        wheel_ledger_without_source_koinu: Number(wheelLedgerWithoutSource?.total_koinu || 0),
         user_balance_mismatches: Number(balanceMismatches?.count || 0),
         arithmetic_mismatches: Number(arithmeticMismatches?.count || 0)
       },
