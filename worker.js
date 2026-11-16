@@ -304,6 +304,7 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   wheelBuy: { limit: 5, windowSeconds: 60 },
   streakCheckin: { limit: 3, windowSeconds: 60 },
   withdrawalCreate: { limit: 3, windowSeconds: 3600 },
+  subscriptionCreate: { limit: 5, windowSeconds: 3600 },
   adCreate: { limit: 3, windowSeconds: 86400 },
   adPaymentReference: { limit: 5, windowSeconds: 86400 },
   adminRead: { limit: 60, windowSeconds: 60 },
@@ -2085,6 +2086,102 @@ function getTrustedClientIp(request) {
     : "";
 }
 
+const SUBSCRIPTION_PLANS_EUR_CENTS = Object.freeze({ PREMIUM: 299, VIP: 499 });
+
+function parsePositiveMoney(value) {
+  if (typeof value !== "string" || !/^\d{1,8}(?:\.\d{1,6})?$/.test(value)) return null;
+  const parts = value.split(".");
+  return BigInt(parts[0]) * 1000000n + BigInt(((parts[1] || "") + "000000").slice(0, 6));
+}
+
+function addUtcMonth(date) {
+  const next = new Date(date.getTime());
+  const day = next.getUTCDate();
+  next.setUTCDate(1);
+  next.setUTCMonth(next.getUTCMonth() + 1);
+  const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  next.setUTCDate(Math.min(day, lastDay));
+  return next;
+}
+
+async function handleSubscriptionCallback(request, env) {
+  const length = Number(request.headers.get("Content-Length") || 0);
+  if (length > 8192) throw new HttpError(413, "Callback payload too large");
+  const raw = await request.text();
+  if (!raw || new TextEncoder().encode(raw).length > 8192) throw new HttpError(400, "Invalid callback payload");
+  const form = new URLSearchParams(raw);
+  const token = form.get("token");
+  const orderId = form.get("custom");
+  if (!token || token.length > 256 || !orderId || orderId.length > 80) throw new HttpError(400, "Invalid payment callback");
+  if (typeof env.FAUCETPAY_MERCHANT_USERNAME !== "string" || !env.FAUCETPAY_MERCHANT_USERNAME.trim()) {
+    throw new HttpError(503, "Merchant payments are not configured");
+  }
+
+  let response;
+  try {
+    response = await fetch("https://faucetpay.io/merchant/get-payment/" + encodeURIComponent(token), {
+      method: "GET", signal: AbortSignal.timeout(10000)
+    });
+  } catch {
+    throw new HttpError(503, "Payment verification is temporarily unavailable");
+  }
+  let verified;
+  try {
+    const text = await response.text();
+    if (!response.ok || !text || text.length > 8192) throw new Error("Invalid provider response");
+    verified = JSON.parse(text);
+  } catch {
+    throw new HttpError(503, "Could not verify the payment with FaucetPay");
+  }
+  if (verified?.valid !== true) throw new HttpError(400, "FaucetPay did not verify this payment");
+
+  const order = await env.DB.prepare(
+    "SELECT id, firebase_uid, plan, billing_period, amount_cents, merchant_amount, merchant_currency, status, expires_at, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
+  ).bind(orderId).first();
+  if (!order) throw new HttpError(404, "Subscription order not found");
+
+  const expectedAmount = parsePositiveMoney(String(order.merchant_amount || ""));
+  const receivedAmount = parsePositiveMoney(String(verified.amount1 || ""));
+  const transactionId = String(verified.transaction_id || "");
+  if (
+    String(verified.merchant_username || "").trim().toLowerCase() !== env.FAUCETPAY_MERCHANT_USERNAME.trim().toLowerCase() ||
+    String(verified.custom || "") !== order.id ||
+    !/^\d{1,32}$/.test(transactionId) ||
+    !expectedAmount || !receivedAmount || receivedAmount !== expectedAmount ||
+    String(verified.currency1 || "").toUpperCase() !== order.merchant_currency ||
+    String(form.get("transaction_id") || "") !== transactionId
+  ) throw new HttpError(400, "Verified payment does not match this subscription order");
+
+  if (order.status === "paid") {
+    if (String(order.provider_transaction_id) === transactionId) return { success: true, already_processed: true };
+    throw new HttpError(409, "This order was already paid with another transaction");
+  }
+  if (order.status !== "pending" || Date.parse(order.expires_at) <= Date.now()) {
+    throw new HttpError(409, "Subscription order has expired or is no longer payable");
+  }
+
+  const expiresAt = addUtcMonth(new Date()).toISOString();
+  const statements = [
+    env.DB.prepare(
+      "UPDATE subscription_orders SET status = 'paid', provider_transaction_id = ?, paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending' AND datetime(expires_at) > datetime('now')"
+    ).bind(transactionId, order.id),
+    env.DB.prepare(
+      "INSERT INTO subscriptions (id, firebase_uid, plan, billing_period, status, amount, currency, start_date, expiration_date, cancel_at_period_end, created_at, updated_at, payment_order_id) SELECT ?, ?, ?, ?, 'active', ?, 'EUR', CURRENT_TIMESTAMP, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ? WHERE EXISTS (SELECT 1 FROM subscription_orders WHERE id = ? AND status = 'paid' AND provider_transaction_id = ?) AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE payment_order_id = ?)"
+    ).bind(crypto.randomUUID(), order.firebase_uid, order.plan, order.billing_period, Number(order.amount_cents) / 100, expiresAt, order.id, order.id, transactionId, order.id)
+  ];
+  try {
+    const results = await env.DB.batch(statements);
+    if (Number(results?.[0]?.meta?.changes || 0) !== 1 || Number(results?.[1]?.meta?.changes || 0) !== 1) {
+      throw new HttpError(409, "Payment order could not be finalized");
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    console.error("Subscription activation failed:", error);
+    throw new HttpError(503, "Payment verified but subscription activation needs retry");
+  }
+  return { success: true, activated: true };
+}
+
 // ==========================================
 // MAIN API ROUTES
 // ==========================================
@@ -2093,6 +2190,59 @@ async function handleRequest(request, env, json) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+
+  // Verify every FaucetPay callback with its one-time server-side token.
+  if (path === "/api/payments/faucetpay/callback" && method === "POST") {
+    return json(await handleSubscriptionCallback(request, env));
+  }
+
+  // Create a monthly Premium/VIP checkout order.
+  if (path === "/api/subscriptions/checkout" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, user.sub, "subscription_create", RATE_LIMIT_POLICIES.subscriptionCreate);
+    const body = await readJson(request);
+    const plan = typeof body.plan === "string" ? body.plan.toUpperCase() : "";
+    if (!Object.prototype.hasOwnProperty.call(SUBSCRIPTION_PLANS_EUR_CENTS, plan)) {
+      throw new HttpError(400, "Choose a valid subscription plan");
+    }
+    if (typeof env.FAUCETPAY_MERCHANT_USERNAME !== "string" || !env.FAUCETPAY_MERCHANT_USERNAME.trim()) {
+      throw new HttpError(503, "Premium payments are not configured yet");
+    }
+    const merchantAmount = String(plan === "PREMIUM" ? env.FAUCETPAY_PREMIUM_USDT || "" : env.FAUCETPAY_VIP_USDT || "");
+    if (!parsePositiveMoney(merchantAmount)) throw new HttpError(503, "Subscription price is not configured correctly");
+    const account = await env.DB.prepare(
+      "SELECT uid FROM users WHERE uid = ? AND email_verified = 1"
+    ).bind(user.sub).first();
+    if (!account) throw new HttpError(403, "Verified account required");
+
+    const orderId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await env.DB.prepare(
+      "INSERT INTO subscription_orders (id, firebase_uid, plan, billing_period, amount_cents, currency, provider, status, idempotency_key, expires_at, merchant_amount, merchant_currency) VALUES (?, ?, ?, 'monthly', ?, 'EUR', 'faucetpay', 'pending', ?, ?, ?, 'USDT')"
+    ).bind(orderId, user.sub, plan, SUBSCRIPTION_PLANS_EUR_CENTS[plan], "subscription:" + user.sub + ":" + orderId, expiresAt, merchantAmount).run();
+
+    const site = "https://dogedrip.pages.dev";
+    return json({
+      success: true,
+      order_id: orderId,
+      expires_at: expiresAt,
+      checkout: {
+        action: "https://faucetpay.io/merchant/webscr",
+        method: "POST",
+        fields: {
+          merchant_username: env.FAUCETPAY_MERCHANT_USERNAME.trim(),
+          item_description: "DogeDrip " + plan + " monthly subscription",
+          amount1: merchantAmount,
+          currency1: "USDT",
+          currency2: "USDT",
+          custom: orderId,
+          callback_url: "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/payments/faucetpay/callback",
+          success_url: site + "/?subscription=success&order=" + encodeURIComponent(orderId),
+          cancel_url: site + "/?subscription=cancelled&order=" + encodeURIComponent(orderId)
+        }
+      }
+    });
+  }
 
   // HEALTH CHECK
 
