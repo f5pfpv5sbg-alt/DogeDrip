@@ -168,6 +168,10 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /user_balance_mismatches/);
   assert.match(route, /arithmetic_mismatches/);
   assert.match(route, /legacy_approved_without_payout_id_count/);
+  assert.match(route, /FROM wheel_spin_inventory/);
+  assert.match(route, /FROM wheel_prizes/);
+  assert.match(route, /paid_spin_reserve_required_koinu/);
+  assert.match(route, /paid_spin_reserve_backed/);
   assert.match(route, /const legacyApprovedOutstanding = Number\(legacyApproved\?\.total_koinu \|\| 0\)/);
   assert.match(route, /\}, legacyApprovedOutstanding\)/);
   assert.match(route, /external_funding_verified: false/);
