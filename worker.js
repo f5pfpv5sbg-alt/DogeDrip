@@ -3609,9 +3609,12 @@ async function handleRequest(request, env, json) {
     }
 
     const outstandingStatuses = ["pending", "processing", "payment_unknown"];
+    // Legacy "approved" rows without a FaucetPay payout ID are ambiguous:
+    // they may still be owed to the user, so reserve them as outstanding.
+    const legacyApprovedOutstanding = Number(legacyApproved?.total_koinu || 0);
     const outstanding = outstandingStatuses.reduce((total, status) => {
       return total + Number(withdrawalsByStatus[status]?.total_koinu || 0);
-    }, 0);
+    }, legacyApprovedOutstanding);
 
     return json({
       success: true,
