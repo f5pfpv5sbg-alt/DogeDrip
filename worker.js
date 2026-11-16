@@ -3597,7 +3597,16 @@ async function handleRequest(request, env, json) {
       `).first(),
       env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM faucet_reserve WHERE id = 1`).first(),
       env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first(),
-      env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM referral_reserve WHERE id = 1`).first()
+      env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM referral_reserve WHERE id = 1`).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(paid_spins), 0) AS count
+        FROM wheel_spin_inventory
+      `).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(MAX(amount_koinu), 0) AS amount
+        FROM wheel_prizes
+        WHERE probability_weight > 0
+      `).first()
     ]);
 
     const withdrawalsByStatus = Object.create(null);
@@ -3615,6 +3624,12 @@ async function handleRequest(request, env, json) {
     const outstanding = outstandingStatuses.reduce((total, status) => {
       return total + Number(withdrawalsByStatus[status]?.total_koinu || 0);
     }, legacyApprovedOutstanding);
+    const paidSpinsOutstanding = Number(paidWheelSpins?.count || 0);
+    const maxActiveWheelPrizeKoinu = Number(maxActiveWheelPrize?.amount || 0);
+    const paidSpinReserveRequiredKoinu =
+      paidSpinsOutstanding * maxActiveWheelPrizeKoinu;
+    const paidSpinReserveBacked =
+      Number(wheelReserve?.locked_koinu || 0) >= paidSpinReserveRequiredKoinu;
 
     return json({
       success: true,
@@ -3662,6 +3677,9 @@ async function handleRequest(request, env, json) {
         wheel_available_koinu: Number(wheelReserve?.available_koinu || 0),
         wheel_locked_koinu: Number(wheelReserve?.locked_koinu || 0),
         wheel_payouts_enabled: Number(wheelReserve?.payouts_enabled) === 1,
+        paid_spins_outstanding: paidSpinsOutstanding,
+        paid_spin_reserve_required_koinu: paidSpinReserveRequiredKoinu,
+        paid_spin_reserve_backed: paidSpinReserveBacked,
         referral_available_koinu: Number(referralReserve?.available_koinu || 0),
         referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1,
         external_funding_verified: false
