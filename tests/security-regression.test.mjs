@@ -215,12 +215,13 @@ test("referral dashboard endpoint is implemented and authenticated on both sides
   assert.match(worker.slice(start, end), /invited_count: Number\(invited\?\.total \|\| 0\)/);
 });
 
-test("Lucky Wheel never advertises zero-probability prizes as winnable", () => {
+test("Lucky Wheel keeps configured zero-probability prizes visible", () => {
   const start = worker.indexOf("async function getWheelData");
   const end = worker.indexOf("async function handleWheelState", start);
   const route = worker.slice(start, end);
   assert.ok(start >= 0 && end > start);
-  assert.match(route, /prizes:\s*configuration\.prizes\s*\.filter\(p => Number\(p\.probability_weight\) > 0\)/);
+  assert.match(route, /prizes:\s*configuration\.prizes\.map\(p =>/);
+  assert.doesNotMatch(route, /probability_weight\)\s*>\s*0/);
 });
 
 test("Lucky Wheel frontend endpoints have matching authenticated Worker routes", () => {
