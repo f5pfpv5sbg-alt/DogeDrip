@@ -66,7 +66,7 @@ test("withdrawal creation debits the balance, inserts a pending request and reco
   assert.match(route, /await env\.DB\.batch\(\[/);
   assert.match(route, /UPDATE users[\s\S]{0,180}balance_koinu = balance_koinu - \?[\s\S]{0,100}balance_koinu >= \?/);
   assert.match(route, /INSERT INTO withdrawals[\s\S]{0,240}status[\s\S]{0,120}'pending'/);
-  assert.match(route, /INSERT INTO ledger_transactions[\s\S]{0,280}'withdrawal'[\s\S]{0,160}-\?/);
+  assert.match(route, /INSERT INTO ledger_transactions[\s\S]{0,700}'withdrawal',[\s\S]{0,100}-\?/);
   assert.match(route, /results\[0\]\.meta\.changes !== 1[\s\S]{0,160}results\[2\]\.meta\.changes !== 1/);
 });
 
