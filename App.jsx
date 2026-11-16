@@ -4670,6 +4670,7 @@ export default function App() {
                         <p className="text-xs font-bold text-yellow-300">External reserve funding: NOT VERIFIED</p>
                         <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
                         <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE · Referral reserve: {formatDoge(financeAudit.reserves.referral_available_koinu)} DOGE</p>
+                        <p className={`text-[11px] ${financeAudit.reserves.paid_spin_reserve_backed ? 'text-emerald-400' : 'text-red-400'}`}>Paid spins reserve: {financeAudit.reserves.paid_spins_outstanding} spins · {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE locked / {formatDoge(financeAudit.reserves.paid_spin_reserve_required_koinu)} DOGE required · {financeAudit.reserves.paid_spin_reserve_backed ? 'BACKED INTERNALLY' : 'UNDERFUNDED'}</p>
                       </div>
                     </>
                   )}
