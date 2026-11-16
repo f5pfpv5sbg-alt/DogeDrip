@@ -169,6 +169,9 @@ test("Admin dashboard displays financial integrity warnings without changing bal
   assert.ok(app.includes("Claims Missing Ledger"));
   assert.ok(app.includes("Referral Commissions Missing Ledger"));
   assert.ok(app.includes("Referral Ledger Without Commission"));
+  assert.ok(app.includes("Wheel Prizes Missing Ledger"));
+  assert.ok(app.includes("Wheel Purchases Missing Ledger"));
+  assert.ok(app.includes("Wheel Ledger Without Source"));
   assert.ok(app.includes("Legacy Approved"));
 });
 
