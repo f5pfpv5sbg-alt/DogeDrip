@@ -465,6 +465,8 @@ export default function App() {
     setSecurityResets(current => ({ ...current, [action]: current[action] + 1 }));
   }, []);
   const [apiReady, setApiReady] = useState(false);
+  const [subscriptionCheckoutLoading, setSubscriptionCheckoutLoading] = useState('');
+  const [subscriptionCheckoutMessage, setSubscriptionCheckoutMessage] = useState('');
   const [apiError, setApiError] = useState('');
   const [verifyMsg, setVerifyMsg] = useState('');
   const [verificationResendSeconds, setVerificationResendSeconds] = useState(0);
@@ -716,6 +718,46 @@ export default function App() {
       document.removeEventListener('visibilitychange', sendHeartbeat);
     };
   }, [firebaseUser, apiReady, apiRequest]);
+
+  const handleSubscriptionCheckout = async (plan) => {
+    if (subscriptionCheckoutLoading) return;
+    setSubscriptionCheckoutLoading(plan);
+    setSubscriptionCheckoutMessage('');
+    try {
+      const data = await apiRequest('/api/subscriptions/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ plan })
+      });
+      const checkout = data?.checkout;
+      if (
+        checkout?.action !== 'https://faucetpay.io/merchant/webscr' ||
+        checkout?.method !== 'POST' ||
+        !checkout.fields ||
+        typeof checkout.fields !== 'object'
+      ) {
+        throw new Error('The payment provider returned an invalid checkout session.');
+      }
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = checkout.action;
+      form.acceptCharset = 'UTF-8';
+      for (const [key, value] of Object.entries(checkout.fields)) {
+        if (typeof value !== 'string' || value.length > 2048) {
+          throw new Error('Invalid payment checkout details.');
+        }
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = value;
+        form.appendChild(input);
+      }
+      document.body.appendChild(form);
+      form.submit();
+    } catch (error) {
+      setSubscriptionCheckoutMessage(error.message || 'Could not start the subscription checkout.');
+      setSubscriptionCheckoutLoading('');
+    }
+  };
 
   const applyAccountData = useCallback((data) => {
     if (!data || typeof data !== 'object') return;
@@ -3819,6 +3861,12 @@ export default function App() {
                 </div>
               )}
 
+              {subscriptionCheckoutMessage && (
+                <div role="alert" className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 text-sm">
+                  {subscriptionCheckoutMessage}
+                </div>
+              )}
+
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 {PLAN_CATALOG.map(p => {
                   const isActive = planName !== null && planName === p.key;
@@ -3955,12 +4003,11 @@ export default function App() {
                         ) : (
                           <button
                             type="button"
-                            disabled
-                            aria-disabled="true"
-                            className="w-full bg-slate-900 border border-slate-800 text-slate-500 font-black py-3 rounded-xl cursor-not-allowed flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide"
+                            onClick={() => handleSubscriptionCheckout(p.key)}
+                            disabled={!apiReady || Boolean(subscriptionCheckoutLoading)}
+                            className="w-full bg-[#F4A6C1] hover:bg-[#e091ad] disabled:opacity-50 disabled:cursor-not-allowed text-black font-black py-3 rounded-xl flex items-center justify-center space-x-2 text-sm font-['Space_Grotesk',sans-serif] tracking-wide transition-colors"
                           >
-                            <Lock className="w-4 h-4" />
-                            <span>Coming Soon</span>
+                            {subscriptionCheckoutLoading === p.key ? 'Preparing secure checkout...' : 'Subscribe with FaucetPay'}
                           </button>
                         )}
                       </div>
@@ -4144,9 +4191,7 @@ export default function App() {
               <div className="p-4 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
                 <Info className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  Payment processing is not available yet, so Premium and VIP cannot be
-                  purchased right now. Your plan is set and verified by the server; it
-                  cannot be changed from this page. Daily claim limits reset at 00:00 UTC.
+                  Payments are confirmed by FaucetPay's server-side verification before a plan is activated. Orders expire after 30 minutes. Daily claim limits reset at 00:00 UTC.
                 </span>
               </div>
             </div>
