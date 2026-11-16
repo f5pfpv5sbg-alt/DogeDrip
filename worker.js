@@ -2113,6 +2113,16 @@ async function handleSubscriptionCallback(request, env) {
   const token = form.get("token");
   const orderId = form.get("custom");
   if (!token || token.length > 256 || !orderId || orderId.length > 80) throw new HttpError(400, "Invalid payment callback");
+  const priorOrder = await env.DB.prepare(
+    "SELECT status, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
+  ).bind(orderId).first();
+  if (!priorOrder) throw new HttpError(404, "Subscription order not found");
+  if (priorOrder.status === "paid") {
+    if (String(form.get("transaction_id") || "") === String(priorOrder.provider_transaction_id || "")) {
+      return { success: true, already_processed: true };
+    }
+    throw new HttpError(409, "This order was already paid with another transaction");
+  }
   if (typeof env.FAUCETPAY_MERCHANT_USERNAME !== "string" || !env.FAUCETPAY_MERCHANT_USERNAME.trim()) {
     throw new HttpError(503, "Merchant payments are not configured");
   }
