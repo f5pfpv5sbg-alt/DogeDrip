@@ -1891,8 +1891,9 @@ async function getAdminDailyStats(env) {
   const wheelPrizesKoinu = Number(wheelPrizes?.total || 0);
   const streakKoinu = Number(streaks?.total || 0);
   const referralCommissionsKoinu = Number(referralCommissions?.total || 0);
-  const incomeKoinu = Number(wheelBuys?.total || 0);
-  const payoutsKoinu = claimsKoinu + wheelPrizesKoinu + streakKoinu + referralCommissionsKoinu;
+  const wheelPurchaseVolumeKoinu = Number(wheelBuys?.total || 0);
+  const rewardsCreditedKoinu =
+    claimsKoinu + wheelPrizesKoinu + streakKoinu + referralCommissionsKoinu;
 
   return {
     success: true,
@@ -1901,11 +1902,14 @@ async function getAdminDailyStats(env) {
     active_users_today: Number(activity?.active_users || 0),
     currently_online: Number(onlineUsers?.total || 0),
     login_sessions_today: Number(activity?.login_sessions || 0),
-    verified_ad_revenue_eur: Number(adRevenue?.total || 0),
-    verified_ad_campaigns_today: Number(adRevenue?.count || 0),
-    income_koinu: incomeKoinu,
-    payouts_koinu: payoutsKoinu,
-    profit_koinu: incomeKoinu - payoutsKoinu,
+    ad_campaign_value_eur: Number(adRevenue?.total || 0),
+    ad_campaigns_activated_today: Number(adRevenue?.count || 0),
+    ad_payment_verification_status: "manual_review_not_provider_verified",
+    wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu,
+    rewards_credited_koinu: rewardsCreditedKoinu,
+    external_doge_revenue_verified: false,
+    profit_koinu: null,
+    profit_status: "unavailable_unverified_external_revenue_and_expenses",
     breakdown: {
       claims_koinu: claimsKoinu,
       claims_count: Number(claims?.count || 0),
