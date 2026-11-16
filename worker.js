@@ -1919,7 +1919,7 @@ async function getAdminDailyStats(env) {
       streak_checkins_count: Number(streaks?.count || 0),
       referral_commissions_koinu: referralCommissionsKoinu,
       referral_commissions_count: Number(referralCommissions?.count || 0),
-      wheel_purchases_koinu: incomeKoinu,
+      wheel_purchases_koinu: wheelPurchaseVolumeKoinu,
       wheel_purchases_count: Number(wheelBuys?.count || 0)
     },
     withdrawals: {
