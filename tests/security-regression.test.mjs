@@ -148,7 +148,11 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /claims_without_ledger_count/);
   assert.match(route, /referral_commissions_without_ledger_count/);
   assert.match(route, /referral_ledger_without_commission_count/);
+  assert.match(route, /lt\.uid = c\.uid/);
+  assert.match(route, /lt\.transaction_type = 'claim'/);
   assert.match(route, /reference_type = 'claim'/);
+  assert.match(route, /lt\.amount_koinu = c\.amount_koinu/);
+  assert.match(route, /lt\.idempotency_key = 'claim:' \|\| c\.uid \|\| ':' \|\| c\.request_id/);
   assert.match(route, /reference_type = 'referral_commission'/);
   assert.match(route, /user_balance_mismatches/);
   assert.match(route, /arithmetic_mismatches/);
