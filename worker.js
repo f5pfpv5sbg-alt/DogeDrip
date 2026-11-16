@@ -3214,8 +3214,12 @@ async function handleRequest(request, env, json) {
         FROM claims c
         WHERE NOT EXISTS (
           SELECT 1 FROM ledger_transactions lt
-          WHERE lt.reference_type = 'claim'
+          WHERE lt.uid = c.uid
+            AND lt.transaction_type = 'claim'
+            AND lt.reference_type = 'claim'
             AND lt.reference_id = CAST(c.id AS TEXT)
+            AND lt.amount_koinu = c.amount_koinu
+            AND lt.idempotency_key = 'claim:' || c.uid || ':' || c.request_id
         )
       `).first(),
       env.DB.prepare(`
