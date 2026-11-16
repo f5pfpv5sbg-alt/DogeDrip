@@ -644,7 +644,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab !== 'plans' || !jumpToAdvertisingPlans) return;
-    const section = document.getElementById('advertising-plans');
+    const section = document.getElementById('advertising-request');
     if (!section) return;
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setJumpToAdvertisingPlans(false);
@@ -4113,7 +4113,7 @@ export default function App() {
                 </div>
               )}
 
-              <form onSubmit={handleAdSubmit} className="space-y-4">
+              <form id="advertising-request" onSubmit={handleAdSubmit} className="space-y-4 scroll-mt-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <label className="block">
                     <span className={LABEL_CLS}>Business / Project Name</span>
