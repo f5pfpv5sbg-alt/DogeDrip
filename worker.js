@@ -3400,7 +3400,9 @@ async function handleRequest(request, env, json) {
       legacyApproved,
       faucetReserve,
       wheelReserve,
-      referralReserve
+      referralReserve,
+      paidWheelSpins,
+      maxActiveWheelPrize
     ] = await Promise.all([
       env.DB.prepare(`
         SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS users_count
