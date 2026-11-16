@@ -3188,6 +3188,7 @@ async function handleRequest(request, env, json) {
       liability,
       unledgeredBalances,
       claimsWithoutLedger,
+      legacyClaimsWithoutLedger,
       referralCommissionsWithoutLedger,
       referralLedgerWithoutCommission,
       wheelPrizesWithoutLedger,
@@ -3220,7 +3221,8 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(c.amount_koinu), 0) AS total_koinu
         FROM claims c
-        WHERE NOT EXISTS (
+        WHERE c.request_id IS NOT NULL
+          AND NOT EXISTS (
           SELECT 1 FROM ledger_transactions lt
           WHERE lt.uid = c.uid
             AND lt.transaction_type = 'claim'
@@ -3229,6 +3231,19 @@ async function handleRequest(request, env, json) {
             AND lt.amount_koinu = c.amount_koinu
             AND lt.idempotency_key = 'claim:' || c.uid || ':' || c.request_id
         )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(c.amount_koinu), 0) AS total_koinu
+        FROM claims c
+        WHERE c.request_id IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ledger_transactions lt
+            WHERE lt.uid = c.uid
+              AND lt.transaction_type = 'claim'
+              AND lt.reference_type = 'claim'
+              AND lt.reference_id = CAST(c.id AS TEXT)
+              AND lt.amount_koinu = c.amount_koinu
+          )
       `).first(),
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(rc.amount_koinu), 0) AS total_koinu
@@ -3416,6 +3431,8 @@ async function handleRequest(request, env, json) {
         unledgered_balance_koinu: Number(unledgeredBalances?.total_koinu || 0),
         claims_without_ledger_count: Number(claimsWithoutLedger?.count || 0),
         claims_without_ledger_koinu: Number(claimsWithoutLedger?.total_koinu || 0),
+        legacy_claims_without_ledger_count: Number(legacyClaimsWithoutLedger?.count || 0),
+        legacy_claims_without_ledger_koinu: Number(legacyClaimsWithoutLedger?.total_koinu || 0),
         referral_commissions_without_ledger_count: Number(referralCommissionsWithoutLedger?.count || 0),
         referral_commissions_without_ledger_koinu: Number(referralCommissionsWithoutLedger?.total_koinu || 0),
         referral_ledger_without_commission_count: Number(referralLedgerWithoutCommission?.count || 0),
