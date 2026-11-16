@@ -1447,21 +1447,8 @@ export default function App() {
     setIsLoadingAuth(true);
 
     try {
-      if (!securityTokens.login) {
-        throw new Error('Please complete the Cloudflare security check.');
-      }
-
-      const securityResponse = await fetch(`${API_URL}/api/security/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnstileToken: securityTokens.login })
-      });
-      const securityData = await securityResponse.json().catch(() => ({}));
-      resetSecurityToken('login');
-      if (!securityResponse.ok || securityData.success !== true) {
-        throw new Error(securityData.error || 'Login security verification failed.');
-      }
-
+      // Firebase Authentication applies its own abuse protections and rate limits.
+      // Login must not depend on the optional Turnstile Worker secret being configured.
       await signInWithEmailAndPassword(
         auth,
         emailInput.trim().toLowerCase(),
@@ -2632,14 +2619,9 @@ export default function App() {
                 />
               </div>
 
-              <TurnstileWidget
-                action="login"
-                onToken={token => setSecurityToken('login', token)}
-                resetKey={securityResets.login}
-              />
               <button
                 type="submit"
-                disabled={isLoadingAuth || !securityTokens.login}
+                disabled={isLoadingAuth}
                 className={PRIMARY_BTN}
               >
                 <span>
