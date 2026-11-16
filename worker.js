@@ -1178,10 +1178,8 @@ async function getWheelData(env, uid, plan) {
     );
 
   return {
-    // Never advertise zero-probability prizes as winnable.
-    prizes: configuration.prizes
-      .filter(p => Number(p.probability_weight) > 0)
-      .map(p => ({
+    // Keep configured prizes visible, including entries with a 0% chance.
+    prizes: configuration.prizes.map(p => ({
         id: p.prize_key,
         label: `${formatDoge(p.amount_koinu)} DOGE`,
         amount_koinu: Number(p.amount_koinu)
