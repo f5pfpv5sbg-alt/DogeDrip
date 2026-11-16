@@ -441,16 +441,15 @@ test("admin daily payouts and profit include paid referral commissions", () => {
 });
 
 
-test("Turnstile is required and action-bound for login, claim, wheel, and withdrawals", () => {
-  assert.match(worker, /api\/security\/login/);
-  assert.match(worker, /verifyTurnstileToken\(loginBody\.turnstileToken, request, env, "login"\)/);
+test("Turnstile protects reward actions while Firebase login remains independent of the Worker secret", () => {
+  assert.match(worker, /api\\/security\\/login/);
   for (const action of ["claim", "wheel_spin", "wheel_buy", "withdraw"]) {
-    assert.match(worker, new RegExp(`verifyTurnstileToken\\(body\\.turnstileToken, request, env, "${action}"\\)`));
-  }
-  assert.match(worker, /result\?\.action !== expectedAction/);
-  for (const action of ["login", "claim", "wheel_spin", "wheel_buy", "withdraw"]) {
+    assert.match(worker, new RegExp(`verifyTurnstileToken\\\\(body\\\\.turnstileToken, request, env, "${action}"\\\\)`));
     assert.ok(app.includes(`action="${action}"`), `Missing frontend Turnstile widget for ${action}`);
   }
+  assert.match(worker, /result\\?\\.action !== expectedAction/);
+  assert.match(app, /Firebase Authentication applies its own abuse protections and rate limits/);
+  assert.doesNotMatch(app, /action="login"/);
 });
 
 
