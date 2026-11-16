@@ -464,3 +464,8 @@ test("admin online users metric is based on verified five-minute heartbeats", ()
   assert.ok(app.includes('label="Currently Online"'));
   assert.match(app, /setInterval\(sendHeartbeat, 120000\)/);
 });
+
+test("claim errors display the actual server message instead of mislabeling every 503 as a reserve failure", () => {
+  assert.match(app, /error\.status === 503[\s\S]{0,220}error\.message \|\| 'The claim service is temporarily unavailable/);
+  assert.doesNotMatch(app, /The faucet reserve is currently unavailable/);
+});
