@@ -425,6 +425,8 @@ test("admin daily payouts and profit include paid referral commissions", () => {
   assert.match(stats, /external_doge_revenue_verified: false/);
   assert.match(stats, /profit_status: "unavailable_unverified_external_revenue_and_expenses"/);
   assert.match(stats, /wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu/);
+  assert.match(stats, /wheel_purchases_koinu: wheelPurchaseVolumeKoinu/);
+  assert.doesNotMatch(stats, /\bincomeKoinu\b/);
   assert.match(stats, /ad_payment_verification_status: "manual_review_not_provider_verified"/);
   assert.match(stats, /referral_commissions_koinu: referralCommissionsKoinu/);
   assert.match(stats, /referral_available_koinu/);
