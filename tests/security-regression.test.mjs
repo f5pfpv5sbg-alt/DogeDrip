@@ -472,3 +472,45 @@ test("claim errors display the actual server message instead of mislabeling ever
   assert.match(app, /error\.status === 503[\s\S]{0,220}error\.message \|\| 'The claim service is temporarily unavailable/);
   assert.doesNotMatch(app, /The faucet reserve is currently unavailable/);
 });
+
+
+test("Premium/VIP checkout creates server-priced monthly orders and never activates from the browser", () => {
+  assert.match(worker, /path === "\/api\/subscriptions\/checkout" && method === "POST"/);
+  assert.match(worker, /authenticate\(request\)/);
+  assert.match(worker, /email_verified = 1/);
+  assert.match(worker, /SUBSCRIPTION_PLANS_EUR_CENTS = Object\.freeze\(\{ PREMIUM: 299, VIP: 499 \}\)/);
+  assert.match(worker, /FAUCETPAY_PREMIUM_USDT/);
+  assert.match(worker, /FAUCETPAY_VIP_USDT/);
+  assert.match(worker, /subscriptionCreate: \{ limit: 5, windowSeconds: 3600 \}/);
+  assert.match(worker, /merchant_currency\) VALUES|merchant_currency\) VALUES/);
+  assert.ok(app.includes("handleSubscriptionCheckout"));
+  assert.ok(app.includes("Subscribe with FaucetPay"));
+});
+
+test("FaucetPay subscription callback verifies provider token and exact order details before activation", () => {
+  const start = worker.indexOf('async function handleSubscriptionCallback');
+  const end = worker.indexOf('// ==========================================\n// MAIN API ROUTES', start);
+  assert.ok(start >= 0 && end > start);
+  const callback = worker.slice(start, end);
+  assert.match(callback, /merchant\/get-payment/);
+  assert.match(callback, /verified\?\.valid !== true/);
+  assert.match(callback, /verified\.merchant_username/);
+  assert.match(callback, /verified\.custom/);
+  assert.match(callback, /verified\.amount1/);
+  assert.match(callback, /verified\.currency1/);
+  assert.match(callback, /provider_transaction_id/);
+  assert.match(callback, /env\.DB\.batch\(statements\)/);
+  assert.match(callback, /payment_order_id/);
+  assert.match(worker, /path === "\/api\/payments\/faucetpay\/callback" && method === "POST"/);
+  assert.match(worker, /already_processed: true/);
+});
+
+test("FaucetPay checkout cannot be used until merchant credentials and USDT prices are configured", () => {
+  const start = worker.indexOf('if (path === "/api/subscriptions/checkout" && method === "POST")');
+  const end = worker.indexOf("// HEALTH CHECK", start);
+  const route = worker.slice(start, end);
+  assert.match(route, /FAUCETPAY_MERCHANT_USERNAME/);
+  assert.match(route, /FAUCETPAY_PREMIUM_USDT/);
+  assert.match(route, /FAUCETPAY_VIP_USDT/);
+  assert.match(route, /https:\/\/faucetpay\.io\/merchant\/webscr/);
+});
