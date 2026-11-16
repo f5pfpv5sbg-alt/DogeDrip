@@ -168,6 +168,8 @@ test("financial audit endpoint is admin-only and performs read-only integrity ch
   assert.match(route, /user_balance_mismatches/);
   assert.match(route, /arithmetic_mismatches/);
   assert.match(route, /legacy_approved_without_payout_id_count/);
+  assert.match(route, /const legacyApprovedOutstanding = Number\(legacyApproved\?\.total_koinu \|\| 0\)/);
+  assert.match(route, /\}, legacyApprovedOutstanding\)/);
   assert.match(route, /external_funding_verified: false/);
   assert.doesNotMatch(route, /\b(?:INSERT INTO|UPDATE\s+users|UPDATE\s+withdrawals|DELETE FROM)\b/i);
 });
