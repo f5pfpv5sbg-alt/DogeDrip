@@ -1859,7 +1859,7 @@ export default function App() {
         );
       } else if (error.status === 503) {
         showClaimMessage(
-          'The faucet reserve is currently unavailable. No reward was credited. Please try again later.',
+          error.message || 'The claim service is temporarily unavailable. No reward was credited.',
           true
         );
       } else {
