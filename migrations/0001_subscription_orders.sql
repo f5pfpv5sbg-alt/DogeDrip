@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS subscription_orders (
   paid_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (firebase_uid) REFERENCES users(uid) ON DELETE CASCADE,
+  FOREIGN KEY (firebase_uid) REFERENCES users(uid),
   CHECK (
     (status = 'paid' AND provider_transaction_id IS NOT NULL AND paid_at IS NOT NULL)
     OR status != 'paid'
@@ -28,7 +28,3 @@ CREATE INDEX IF NOT EXISTS idx_subscription_orders_uid_created
 
 CREATE INDEX IF NOT EXISTS idx_subscription_orders_status_expiry
   ON subscription_orders(status, expires_at);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_orders_provider_tx
-  ON subscription_orders(provider, provider_transaction_id)
-  WHERE provider_transaction_id IS NOT NULL;
