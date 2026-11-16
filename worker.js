@@ -2104,24 +2104,57 @@ function addUtcMonth(date) {
   return next;
 }
 
+async function ensureSubscriptionForPaidOrder(env, order, transactionId) {
+  const existing = await env.DB.prepare(
+    "SELECT id FROM subscriptions WHERE payment_order_id = ? LIMIT 1"
+  ).bind(order.id).first();
+  if (existing) return true;
+
+  const expiresAt = addUtcMonth(new Date()).toISOString();
+  const result = await env.DB.prepare(
+    "INSERT INTO subscriptions (id, firebase_uid, plan, billing_period, status, amount, currency, start_date, expiration_date, cancel_at_period_end, created_at, updated_at, payment_order_id) SELECT ?, ?, ?, ?, 'active', ?, 'EUR', CURRENT_TIMESTAMP, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ? WHERE EXISTS (SELECT 1 FROM subscription_orders WHERE id = ? AND status = 'paid' AND provider_transaction_id = ?) AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE payment_order_id = ?)"
+  ).bind(crypto.randomUUID(), order.firebase_uid, order.plan, order.billing_period, Number(order.amount_cents) / 100, expiresAt, order.id, order.id, transactionId, order.id).run();
+
+  if (Number(result?.meta?.changes || 0) === 1) return true;
+  const recovered = await env.DB.prepare(
+    "SELECT id FROM subscriptions WHERE payment_order_id = ? LIMIT 1"
+  ).bind(order.id).first();
+  return Boolean(recovered);
+}
+
 async function handleSubscriptionCallback(request, env) {
   const length = Number(request.headers.get("Content-Length") || 0);
   if (length > 8192) throw new HttpError(413, "Callback payload too large");
   const raw = await request.text();
   if (!raw || new TextEncoder().encode(raw).length > 8192) throw new HttpError(400, "Invalid callback payload");
+
   const form = new URLSearchParams(raw);
   const token = form.get("token");
   const orderId = form.get("custom");
-  if (!token || token.length > 256 || !orderId || orderId.length > 80) throw new HttpError(400, "Invalid payment callback");
-  const priorOrder = await env.DB.prepare(
-    "SELECT status, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
+  const callbackTransactionId = String(form.get("transaction_id") || "");
+  if (!token || token.length > 256 || !orderId || orderId.length > 80) {
+    throw new HttpError(400, "Invalid payment callback");
+  }
+
+  const order = await env.DB.prepare(
+    "SELECT id, firebase_uid, plan, billing_period, amount_cents, merchant_amount, merchant_currency, status, expires_at, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
   ).bind(orderId).first();
-  if (!priorOrder) throw new HttpError(404, "Subscription order not found");
-  if (priorOrder.status === "paid") {
-    if (String(form.get("transaction_id") || "") === String(priorOrder.provider_transaction_id || "")) {
+  if (!order) throw new HttpError(404, "Subscription order not found");
+
+  // A paid order is already backed by a previously verified provider callback.
+  // Recover a missing subscription without reusing FaucetPay's one-time token.
+  if (order.status === "paid") {
+    if (!/^\\d{1,32}$/.test(callbackTransactionId) || callbackTransactionId !== String(order.provider_transaction_id || "")) {
+      throw new HttpError(409, "This order was already paid with another transaction");
+    }
+    if (await ensureSubscriptionForPaidOrder(env, order, callbackTransactionId)) {
       return { success: true, already_processed: true };
     }
-    throw new HttpError(409, "This order was already paid with another transaction");
+    throw new HttpError(503, "Payment is verified; subscription activation will retry safely");
+  }
+
+  if (order.status !== "pending" || Date.parse(order.expires_at) <= Date.now()) {
+    throw new HttpError(409, "Subscription order has expired or is no longer payable");
   }
   if (typeof env.FAUCETPAY_MERCHANT_USERNAME !== "string" || !env.FAUCETPAY_MERCHANT_USERNAME.trim()) {
     throw new HttpError(503, "Merchant payments are not configured");
@@ -2130,11 +2163,13 @@ async function handleSubscriptionCallback(request, env) {
   let response;
   try {
     response = await fetch("https://faucetpay.io/merchant/get-payment/" + encodeURIComponent(token), {
-      method: "GET", signal: AbortSignal.timeout(10000)
+      method: "GET",
+      signal: AbortSignal.timeout(10000)
     });
   } catch {
     throw new HttpError(503, "Payment verification is temporarily unavailable");
   }
+
   let verified;
   try {
     const text = await response.text();
@@ -2145,29 +2180,18 @@ async function handleSubscriptionCallback(request, env) {
   }
   if (verified?.valid !== true) throw new HttpError(400, "FaucetPay did not verify this payment");
 
-  const order = await env.DB.prepare(
-    "SELECT id, firebase_uid, plan, billing_period, amount_cents, merchant_amount, merchant_currency, status, expires_at, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
-  ).bind(orderId).first();
-  if (!order) throw new HttpError(404, "Subscription order not found");
-
   const expectedAmount = parsePositiveMoney(String(order.merchant_amount || ""));
   const receivedAmount = parsePositiveMoney(String(verified.amount1 || ""));
   const transactionId = String(verified.transaction_id || "");
   if (
     String(verified.merchant_username || "").trim().toLowerCase() !== env.FAUCETPAY_MERCHANT_USERNAME.trim().toLowerCase() ||
     String(verified.custom || "") !== order.id ||
-    !/^\d{1,32}$/.test(transactionId) ||
+    !/^\\d{1,32}$/.test(transactionId) ||
     !expectedAmount || !receivedAmount || receivedAmount !== expectedAmount ||
     String(verified.currency1 || "").toUpperCase() !== order.merchant_currency ||
-    String(form.get("transaction_id") || "") !== transactionId
-  ) throw new HttpError(400, "Verified payment does not match this subscription order");
-
-  if (order.status === "paid") {
-    if (String(order.provider_transaction_id) === transactionId) return { success: true, already_processed: true };
-    throw new HttpError(409, "This order was already paid with another transaction");
-  }
-  if (order.status !== "pending" || Date.parse(order.expires_at) <= Date.now()) {
-    throw new HttpError(409, "Subscription order has expired or is no longer payable");
+    callbackTransactionId !== transactionId
+  ) {
+    throw new HttpError(400, "Verified payment does not match this subscription order");
   }
 
   const expiresAt = addUtcMonth(new Date()).toISOString();
@@ -2179,17 +2203,29 @@ async function handleSubscriptionCallback(request, env) {
       "INSERT INTO subscriptions (id, firebase_uid, plan, billing_period, status, amount, currency, start_date, expiration_date, cancel_at_period_end, created_at, updated_at, payment_order_id) SELECT ?, ?, ?, ?, 'active', ?, 'EUR', CURRENT_TIMESTAMP, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ? WHERE EXISTS (SELECT 1 FROM subscription_orders WHERE id = ? AND status = 'paid' AND provider_transaction_id = ?) AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE payment_order_id = ?)"
     ).bind(crypto.randomUUID(), order.firebase_uid, order.plan, order.billing_period, Number(order.amount_cents) / 100, expiresAt, order.id, order.id, transactionId, order.id)
   ];
+
   try {
     const results = await env.DB.batch(statements);
-    if (Number(results?.[0]?.meta?.changes || 0) !== 1 || Number(results?.[1]?.meta?.changes || 0) !== 1) {
-      throw new HttpError(409, "Payment order could not be finalized");
+    if (Number(results?.[0]?.meta?.changes || 0) === 1 && Number(results?.[1]?.meta?.changes || 0) === 1) {
+      return { success: true, activated: true };
     }
+
+    const latestOrder = await env.DB.prepare(
+      "SELECT id, firebase_uid, plan, billing_period, amount_cents, status, provider_transaction_id FROM subscription_orders WHERE id = ? LIMIT 1"
+    ).bind(order.id).first();
+    if (
+      latestOrder?.status === "paid" &&
+      latestOrder.provider_transaction_id === transactionId &&
+      await ensureSubscriptionForPaidOrder(env, latestOrder, transactionId)
+    ) {
+      return { success: true, already_processed: true };
+    }
+    throw new HttpError(409, "Payment order could not be finalized");
   } catch (error) {
     if (error instanceof HttpError) throw error;
     console.error("Subscription activation failed:", error);
     throw new HttpError(503, "Payment verified but subscription activation needs retry");
   }
-  return { success: true, activated: true };
 }
 
 // ==========================================
