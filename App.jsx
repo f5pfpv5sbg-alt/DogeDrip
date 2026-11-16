@@ -4695,24 +4695,24 @@ export default function App() {
                     valueCls={adminAccentText}
                   />
                   <StatTile
-                    label="Won Today (Income)"
+                    label="Wheel Purchases (Internal)"
                     value={
                       adminStats
-                        ? `${formatDoge(adminStats.income_koinu)} DOGE`
+                        ? `${formatDoge(adminStats.wheel_purchase_volume_koinu)} DOGE`
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
                     sub={
                       adminStats?.breakdown
-                        ? `${adminStats.breakdown.wheel_purchases_count} spin purchases`
+                        ? `${adminStats.breakdown.wheel_purchases_count} purchases · internal DOGE transfer, not external revenue`
                         : undefined
                     }
                     valueCls="text-emerald-400"
                   />
                   <StatTile
-                    label="Lost Today (Paid Out)"
+                    label="Rewards Credited Today"
                     value={
                       adminStats
-                        ? `${formatDoge(adminStats.payouts_koinu)} DOGE`
+                        ? `${formatDoge(adminStats.rewards_credited_koinu)} DOGE`
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
                     sub={
@@ -4725,30 +4725,26 @@ export default function App() {
                   <StatTile
                     label="Profit Today"
                     value={
-                      adminStats
+                      adminStats && adminStats.profit_koinu != null
                         ? `${Number(adminStats.profit_koinu) > 0 ? '+' : ''}${formatDoge(adminStats.profit_koinu)} DOGE`
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
-                    sub="Income minus paid out"
-                    valueCls={
-                      adminStats && Number(adminStats.profit_koinu) < 0
-                        ? 'text-red-400'
-                        : 'text-emerald-400'
-                    }
+                    sub="Unavailable until external DOGE revenue and expenses are verified"
+                    valueCls={adminAccentText}
                   />
                   <StatTile
-                    label="Verified Ad Revenue Today"
+                    label="Ad Campaign Value Today (Unverified)"
                     value={
                       adminStats
-                        ? `€${Number(adminStats.verified_ad_revenue_eur || 0).toFixed(2)}`
+                        ? `€${Number(adminStats.ad_campaign_value_eur || 0).toFixed(2)}`
                         : (adminStatsLoading ? '...' : 'N/A')
                     }
                     sub={
                       adminStats
-                        ? `${Number(adminStats.verified_ad_campaigns_today || 0)} campaigns activated after payment review`
+                        ? `${Number(adminStats.ad_campaigns_activated_today || 0)} campaigns activated after manual review; receipts not independently verified`
                         : undefined
                     }
-                    valueCls="text-emerald-400"
+                    valueCls={adminAccentText}
                   />
                 </div>
 
