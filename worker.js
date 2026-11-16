@@ -3189,6 +3189,7 @@ async function handleRequest(request, env, json) {
       wheelPrizesWithoutLedger,
       wheelPurchasesWithoutLedger,
       wheelLedgerWithoutSource,
+      dailyStreaksWithoutLedger,
       balanceMismatches,
       arithmeticMismatches,
       ledgerCount,
@@ -3297,6 +3298,30 @@ async function handleRequest(request, env, json) {
           )
       `).first(),
       env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(
+          CASE ds.current_day
+            WHEN 1 THEN 1000 WHEN 2 THEN 2000 WHEN 3 THEN 3000
+            WHEN 4 THEN 4000 WHEN 5 THEN 5000 WHEN 6 THEN 6000
+            WHEN 7 THEN 7000 ELSE 0
+          END
+        ), 0) AS total_koinu
+        FROM daily_streaks ds
+        WHERE ds.last_checkin_date IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ledger_transactions lt
+            WHERE lt.uid = ds.uid
+              AND lt.transaction_type = 'daily_streak'
+              AND lt.reference_type = 'daily_streak'
+              AND lt.reference_id = ds.last_checkin_date
+              AND lt.amount_koinu = CASE ds.current_day
+                WHEN 1 THEN 1000 WHEN 2 THEN 2000 WHEN 3 THEN 3000
+                WHEN 4 THEN 4000 WHEN 5 THEN 5000 WHEN 6 THEN 6000
+                WHEN 7 THEN 7000 ELSE 0
+              END
+              AND lt.idempotency_key = 'daily_streak:' || ds.uid || ':' || ds.last_checkin_date
+          )
+      `).first(),
+      env.DB.prepare(`
         SELECT COUNT(*) AS count
         FROM users u
         WHERE EXISTS (
@@ -3397,6 +3422,8 @@ async function handleRequest(request, env, json) {
         wheel_purchases_without_ledger_koinu: Number(wheelPurchasesWithoutLedger?.total_koinu || 0),
         wheel_ledger_without_source_count: Number(wheelLedgerWithoutSource?.count || 0),
         wheel_ledger_without_source_koinu: Number(wheelLedgerWithoutSource?.total_koinu || 0),
+        daily_streaks_without_ledger_count: Number(dailyStreaksWithoutLedger?.count || 0),
+        daily_streaks_without_ledger_koinu: Number(dailyStreaksWithoutLedger?.total_koinu || 0),
         user_balance_mismatches: Number(balanceMismatches?.count || 0),
         arithmetic_mismatches: Number(arithmeticMismatches?.count || 0)
       },
