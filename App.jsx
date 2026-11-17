@@ -361,9 +361,14 @@ const SiteFooter = () => (
       <a href="mailto:support.dogedrip@gmail.com" className="hover:text-[#F4A6C1] transition-colors">
         Support: support.dogedrip@gmail.com
       </a>
-      <a href="/terms.html" className="hover:text-[#F4A6C1] transition-colors">
-        Terms of Service
-      </a>
+      <div className="flex items-center gap-4">
+        <a href="/terms.html" className="hover:text-[#F4A6C1] transition-colors">
+          Terms of Service
+        </a>
+        <a href="/privacy.html" className="hover:text-[#F4A6C1] transition-colors">
+          Privacy Policy
+        </a>
+      </div>
       <span>© {new Date().getFullYear()} DogeDrip. All rights reserved.</span>
     </div>
   </footer>
