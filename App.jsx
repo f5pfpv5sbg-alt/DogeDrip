@@ -2021,7 +2021,7 @@ export default function App() {
       oscillator.frequency.setValueAtTime(1450, now);
       oscillator.frequency.exponentialRampToValueAtTime(620, now + 0.022);
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.075, now + 0.003);
+      gain.gain.exponentialRampToValueAtTime(0.16, now + 0.003);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.028);
       oscillator.connect(gain);
       gain.connect(context.destination);
