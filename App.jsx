@@ -1986,9 +1986,25 @@ export default function App() {
       if (!wheelAudioContextRef.current) {
         wheelAudioContextRef.current = new AudioContextClass();
       }
-      if (wheelAudioContextRef.current.state === 'suspended') {
-        wheelAudioContextRef.current.resume().catch(() => {});
+
+      const context = wheelAudioContextRef.current;
+      // iOS Safari requires audio to be unlocked directly inside the tap handler.
+      if (context.state === 'suspended') {
+        context.resume().catch(() => {});
       }
+
+      // Start a silent source during the user's tap to unlock the audio output.
+      const unlockOscillator = context.createOscillator();
+      const unlockGain = context.createGain();
+      unlockGain.gain.setValueAtTime(0, context.currentTime);
+      unlockOscillator.connect(unlockGain);
+      unlockGain.connect(context.destination);
+      unlockOscillator.start();
+      unlockOscillator.stop(context.currentTime + 0.01);
+      unlockOscillator.onended = () => {
+        unlockOscillator.disconnect();
+        unlockGain.disconnect();
+      };
     } catch {
       // Audio is an enhancement; spinning must still work if audio is unavailable.
     }
@@ -2020,8 +2036,20 @@ export default function App() {
     }
   };
 
-  const startWheelTickSound = () => {
+  const startWheelTickSound = async () => {
     stopWheelTickSound();
+    const context = wheelAudioContextRef.current;
+    if (!context) return;
+
+    try {
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+      if (context.state !== 'running') return;
+    } catch {
+      return;
+    }
+
     wheelSoundStartedAtRef.current = Date.now();
 
     const scheduleTick = () => {
