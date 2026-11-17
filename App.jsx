@@ -608,6 +608,9 @@ export default function App() {
   const [buyingPackId, setBuyingPackId] = useState(null);
   const spinInFlightRef = useRef(false);
   const spinTimerRef = useRef(null);
+  const wheelAudioContextRef = useRef(null);
+  const wheelTickTimerRef = useRef(null);
+  const wheelSoundStartedAtRef = useRef(0);
   const wheelRotationRef = useRef(0);
   const wheelSpinRequestIdRef = useRef(null);
   const wheelBuyRequestRef = useRef(null);
@@ -1969,8 +1972,78 @@ export default function App() {
     }
   };
 
+  const stopWheelTickSound = () => {
+    if (wheelTickTimerRef.current !== null) {
+      window.clearTimeout(wheelTickTimerRef.current);
+      wheelTickTimerRef.current = null;
+    }
+  };
+
+  const prepareWheelAudio = () => {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      if (!wheelAudioContextRef.current) {
+        wheelAudioContextRef.current = new AudioContextClass();
+      }
+      if (wheelAudioContextRef.current.state === 'suspended') {
+        wheelAudioContextRef.current.resume().catch(() => {});
+      }
+    } catch {
+      // Audio is an enhancement; spinning must still work if audio is unavailable.
+    }
+  };
+
+  const playWheelTick = () => {
+    const context = wheelAudioContextRef.current;
+    if (!context || context.state !== 'running') return;
+    try {
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'square';
+      oscillator.frequency.setValueAtTime(1450, now);
+      oscillator.frequency.exponentialRampToValueAtTime(620, now + 0.022);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.075, now + 0.003);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.028);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.03);
+      oscillator.onended = () => {
+        oscillator.disconnect();
+        gain.disconnect();
+      };
+    } catch {
+      // Ignore audio-device errors without interrupting the wheel.
+    }
+  };
+
+  const startWheelTickSound = () => {
+    stopWheelTickSound();
+    wheelSoundStartedAtRef.current = Date.now();
+
+    const scheduleTick = () => {
+      const elapsed = Date.now() - wheelSoundStartedAtRef.current;
+      if (elapsed >= WHEEL_SPIN_MS) {
+        stopWheelTickSound();
+        return;
+      }
+
+      playWheelTick();
+      const progress = Math.min(1, elapsed / WHEEL_SPIN_MS);
+      const easedProgress = progress * progress;
+      const nextDelay = 55 + easedProgress * 245;
+      wheelTickTimerRef.current = window.setTimeout(scheduleTick, nextDelay);
+    };
+
+    scheduleTick();
+  };
+
   const handleWheelSpin = async () => {
     if (spinInFlightRef.current || isSpinning) return;
+    prepareWheelAudio();
     if (!securityTokens.wheel_spin) {
       setWheelMsgIsError(true);
       setWheelMsg('Complete the Cloudflare security check before spinning.');
@@ -2022,6 +2095,7 @@ export default function App() {
         setWheelMsg(error.message || 'Could not spin the wheel.');
       }
 
+      stopWheelTickSound();
       spinInFlightRef.current = false;
       setIsSpinning(false);
       return;
@@ -2044,6 +2118,7 @@ export default function App() {
     const finish = async () => {
       if (spinSession !== authEventRef.current) return;
 
+      stopWheelTickSound();
       setWheelAnimating(false);
       setWheelResult({
         prize,
@@ -2079,6 +2154,7 @@ export default function App() {
     wheelRotationRef.current = nextRotation;
     setWheelAnimating(true);
     setWheelRotation(nextRotation);
+    startWheelTickSound();
 
     if (spinTimerRef.current) {
       clearTimeout(spinTimerRef.current);
