@@ -365,6 +365,9 @@ const SiteFooter = () => (
         Support: support.dogedrip@gmail.com
       </a>
       <div className="flex items-center gap-4">
+        <a href="/advertise.html" className="hover:text-[#F4A6C1] transition-colors">
+          Advertise With Us
+        </a>
         <a href="/terms.html" className="hover:text-[#F4A6C1] transition-colors">
           Terms of Service
         </a>
