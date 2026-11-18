@@ -4297,7 +4297,12 @@ async function handleRequest(request, env, json) {
       wheelReserve,
       referralReserve,
       paidWheelSpins,
-      maxActiveWheelPrize
+      maxActiveWheelPrize,
+      ptcPendingRewards,
+      ptcSettlementsWithoutLedger,
+      ptcSettlementMismatches,
+      ptcSettledViews,
+      ptcReserve
     ] = await Promise.all([
       env.DB.prepare(`
         SELECT COALESCE(SUM(balance_koinu), 0) AS total, COUNT(*) AS users_count
@@ -4531,7 +4536,41 @@ async function handleRequest(request, env, json) {
         SELECT COALESCE(MAX(amount_koinu), 0) AS amount
         FROM wheel_prizes
         WHERE probability_weight > 0
-      `).first()
+      `).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(v.reward_koinu), 0) AS total_koinu, COUNT(*) AS views_count
+        FROM ptc_views v
+        WHERE v.status = 'completed'
+          AND NOT EXISTS (
+            SELECT 1 FROM ptc_settlement_items si WHERE si.view_id = v.id
+          )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(ps.amount_koinu), 0) AS total_koinu
+        FROM ptc_settlements ps
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ledger_transactions lt
+          WHERE lt.uid = ps.uid
+            AND lt.transaction_type = 'ptc_reward'
+            AND lt.reference_type = 'ptc_settlement'
+            AND lt.reference_id = ps.id
+            AND lt.amount_koinu = ps.amount_koinu
+            AND lt.idempotency_key = ps.idempotency_key
+        )
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(ps.amount_koinu), 0) AS total_koinu
+        FROM ptc_settlements ps
+        WHERE ps.amount_koinu != (
+          SELECT COALESCE(SUM(si.amount_koinu), 0)
+          FROM ptc_settlement_items si WHERE si.settlement_id = ps.id
+        )
+        OR ps.views_count != (
+          SELECT COUNT(*) FROM ptc_settlement_items si WHERE si.settlement_id = ps.id
+        )
+      `).first(),
+      env.DB.prepare("SELECT COUNT(*) AS count FROM ptc_settlement_items").first(),
+      env.DB.prepare("SELECT available_koinu, locked_koinu, pending_koinu FROM ptc_reserve WHERE id = 1").first()
     ]);
 
     const withdrawalsByStatus = Object.create(null);
@@ -4602,6 +4641,18 @@ async function handleRequest(request, env, json) {
         payment_unknown_count: Number(paymentUnknownWithdrawals?.count || 0),
         payment_unknown_koinu: Number(paymentUnknownWithdrawals?.total_koinu || 0),
         duplicate_payout_id_groups: Number(duplicatePayoutIds?.count || 0)
+      },
+      ptc_rewards: {
+        pending_unsettled_koinu: Number(ptcPendingRewards?.total_koinu || 0),
+        pending_unsettled_views: Number(ptcPendingRewards?.views_count || 0),
+        reserve_pending_koinu: Number(ptcReserve?.pending_koinu || 0),
+        pending_reserve_matches_views:
+          Number(ptcReserve?.pending_koinu || 0) === Number(ptcPendingRewards?.total_koinu || 0),
+        settled_views: Number(ptcSettledViews?.count || 0),
+        settlements_without_ledger_count: Number(ptcSettlementsWithoutLedger?.count || 0),
+        settlements_without_ledger_koinu: Number(ptcSettlementsWithoutLedger?.total_koinu || 0),
+        settlement_item_mismatches: Number(ptcSettlementMismatches?.count || 0),
+        settlement_item_mismatch_koinu: Number(ptcSettlementMismatches?.total_koinu || 0)
       },
       reserves: {
         faucet_available_koinu: Number(faucetReserve?.available_koinu || 0),
