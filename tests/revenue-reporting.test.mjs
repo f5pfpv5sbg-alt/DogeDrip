@@ -50,10 +50,10 @@ test("admin UI labels manual advertising values as unverified and subscription r
 
 test("PTC advertiser funding is reported separately from reserve liabilities and is not labeled profit", () => {
   const stats = section(worker, "async function getAdminDailyStats(env)", "function validatePublicHttpUrl(");
-  assert.match(stats, /FROM ptc_funding_events[\\s\\S]*date\\(created_at\\) = \\?/);
+  assert.match(stats, /FROM ptc_funding_events[\s\S]*date\(created_at\) = \?/);
   assert.match(stats, /ptc_advertiser_funding_today_koinu/);
   assert.match(stats, /ptc_funding_verification_status: "admin_confirmed_external_reference"/);
-  assert.match(stats, /ptc_reserve:[\\s\\S]*available_koinu:[\\s\\S]*locked_koinu:[\\s\\S]*pending_koinu:/);
+  assert.match(stats, /ptc_reserve:[\s\S]*available_koinu:[\s\S]*locked_koinu:[\s\S]*pending_koinu:/);
   assert.match(stats, /profit_koinu: null/);
   assert.match(app, /PTC Advertiser Funding Today/);
   assert.match(app, /PTC Reserve \/ Pending Rewards/);
