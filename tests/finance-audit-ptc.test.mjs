@@ -35,4 +35,7 @@ test("admin finance audit displays PTC reserve and settlement integrity statuses
   assert.ok(app.includes("PTC Reserve Match"));
   assert.ok(app.includes("PTC Settlements Missing Ledger"));
   assert.ok(app.includes("PTC Settlement Mismatches"));
+  assert.ok(app.includes("faucetPayCoverageDifferenceDoge"));
+  assert.ok(app.includes("Recorded liabilities and earmarked reserves"));
+  assert.ok(app.includes("This is a snapshot comparison, not profit"));
 });
