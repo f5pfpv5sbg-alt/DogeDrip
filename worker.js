@@ -4041,6 +4041,7 @@ async function handleRequest(request, env, json) {
     throw new HttpError(400, "Unsupported advertising request status.");
   }
 
+  // Historical report is UTC-scoped and excludes unverified revenue and unverified expenses.
   // ADMIN: HISTORICAL FINANCIAL REPORT
   if (path === "/api/admin/finance/report" && method === "GET") {
     const user = await authenticate(request);
