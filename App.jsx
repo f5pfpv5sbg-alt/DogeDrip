@@ -2798,7 +2798,9 @@ export default function App() {
     setPtcAds(Array.isArray(adsData.ads) ? adsData.ads : []);
     setPtcHistory(Array.isArray(historyData.history) ? historyData.history : []);
     setPtcPendingReward(Number(historyData.pending_reward_koinu || 0));
+    setPtcSettledReward(Number(historyData.settled_reward_koinu || 0));
     setPtcCompletedViews(Number(historyData.completed_views || 0));
+    setPtcSettledViews(Number(historyData.settled_views || 0));
   };
 
   const handlePtcStart = async (campaign) => {
