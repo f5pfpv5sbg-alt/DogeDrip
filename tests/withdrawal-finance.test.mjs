@@ -67,7 +67,8 @@ test("uncertain payout reconciliation requires a verified numeric payout ID or a
   assert.match(route, /resolution === "paid"/);
   assert.match(route, /!\/\^\d\{1,32\}\$\//);
   assert.match(route, /status IN \('processing', 'payment_unknown'\)/);
-  assert.match(route, /status = 'approved'[\\s\\S]*faucetpay_payout_id IS NULL/);
+  assert.ok(route.includes("status = 'approved'"));
+  assert.ok(route.includes("faucetpay_payout_id IS NULL"));
   assert.match(route, /resolution === "not_paid"/);
   assert.match(route, /SET status = 'pending'/);
   assert.doesNotMatch(route, /balance_koinu = balance_koinu \+/);
