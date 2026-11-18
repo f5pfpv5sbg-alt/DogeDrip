@@ -669,6 +669,17 @@ export default function App() {
   const [financeAuditError, setFinanceAuditError] = useState('');
   const [myAdRequests, setMyAdRequests] = useState([]);
   const [adminAdRequests, setAdminAdRequests] = useState([]);
+  const [adminPtcData, setAdminPtcData] = useState(null);
+  const [ptcAdminLoading, setPtcAdminLoading] = useState(false);
+  const [ptcFundingForm, setPtcFundingForm] = useState({
+    amount_doge: '', external_reference: '', notes: '', externally_verified: false
+  });
+  const [ptcCampaignForm, setPtcCampaignForm] = useState({
+    title: '', description: '', advertiser_name: '', target_url: '',
+    reward_doge: '0.0001', duration_seconds: '15', max_views: '100',
+    total_budget_doge: '0.01', advertiser_payment_reference: '', payment_verified: false
+  });
+
   const [adPlacements, setAdPlacements] = useState({ top: null, bottom: null });
   const [adSubmitting, setAdSubmitting] = useState(false);
   const [adMessage, setAdMessage] = useState('');
@@ -1249,6 +1260,17 @@ export default function App() {
 
     return () => { cancelled = true; };
   }, [firebaseUser, apiReady, apiRequest]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'admin') return undefined;
+    let cancelled = false;
+    setPtcAdminLoading(true);
+    apiRequest('/api/admin/ptc')
+      .then(data => { if (!cancelled) setAdminPtcData(data); })
+      .catch(error => { if (!cancelled) setAdminError(error.message || 'Could not load PTC administration.'); })
+      .finally(() => { if (!cancelled) setPtcAdminLoading(false); });
+    return () => { cancelled = true; };
+  }, [firebaseUser, apiReady, isDemoAdmin, activeTab, apiRequest]);
 
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin) {
@@ -2549,6 +2571,108 @@ export default function App() {
       setAdMessageIsError(true);
     } finally {
       setAdActionLoading(null);
+    }
+  };
+
+  const refreshAdminPtc = async () => {
+    setPtcAdminLoading(true);
+    try {
+      const data = await apiRequest('/api/admin/ptc');
+      setAdminPtcData(data);
+    } catch (error) {
+      setAdminError(error.message || 'Could not refresh PTC administration.');
+    } finally {
+      setPtcAdminLoading(false);
+    }
+  };
+
+  const handlePtcReserveFunding = async (event) => {
+    event.preventDefault();
+    if (!isDemoAdmin || ptcAdminLoading) return;
+    const amount = Math.round(Number(ptcFundingForm.amount_doge) * KOINU);
+    if (!Number.isSafeInteger(amount) || amount < 1 || !ptcFundingForm.external_reference.trim() || !ptcFundingForm.externally_verified) {
+      setAdminError('Enter a valid DOGE amount, transaction reference, and confirm external verification.');
+      return;
+    }
+    setPtcAdminLoading(true);
+    setAdminError('');
+    try {
+      await apiRequest('/api/admin/ptc/fund', {
+        method: 'POST',
+        body: JSON.stringify({
+          amount_koinu: amount,
+          external_reference: ptcFundingForm.external_reference.trim(),
+          notes: ptcFundingForm.notes.trim(),
+          externally_verified: true
+        })
+      });
+      setPtcFundingForm({ amount_doge: '', external_reference: '', notes: '', externally_verified: false });
+      await refreshAdminPtc();
+    } catch (error) {
+      setAdminError(error.message || 'PTC reserve funding failed.');
+    } finally {
+      setPtcAdminLoading(false);
+    }
+  };
+
+  const handlePtcCampaignCreate = async (event) => {
+    event.preventDefault();
+    if (!isDemoAdmin || ptcAdminLoading) return;
+    const reward = Math.round(Number(ptcCampaignForm.reward_doge) * KOINU);
+    const budget = Math.round(Number(ptcCampaignForm.total_budget_doge) * KOINU);
+    const duration = Number(ptcCampaignForm.duration_seconds);
+    const maxViews = Number(ptcCampaignForm.max_views);
+    if (!Number.isSafeInteger(reward) || !Number.isSafeInteger(budget) ||
+        !Number.isSafeInteger(duration) || !Number.isSafeInteger(maxViews) ||
+        !ptcCampaignForm.payment_verified) {
+      setAdminError('Check campaign reward, budget, limits, and advertiser payment verification.');
+      return;
+    }
+    setPtcAdminLoading(true);
+    setAdminError('');
+    try {
+      await apiRequest('/api/admin/ptc/campaigns', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: ptcCampaignForm.title.trim(),
+          description: ptcCampaignForm.description.trim(),
+          advertiser_name: ptcCampaignForm.advertiser_name.trim(),
+          target_url: ptcCampaignForm.target_url.trim(),
+          reward_koinu: reward,
+          duration_seconds: duration,
+          max_views: maxViews,
+          total_budget_koinu: budget,
+          advertiser_payment_reference: ptcCampaignForm.advertiser_payment_reference.trim(),
+          payment_verified: true
+        })
+      });
+      setPtcCampaignForm({
+        title: '', description: '', advertiser_name: '', target_url: '',
+        reward_doge: '0.0001', duration_seconds: '15', max_views: '100',
+        total_budget_doge: '0.01', advertiser_payment_reference: '', payment_verified: false
+      });
+      await refreshAdminPtc();
+    } catch (error) {
+      setAdminError(error.message || 'Could not create PTC campaign.');
+    } finally {
+      setPtcAdminLoading(false);
+    }
+  };
+
+  const handleAdminPtcStatus = async (campaignId, status) => {
+    if (!isDemoAdmin || ptcAdminLoading) return;
+    setPtcAdminLoading(true);
+    setAdminError('');
+    try {
+      await apiRequest('/api/admin/ptc/campaigns/' + encodeURIComponent(campaignId), {
+        method: 'PUT',
+        body: JSON.stringify({ status })
+      });
+      await refreshAdminPtc();
+    } catch (error) {
+      setAdminError(error.message || 'Could not update PTC campaign.');
+    } finally {
+      setPtcAdminLoading(false);
     }
   };
 
@@ -4966,6 +5090,82 @@ export default function App() {
                   Manage withdrawals, advertising requests, and daily platform statistics.
                 </p>
               </div>
+
+              <section className="border border-[#F4A6C1]/30 rounded-2xl p-4 md:p-5 space-y-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-[#F4A6C1]">PTC Ads Management</h3>
+                    <p className="text-xs text-slate-500 mt-1">Create paid campaigns and manage the separately funded PTC DOGE reserve.</p>
+                  </div>
+                  <button type="button" onClick={refreshAdminPtc} disabled={ptcAdminLoading} className="px-3 py-2 rounded-lg border border-[#F4A6C1]/30 text-[#F4A6C1] text-xs font-bold">Refresh</button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <StatTile label="Available" value={formatDoge(adminPtcData?.reserve?.available_koinu || 0) + ' DOGE'} />
+                  <StatTile label="Locked" value={formatDoge(adminPtcData?.reserve?.locked_koinu || 0) + ' DOGE'} />
+                  <StatTile label="Pending Rewards" value={formatDoge(adminPtcData?.reserve?.pending_koinu || 0) + ' DOGE'} />
+                </div>
+
+                <form onSubmit={handlePtcReserveFunding} className="rounded-xl border border-slate-800 p-4 space-y-3">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-300">Fund PTC reserve</h4>
+                  <p className="text-[11px] text-slate-500">Only record DOGE already received and checked in the external wallet/provider. This does not send or withdraw coins.</p>
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <input type="number" min="0.00000001" step="0.00000001" value={ptcFundingForm.amount_doge} onChange={e => setPtcFundingForm(v => ({ ...v, amount_doge: e.target.value }))} className={INPUT_CLS} placeholder="Received DOGE amount" required />
+                    <input value={ptcFundingForm.external_reference} onChange={e => setPtcFundingForm(v => ({ ...v, external_reference: e.target.value }))} className={INPUT_CLS} placeholder="Verified transaction reference" required maxLength={120} />
+                  </div>
+                  <input value={ptcFundingForm.notes} onChange={e => setPtcFundingForm(v => ({ ...v, notes: e.target.value }))} className={INPUT_CLS} placeholder="Notes (optional)" maxLength={300} />
+                  <label className="flex items-start gap-2 text-xs text-slate-400">
+                    <input type="checkbox" checked={ptcFundingForm.externally_verified} onChange={e => setPtcFundingForm(v => ({ ...v, externally_verified: e.target.checked }))} required />
+                    I personally verified that this DOGE transaction was received.
+                  </label>
+                  <button type="submit" disabled={ptcAdminLoading} className="px-4 py-3 rounded-xl bg-[#F4A6C1] text-black text-xs font-black disabled:opacity-50">Record Verified DOGE Funding</button>
+                </form>
+
+                <form onSubmit={handlePtcCampaignCreate} className="rounded-xl border border-slate-800 p-4 space-y-3">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-300">Create advertiser campaign</h4>
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <input value={ptcCampaignForm.title} onChange={e => setPtcCampaignForm(v => ({ ...v, title: e.target.value }))} className={INPUT_CLS} placeholder="Campaign title" required maxLength={80} />
+                    <input value={ptcCampaignForm.advertiser_name} onChange={e => setPtcCampaignForm(v => ({ ...v, advertiser_name: e.target.value }))} className={INPUT_CLS} placeholder="Advertiser / project name" required maxLength={80} />
+                  </div>
+                  <textarea value={ptcCampaignForm.description} onChange={e => setPtcCampaignForm(v => ({ ...v, description: e.target.value }))} className={INPUT_CLS} placeholder="Campaign description (10-500 characters)" required minLength={10} maxLength={500} rows={3} />
+                  <input type="url" value={ptcCampaignForm.target_url} onChange={e => setPtcCampaignForm(v => ({ ...v, target_url: e.target.value }))} className={INPUT_CLS} placeholder="https://advertiser-website.com" required />
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <label className="text-[10px] text-slate-500">Reward (DOGE)<input type="number" min="0.00000001" step="0.00000001" value={ptcCampaignForm.reward_doge} onChange={e => setPtcCampaignForm(v => ({ ...v, reward_doge: e.target.value }))} className={INPUT_CLS} required /></label>
+                    <label className="text-[10px] text-slate-500">Seconds<input type="number" min="10" max="180" step="1" value={ptcCampaignForm.duration_seconds} onChange={e => setPtcCampaignForm(v => ({ ...v, duration_seconds: e.target.value }))} className={INPUT_CLS} required /></label>
+                    <label className="text-[10px] text-slate-500">Max views<input type="number" min="1" max="10000000" step="1" value={ptcCampaignForm.max_views} onChange={e => setPtcCampaignForm(v => ({ ...v, max_views: e.target.value }))} className={INPUT_CLS} required /></label>
+                    <label className="text-[10px] text-slate-500">Budget (DOGE)<input type="number" min="0.00000001" step="0.00000001" value={ptcCampaignForm.total_budget_doge} onChange={e => setPtcCampaignForm(v => ({ ...v, total_budget_doge: e.target.value }))} className={INPUT_CLS} required /></label>
+                  </div>
+                  <input value={ptcCampaignForm.advertiser_payment_reference} onChange={e => setPtcCampaignForm(v => ({ ...v, advertiser_payment_reference: e.target.value }))} className={INPUT_CLS} placeholder="Advertiser's verified payment reference" required maxLength={120} />
+                  <label className="flex items-start gap-2 text-xs text-slate-400">
+                    <input type="checkbox" checked={ptcCampaignForm.payment_verified} onChange={e => setPtcCampaignForm(v => ({ ...v, payment_verified: e.target.checked }))} required />
+                    Advertiser payment has been independently verified before campaign creation.
+                  </label>
+                  <button type="submit" disabled={ptcAdminLoading} className="px-4 py-3 rounded-xl bg-[#F4A6C1] text-black text-xs font-black disabled:opacity-50">Create PTC Campaign</button>
+                </form>
+
+                <div className="space-y-3">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-300">Campaigns</h4>
+                  {!adminPtcData?.campaigns?.length ? (
+                    <p className="text-xs text-slate-500">No PTC campaigns created yet.</p>
+                  ) : adminPtcData.campaigns.map(campaign => (
+                    <div key={campaign.id} className="rounded-xl border border-slate-800 p-3 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <strong className="text-sm text-white">{campaign.title}</strong>
+                        <span className="text-[10px] uppercase font-black text-[#F4A6C1]">{campaign.status.replaceAll('_', ' ')}</span>
+                      </div>
+                      <p className="text-xs text-slate-400">{campaign.advertiser_name} · {campaign.duration_seconds}s · {formatDoge(campaign.reward_koinu)} DOGE/view</p>
+                      <p className="text-[10px] text-slate-500">{campaign.views_completed}/{campaign.max_views} views · {formatDoge(campaign.remaining_budget_koinu)} DOGE remaining</p>
+                      <div className="flex flex-wrap gap-2">
+                        {campaign.status === 'pending_review' && <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcStatus(campaign.id, 'active')} className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">Activate (lock reserve)</button>}
+                        {campaign.status === 'active' && <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcStatus(campaign.id, 'paused')} className="px-3 py-2 rounded-lg border border-yellow-500/30 text-yellow-400 text-xs font-bold">Pause</button>}
+                        {campaign.status === 'paused' && campaign.remaining_budget_koinu > 0 && <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcStatus(campaign.id, 'active')} className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold">Resume</button>}
+                        {['active', 'paused'].includes(campaign.status) && <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcStatus(campaign.id, 'completed')} className="px-3 py-2 rounded-lg border border-slate-700 text-slate-300 text-xs font-bold">Close & release unused budget</button>}
+                        {campaign.status === 'pending_review' && <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcStatus(campaign.id, 'rejected')} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-400 text-xs font-bold">Reject</button>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
 
               <section className="border border-slate-800 rounded-2xl p-4 md:p-5 space-y-4">
                 <div className="flex items-center justify-between gap-3">
