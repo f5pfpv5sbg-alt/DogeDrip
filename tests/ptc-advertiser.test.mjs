@@ -51,6 +51,13 @@ test("advertiser payment references cannot be reused to fund multiple campaigns"
   assert.match(worker.slice(start, end), /This payment reference has already been used/);
 });
 
+test("PTC advertiser creation and payment submissions use dedicated rate limits", () => {
+  assert.match(worker, /ptcAdvertiserCreate: \{ limit: 3, windowSeconds: 86400 \}/);
+  assert.match(worker, /ptcAdvertiserPayment: \{ limit: 5, windowSeconds: 86400 \}/);
+  assert.match(worker, /"ptc_advertiser_create", RATE_LIMIT_POLICIES\.ptcAdvertiserCreate/);
+  assert.match(worker, /"ptc_advertiser_payment", RATE_LIMIT_POLICIES\.ptcAdvertiserPayment/);
+});
+
 test("advertiser campaign form validates campaign details and budget limits before API submission", () => {
   const start = app.indexOf("const handlePtcAdvertiserSubmit");
   const end = app.indexOf("const handlePtcAdvertiserPayment", start);
