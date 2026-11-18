@@ -307,6 +307,8 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   subscriptionCreate: { limit: 5, windowSeconds: 3600 },
   adCreate: { limit: 3, windowSeconds: 86400 },
   adPaymentReference: { limit: 5, windowSeconds: 86400 },
+  ptcAdvertiserCreate: { limit: 3, windowSeconds: 86400 },
+  ptcAdvertiserPayment: { limit: 5, windowSeconds: 86400 },
   adminRead: { limit: 60, windowSeconds: 60 },
   adminReject: { limit: 10, windowSeconds: 60 },
   adminApprove: { limit: 5, windowSeconds: 60 },
@@ -3891,7 +3893,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/ptc/advertiser/requests" && method === "POST") {
     const user = await authenticate(request);
-    await enforceRateLimit(env, `uid:${user.sub}`, "ad_create", RATE_LIMIT_POLICIES.adCreate);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_advertiser_create", RATE_LIMIT_POLICIES.ptcAdvertiserCreate);
     const account = await env.DB.prepare(
       "SELECT uid, email, email_verified FROM users WHERE uid = ?"
     ).bind(user.sub).first();
@@ -3933,7 +3935,7 @@ async function handleRequest(request, env, json) {
   const advertiserPaymentMatch = path.match(/^\/api\/ptc\/advertiser\/requests\/(\d+)\/payment$/);
   if (advertiserPaymentMatch && method === "POST") {
     const user = await authenticate(request);
-    await enforceRateLimit(env, `uid:${user.sub}`, "ad_payment_reference", RATE_LIMIT_POLICIES.adPaymentReference);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_advertiser_payment", RATE_LIMIT_POLICIES.ptcAdvertiserPayment);
     const id = Number(advertiserPaymentMatch[1]);
     const body = await readJson(request);
     const reference = typeof body.payment_reference === "string" ? body.payment_reference.trim() : "";
