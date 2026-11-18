@@ -5478,6 +5478,13 @@ export default function App() {
                         <StatTile label="Payment Unknown" value={financeAudit.withdrawals.payment_unknown_count} sub={`${formatDoge(financeAudit.withdrawals.payment_unknown_koinu)} DOGE · check FaucetPay`} valueCls={financeAudit.withdrawals.payment_unknown_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
                         <StatTile label="Duplicate Payout IDs" value={financeAudit.withdrawals.duplicate_payout_id_groups} sub="Must always remain zero" valueCls={financeAudit.withdrawals.duplicate_payout_id_groups > 0 ? 'text-red-400' : 'text-emerald-400'} />
                       </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <StatTile label="PTC Pending Rewards" value={`${formatDoge(financeAudit.ptc_rewards.pending_unsettled_koinu)} DOGE`} sub={`${financeAudit.ptc_rewards.pending_unsettled_views} views awaiting settlement`} />
+                        <StatTile label="PTC Reserve Match" value={financeAudit.ptc_rewards.pending_reserve_matches_views ? 'MATCH' : 'MISMATCH'} sub={`${formatDoge(financeAudit.ptc_rewards.reserve_pending_koinu)} DOGE pending reserve`} valueCls={financeAudit.ptc_rewards.pending_reserve_matches_views ? 'text-emerald-400' : 'text-red-400'} />
+                        <StatTile label="PTC Settled Views" value={financeAudit.ptc_rewards.settled_views} sub="Credited to user balances" />
+                        <StatTile label="PTC Settlements Missing Ledger" value={financeAudit.ptc_rewards.settlements_without_ledger_count} sub={`${formatDoge(financeAudit.ptc_rewards.settlements_without_ledger_koinu)} DOGE unmatched`} valueCls={financeAudit.ptc_rewards.settlements_without_ledger_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                        <StatTile label="PTC Settlement Mismatches" value={financeAudit.ptc_rewards.settlement_item_mismatches} sub={`${formatDoge(financeAudit.ptc_rewards.settlement_item_mismatch_koinu)} DOGE inconsistent`} valueCls={financeAudit.ptc_rewards.settlement_item_mismatches > 0 ? 'text-red-400' : 'text-emerald-400'} />
+                      </div>
                       <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
                         <p className="text-xs font-bold text-yellow-300">External reserve funding: NOT VERIFIED</p>
                         <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
