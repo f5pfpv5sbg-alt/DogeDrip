@@ -37,7 +37,7 @@ test("subscription cards only advertise implemented plan limits and rewards", ()
 
   for (const [name, plan] of Object.entries(plans)) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const workerBlock = worker.match(new RegExp(escaped + String.raw`:\\s*\\{([\\s\\S]*?)\\n  \\}`));
+    const workerBlock = worker.match(new RegExp(escaped + ":\\s*\\{([\\s\\S]*?)\\n  \\}"));
     assert.ok(workerBlock, `missing Worker plan config: ${name}`);
     assert.match(workerBlock[1], new RegExp(`amount_koinu: ${plan.amount}\\b`));
     assert.match(workerBlock[1], new RegExp(`cooldown_seconds: ${plan.cooldown}\\b`));
