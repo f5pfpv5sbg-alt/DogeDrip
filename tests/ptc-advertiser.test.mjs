@@ -22,7 +22,7 @@ test("advertisers can only read their own requests and submit valid campaign det
   assert.ok(start >= 0 && end > start);
   const routes = worker.slice(start, end);
   assert.match(routes, /authenticate\(request\)/);
-  assert.match(routes, /WHERE advertiser_uid = \?/);
+  assert.match(routes, /WHERE r\.advertiser_uid = \?/);
   assert.match(routes, /email_verified/);
   assert.match(routes, /validatePublicHttpUrl\(body\.target_url/);
   assert.match(routes, /duration < 10 \|\| duration > 180/);
