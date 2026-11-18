@@ -68,6 +68,7 @@ test("uncertain payout reconciliation requires a verified numeric payout ID or a
   assert.ok(route.includes("!/^\\d{1,32}$/.test(payoutId)"));
   assert.match(route, /status IN \('processing', 'payment_unknown'\)/);
   assert.ok(route.includes("status = 'approved'"));
+  assert.ok(route.includes("status IN ('approved', 'paid')"));
   assert.ok(route.includes("faucetpay_payout_id IS NULL"));
   assert.match(route, /resolution === "not_paid"/);
   assert.match(route, /SET status = 'pending'/);
@@ -79,6 +80,7 @@ test("admin can reconcile legacy approved withdrawals without payout IDs and sta
   assert.match(app, /w\.status === 'approved' && !w\.faucetpayPayoutId/);
   assert.match(app, /w\.status === 'processing' && w\.timestamp !== null && Date\.now\(\) - w\.timestamp > 15 \* 60 \* 1000/);
   assert.match(app, /Legacy approval has no payout ID/);
+  assert.match(app, /Legacy paid record has no payout ID/);
   assert.match(app, /Processing for over 15 minutes/);
   assert.match(app, /handleAdminReconcile\(w\.id, 'paid'\)/);
   assert.match(app, /handleAdminReconcile\(w\.id, 'not_paid'\)/);
