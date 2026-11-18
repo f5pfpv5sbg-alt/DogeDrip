@@ -701,6 +701,8 @@ export default function App() {
     reward_doge: '0.0001', duration_seconds: '15', max_views: '100',
     total_budget_doge: '0.01', advertiser_payment_reference: '', payment_verified: false
   });
+  const [adminPtcAdvertiserRequests, setAdminPtcAdvertiserRequests] = useState([]);
+  const [adminPtcQuoteInputs, setAdminPtcQuoteInputs] = useState({});
   const [ptcAdvertiserRequests, setPtcAdvertiserRequests] = useState([]);
   const [ptcAdvertiserForm, setPtcAdvertiserForm] = useState({
     title: '', description: '', advertiser_name: '', target_url: '',
@@ -2730,11 +2732,55 @@ export default function App() {
     }
   };
 
+  const refreshAdminPtcAdvertiserRequests = async () => {
+    const data = await apiRequest('/api/admin/ptc/advertiser-requests');
+    setAdminPtcAdvertiserRequests(Array.isArray(data.requests) ? data.requests : []);
+  };
+
+  const handleAdminPtcAdvertiserRequest = async (request, action) => {
+    if (!isDemoAdmin || ptcAdminLoading) return;
+    const payload = { status: action };
+    if (action === 'awaiting_payment') {
+      const quote = Math.round(Number(adminPtcQuoteInputs[request.id]) * KOINU);
+      if (!Number.isSafeInteger(quote) || quote < 1) {
+        setAdminError('Enter a valid campaign quote in DOGE.');
+        return;
+      }
+      payload.quoted_budget_koinu = quote;
+      payload.admin_note = 'Quote issued by DogeDrip. Payment instructions will be provided separately.';
+    }
+    if (action === 'approve') {
+      if (!request.payment_reference || !window.confirm('Confirm that you independently verified this advertiser payment. The campaign will be created as pending review and will not go live until its reserve is locked.')) return;
+      payload.payment_reference = request.payment_reference;
+      payload.payment_verified = true;
+    }
+    if (action === 'rejected') {
+      payload.admin_note = 'Campaign request rejected by DogeDrip.';
+    }
+    setPtcAdminLoading(true);
+    setAdminError('');
+    try {
+      await apiRequest(`/api/admin/ptc/advertiser-requests/${encodeURIComponent(request.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      await Promise.all([refreshAdminPtcAdvertiserRequests(), refreshAdminPtc()]);
+    } catch (error) {
+      setAdminError(error.message || 'Could not process advertiser campaign request.');
+    } finally {
+      setPtcAdminLoading(false);
+    }
+  };
+
   const refreshAdminPtc = async () => {
     setPtcAdminLoading(true);
     try {
-      const data = await apiRequest('/api/admin/ptc');
+      const [data, advertiserData] = await Promise.all([
+        apiRequest('/api/admin/ptc'),
+        apiRequest('/api/admin/ptc/advertiser-requests')
+      ]);
       setAdminPtcData(data);
+      setAdminPtcAdvertiserRequests(Array.isArray(advertiserData.requests) ? advertiserData.requests : []);
     } catch (error) {
       setAdminError(error.message || 'Could not refresh PTC administration.');
     } finally {
@@ -5483,6 +5529,43 @@ export default function App() {
                       </div>
                     );
                   })}
+                </div>
+
+                <div className="rounded-xl border border-slate-800 p-4 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-300">Advertiser PTC Requests</h4>
+                    <p className="text-[11px] text-slate-500 mt-1">Review advertiser submissions, send a DOGE quote, and verify payment before creating a campaign.</p>
+                  </div>
+                  {!adminPtcAdvertiserRequests.length ? (
+                    <p className="text-xs text-slate-500">No advertiser PTC requests waiting.</p>
+                  ) : adminPtcAdvertiserRequests.map(request => (
+                    <div key={request.id} className="rounded-lg border border-slate-800 p-3 space-y-2">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <strong className="text-sm text-white">{request.title}</strong>
+                        <span className="text-[10px] uppercase font-black text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
+                      </div>
+                      <p className="text-xs text-slate-400">{request.advertiser_name} · {request.account_email || request.advertiser_email}</p>
+                      <a href={request.target_url} target="_blank" rel="noopener noreferrer nofollow" className="text-xs text-[#F4A6C1] break-all">{request.target_url}</a>
+                      <p className="text-[11px] text-slate-500">{request.duration_seconds}s · {request.max_views} views · {formatDoge(request.reward_koinu)} DOGE/view · Requested {formatDoge(request.requested_budget_koinu)} DOGE</p>
+                      {request.status === 'pending_review' && (
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input type="number" min="0.00000001" step="0.00000001" value={adminPtcQuoteInputs[request.id] || formatDoge(request.requested_budget_koinu)} onChange={e => setAdminPtcQuoteInputs(v => ({ ...v, [request.id]: e.target.value }))} className={INPUT_CLS} placeholder="Quoted budget (DOGE)" />
+                          <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcAdvertiserRequest(request, 'awaiting_payment')} className="px-3 py-2 rounded-lg bg-[#F4A6C1] text-black text-xs font-black">Send quote</button>
+                          <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcAdvertiserRequest(request, 'rejected')} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-300 text-xs font-bold">Reject</button>
+                        </div>
+                      )}
+                      {request.status === 'awaiting_payment' && <p className="text-xs text-slate-400">Quote sent: {formatDoge(request.quoted_budget_koinu)} DOGE. Waiting for advertiser payment reference.</p>}
+                      {request.status === 'payment_submitted' && (
+                        <div className="space-y-2">
+                          <p className="text-xs text-slate-300 break-all">Payment reference: {request.payment_reference}</p>
+                          <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcAdvertiserRequest(request, 'approve')} className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold">Verify payment & create campaign</button>
+                          <button type="button" disabled={ptcAdminLoading} onClick={() => handleAdminPtcAdvertiserRequest(request, 'rejected')} className="px-3 py-2 rounded-lg border border-red-500/30 text-red-300 text-xs font-bold">Reject</button>
+                        </div>
+                      )}
+                      {request.status === 'approved' && <p className="text-xs text-emerald-400">Created campaign #{request.campaign_id}. Activate it below after checking reserve.</p>}
+                      {request.status === 'rejected' && <p className="text-xs text-red-300">{request.admin_note || 'Rejected'}</p>}
+                    </div>
+                  ))}
                 </div>
 
                 <form onSubmit={handlePtcReserveFunding} className="rounded-xl border border-slate-800 p-4 space-y-3">
