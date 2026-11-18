@@ -3967,7 +3967,7 @@ async function handleRequest(request, env, json) {
     return json({ success: true, requests: result.results || [] });
   }
 
-  const adminPtcRequestMatch = path.match(/^\/api\/admin\/ptc\/advertiser-requests\/(\\d+)$/);
+  const adminPtcRequestMatch = path.match(/^\/api\/admin\/ptc\/advertiser-requests\/(\d+)$/);
   if (adminPtcRequestMatch && method === "PUT") {
     const user = await authenticate(request);
     await requireAdmin(user, env);
