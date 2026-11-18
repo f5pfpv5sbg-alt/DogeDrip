@@ -4582,12 +4582,13 @@ async function handleRequest(request, env, json) {
     }
 
     const outstandingStatuses = ["pending", "processing", "payment_unknown"];
-    // Legacy "approved" rows without a FaucetPay payout ID are ambiguous:
-    // they may still be owed to the user, so reserve them as outstanding.
+    // Legacy approved/paid rows without a FaucetPay payout ID are ambiguous:
+    // reserve them until an admin verifies the provider history and reconciles them.
     const legacyApprovedOutstanding = Number(legacyApproved?.total_koinu || 0);
+    const legacyPaidOutstanding = Number(paidWithoutPayoutId?.total_koinu || 0);
     const outstanding = outstandingStatuses.reduce((total, status) => {
       return total + Number(withdrawalsByStatus[status]?.total_koinu || 0);
-    }, legacyApprovedOutstanding);
+    }, legacyApprovedOutstanding + legacyPaidOutstanding);
     const paidSpinsOutstanding = Number(paidWheelSpins?.count || 0);
     const maxActiveWheelPrizeKoinu = Number(maxActiveWheelPrize?.amount || 0);
     const paidSpinReserveRequiredKoinu =
