@@ -3864,6 +3864,168 @@ async function handleRequest(request, env, json) {
     throw new HttpError(400, "Unsupported PTC campaign status transition.");
   }
 
+  // PTC ADVERTISER PORTAL: OWN REQUESTS
+  if (path === "/api/ptc/advertiser/requests" && method === "GET") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_read", RATE_LIMIT_POLICIES.ptcRead);
+    const result = await env.DB.prepare(`
+      SELECT id, title, description, advertiser_name, target_url,
+             reward_koinu, duration_seconds, max_views, requested_budget_koinu,
+             status, quoted_budget_koinu, payment_reference, campaign_id,
+             admin_note, created_at, updated_at
+      FROM ptc_advertiser_requests
+      WHERE advertiser_uid = ?
+      ORDER BY id DESC
+      LIMIT 50
+    `).bind(user.sub).all();
+    return json({ success: true, requests: result.results || [] });
+  }
+
+  if (path === "/api/ptc/advertiser/requests" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ad_create", RATE_LIMIT_POLICIES.adCreate);
+    const account = await env.DB.prepare(
+      "SELECT uid, email, email_verified FROM users WHERE uid = ?"
+    ).bind(user.sub).first();
+    if (!account || Number(account.email_verified) !== 1) {
+      throw new HttpError(403, "Verified account required to advertise.");
+    }
+    const body = await readJson(request);
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const advertiserName = typeof body.advertiser_name === "string" ? body.advertiser_name.trim() : "";
+    const reward = body.reward_koinu;
+    const duration = body.duration_seconds;
+    const maxViews = body.max_views;
+    const requestedBudget = body.requested_budget_koinu;
+    if (title.length < 3 || title.length > 80) throw new HttpError(400, "Title must be 3-80 characters.");
+    if (description.length < 10 || description.length > 500) throw new HttpError(400, "Description must be 10-500 characters.");
+    if (advertiserName.length < 2 || advertiserName.length > 80) throw new HttpError(400, "Advertiser name must be 2-80 characters.");
+    if (!Number.isSafeInteger(reward) || reward < 1 || reward > 100000000) throw new HttpError(400, "Invalid reward amount.");
+    if (!Number.isSafeInteger(duration) || duration < 10 || duration > 180) throw new HttpError(400, "Viewing duration must be 10-180 seconds.");
+    if (!Number.isSafeInteger(maxViews) || maxViews < 1 || maxViews > 10000000) throw new HttpError(400, "Invalid maximum views.");
+    if (!Number.isSafeInteger(requestedBudget) || requestedBudget < reward || requestedBudget > 1000000000000 || requestedBudget > reward * maxViews) {
+      throw new HttpError(400, "Budget must cover at least one view and cannot exceed reward × max views.");
+    }
+    const targetUrl = validatePublicHttpUrl(body.target_url, "target URL");
+    const inserted = await env.DB.prepare(`
+      INSERT INTO ptc_advertiser_requests (
+        advertiser_uid, advertiser_email, advertiser_name, title, description,
+        target_url, reward_koinu, duration_seconds, max_views, requested_budget_koinu
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING id, status, created_at
+    `).bind(
+      user.sub, account.email, advertiserName, title, description,
+      targetUrl, reward, duration, maxViews, requestedBudget
+    ).first();
+    if (!inserted?.id) throw new HttpError(500, "Advertising request could not be saved.");
+    return json({ success: true, request: inserted }, 201);
+  }
+
+  const advertiserPaymentMatch = path.match(/^\/api\/ptc\/advertiser\/requests\/(\\d+)\/payment$/);
+  if (advertiserPaymentMatch && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ad_payment_reference", RATE_LIMIT_POLICIES.adPaymentReference);
+    const id = Number(advertiserPaymentMatch[1]);
+    const body = await readJson(request);
+    const reference = typeof body.payment_reference === "string" ? body.payment_reference.trim() : "";
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid request ID.");
+    if (reference.length < 5 || reference.length > 120) throw new HttpError(400, "Payment reference must be 5-120 characters.");
+    const updated = await env.DB.prepare(`
+      UPDATE ptc_advertiser_requests
+      SET payment_reference = ?, status = 'payment_submitted', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND advertiser_uid = ? AND status = 'awaiting_payment'
+    `).bind(reference, id, user.sub).run();
+    if (updated.meta.changes !== 1) throw new HttpError(409, "Request is not awaiting payment or does not belong to your account.");
+    return json({ success: true, status: "payment_submitted" });
+  }
+
+  // ADMIN: PTC ADVERTISER REQUEST REVIEW
+  if (path === "/api/admin/ptc/advertiser-requests" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+    const result = await env.DB.prepare(`
+      SELECT r.*, u.email AS account_email
+      FROM ptc_advertiser_requests r
+      LEFT JOIN users u ON u.uid = r.advertiser_uid
+      ORDER BY CASE r.status
+        WHEN 'pending_review' THEN 0
+        WHEN 'payment_submitted' THEN 1
+        WHEN 'awaiting_payment' THEN 2
+        ELSE 3 END, r.id DESC
+      LIMIT 200
+    `).all();
+    return json({ success: true, requests: result.results || [] });
+  }
+
+  const adminPtcRequestMatch = path.match(/^\/api\/admin\/ptc\/advertiser-requests\/(\\d+)$/);
+  if (adminPtcRequestMatch && method === "PUT") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+    const id = Number(adminPtcRequestMatch[1]);
+    const body = await readJson(request);
+    const status = body.status;
+    if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid request ID.");
+    if (status === "awaiting_payment") {
+      const quote = body.quoted_budget_koinu;
+      if (!Number.isSafeInteger(quote) || quote < 1 || quote > 1000000000000) throw new HttpError(400, "Invalid quoted budget.");
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_advertiser_requests
+        SET quoted_budget_koinu = ?, admin_note = ?, status = 'awaiting_payment', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'pending_review'
+      `).bind(quote, typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 500) || null : null, id).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Request is no longer awaiting review.");
+      return json({ success: true, status });
+    }
+    if (status === "rejected") {
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_advertiser_requests
+        SET status = 'rejected', admin_note = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status IN ('pending_review', 'awaiting_payment', 'payment_submitted')
+      `).bind(typeof body.admin_note === "string" ? body.admin_note.trim().slice(0, 500) || null : null, id).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Request cannot be rejected in its current status.");
+      return json({ success: true, status });
+    }
+    if (status === "approve") {
+      const requestRow = await env.DB.prepare(
+        "SELECT * FROM ptc_advertiser_requests WHERE id = ? AND status = 'payment_submitted'"
+      ).bind(id).first();
+      const paymentReference = typeof body.payment_reference === "string" ? body.payment_reference.trim() : "";
+      if (!requestRow) throw new HttpError(409, "A submitted advertiser payment is required.");
+      if (paymentReference.length < 5 || paymentReference.length > 120 || paymentReference !== requestRow.payment_reference) {
+        throw new HttpError(400, "Verify and submit the exact advertiser payment reference.");
+      }
+      if (body.payment_verified !== true) throw new HttpError(400, "Confirm that advertiser payment was independently verified.");
+      const budget = Number(requestRow.quoted_budget_koinu);
+      if (!Number.isSafeInteger(budget) || budget < Number(requestRow.reward_koinu) || budget > Number(requestRow.reward_koinu) * Number(requestRow.max_views)) {
+        throw new HttpError(409, "The approved budget is invalid.");
+      }
+      const campaign = await env.DB.prepare(`
+        INSERT INTO ptc_campaigns (
+          title, description, advertiser_name, target_url, reward_koinu,
+          duration_seconds, max_views, total_budget_koinu, remaining_budget_koinu,
+          advertiser_payment_reference, payment_verified_by, created_by
+        )
+        SELECT title, description, advertiser_name, target_url, reward_koinu,
+               duration_seconds, max_views, ?, ?, ?, ?, advertiser_uid
+        FROM ptc_advertiser_requests
+        WHERE id = ? AND status = 'payment_submitted'
+        RETURNING id, status
+      `).bind(budget, budget, paymentReference, user.sub, id).first();
+      if (!campaign?.id) throw new HttpError(409, "Campaign could not be created.");
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_advertiser_requests
+        SET status = 'approved', campaign_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'payment_submitted'
+      `).bind(campaign.id, id).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Request status changed; contact support before retrying.");
+      return json({ success: true, status: "approved", campaign_id: Number(campaign.id) }, 201);
+    }
+    throw new HttpError(400, "Unsupported advertiser request status.");
+  }
+
   // ADVERTISING: USER REQUESTS AND LIVE PLACEMENTS
 
   if (path === "/api/ads" && method === "GET") {
