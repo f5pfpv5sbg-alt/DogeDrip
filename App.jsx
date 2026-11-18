@@ -114,10 +114,9 @@ const PLAN_CATALOG = [
     features: [
       '0.0005 DOGE per claim',
       '50-second claim cooldown',
+      '50 claims per day',
       'Free Lucky Wheel',
-      'Manual Daily Streak Bonus check-in',
-      'Return Bonuses',
-      'Missions & Challenges',
+      'Daily Streak Bonus check-in',
       'Advertisements'
     ],
     icon: Gift,
@@ -138,12 +137,8 @@ const PLAN_CATALOG = [
     features: [
       '0.001 DOGE per claim',
       '45-second claim cooldown',
-      'Ad-free experience',
-      'Premium Daily Bonus',
-      'Weekly Bonus',
-      'Premium Badge',
-      'Extended Earnings History',
-      '50 claims per day'
+      '50 claims per day',
+      'Premium plan'
     ],
     icon: Zap,
     cardCls: 'border-[#F4A6C1]/30',
@@ -163,14 +158,8 @@ const PLAN_CATALOG = [
     features: [
       '0.0015 DOGE per claim',
       'No claim cooldown',
-      'Ad-free experience',
-      'VIP Daily Chest',
-      'VIP Daily & Weekly Bonuses',
-      'VIP Badge',
-      'Advanced Statistics',
       '100 claims per day',
-      'Priority Support',
-      'Exclusive Lucky Wheel Rewards'
+      'VIP plan'
     ],
     icon: Crown,
     cardCls: 'border-[#F4A6C1]/30',
@@ -181,7 +170,6 @@ const PLAN_CATALOG = [
   }
 ];
 
-// ADVERTISING PACKAGES (DISPLAY PRICING; payment is still manually verified)
 const ADVERTISING_PLAN_CATALOG = [
   { key: 'bottom-7', label: 'Bottom Banner', placement: 'bottom', days: 7, totalDays: 7, price: '€5' },
   { key: 'bottom-14', label: 'Bottom Banner', placement: 'bottom', days: 14, totalDays: 14, price: '€9' },
