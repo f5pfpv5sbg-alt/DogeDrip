@@ -216,6 +216,6 @@ html[data-theme="light"] .shadow-black\/30 {
   --tw-shadow-color: rgba(40, 20, 32, 0.08);
 }
 
-html[data-theme="light"] .bg-\\[\\#050505\\] {
+html[data-theme="light"] [class~="bg-[#050505]"] {
   background-color: #ffffff !important;
 }
