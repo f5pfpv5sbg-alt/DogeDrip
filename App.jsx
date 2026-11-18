@@ -1322,8 +1322,15 @@ export default function App() {
     if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'ptc') return undefined;
     let cancelled = false;
     setPtcAdminLoading(true);
-    apiRequest('/api/admin/ptc')
-      .then(data => { if (!cancelled) setAdminPtcData(data); })
+    Promise.all([
+      apiRequest('/api/admin/ptc'),
+      apiRequest('/api/admin/ptc/advertiser-requests')
+    ])
+      .then(([data, advertiserData]) => {
+        if (cancelled) return;
+        setAdminPtcData(data);
+        setAdminPtcAdvertiserRequests(Array.isArray(advertiserData.requests) ? advertiserData.requests : []);
+      })
       .catch(error => { if (!cancelled) setAdminError(error.message || 'Could not load PTC administration.'); })
       .finally(() => { if (!cancelled) setPtcAdminLoading(false); });
     return () => { cancelled = true; };
@@ -2599,9 +2606,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab !== 'advertiser' || !apiReady || !firebaseUser) return;
+    if (activeTab !== 'ptc' || ptcPanelMode !== 'advertiser' || isDemoAdmin || !apiReady || !firebaseUser) return;
     loadPtcAdvertiserRequests();
-  }, [activeTab, apiReady, firebaseUser]);
+  }, [activeTab, ptcPanelMode, isDemoAdmin, apiReady, firebaseUser]);
 
   const handlePtcAdvertiserSubmit = async (event) => {
     event.preventDefault();
@@ -4240,10 +4247,12 @@ export default function App() {
 
           {activeTab === 'ptc' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
-                            <div className="flex flex-wrap gap-2 mb-5">
-                <button type="button" onClick={() => setPtcPanelMode('user')} className={`px-4 py-2 rounded-xl text-xs font-black border ${ptcPanelMode === 'user' ? 'bg-[#F4A6C1] text-black border-[#F4A6C1]' : 'border-slate-700 text-slate-300'}`}>Earn DOGE</button>
-                <button type="button" onClick={() => setPtcPanelMode('advertiser')} className={`px-4 py-2 rounded-xl text-xs font-black border ${ptcPanelMode === 'advertiser' ? 'bg-[#F4A6C1] text-black border-[#F4A6C1]' : 'border-slate-700 text-slate-300'}`}>Advertise</button>
-              </div>
+                            {!isDemoAdmin && (
+                <div className="flex flex-wrap gap-2 mb-5">
+                  <button type="button" onClick={() => setPtcPanelMode('user')} className={`px-4 py-2 rounded-xl text-xs font-black border ${ptcPanelMode === 'user' ? 'bg-[#F4A6C1] text-black border-[#F4A6C1]' : 'border-slate-700 text-slate-300'}`}>Earn DOGE</button>
+                  <button type="button" onClick={() => setPtcPanelMode('advertiser')} className={`px-4 py-2 rounded-xl text-xs font-black border ${ptcPanelMode === 'advertiser' ? 'bg-[#F4A6C1] text-black border-[#F4A6C1]' : 'border-slate-700 text-slate-300'}`}>Advertise</button>
+                </div>
+              )}
               {isDemoAdmin && (
                 <div className="space-y-5">
                   <section className="border border-[#F4A6C1]/30 rounded-2xl p-4 md:p-5 space-y-5">
