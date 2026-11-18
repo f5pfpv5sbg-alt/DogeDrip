@@ -94,6 +94,8 @@ test("PTC heading and description change for each panel role", () => {
   assert.match(app, /Advertiser PTC/);
   assert.match(app, /Paid To Click/);
   assert.match(app, /Create sponsored campaigns, submit payment references and track your campaign performance/);
+  assert.match(app, /Advertise on DogeDrip/);
+  assert.doesNotMatch(app, /Advertiser Dashboard/);
 });
 
 test("public Advertise With Us page explains the reviewed campaign and funding process", async () => {
