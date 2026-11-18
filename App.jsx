@@ -72,6 +72,7 @@ const TURNSTILE_SITE_KEY = "0x4AAAAAAF-3dKe3-VPYCryx";
 
 const REF_CODE_REGEX = /^DOGE[A-HJ-NP-Z2-9]{6}$/;
 const KOINU = 100000000;
+const PTC_VIEW_STORAGE_KEY = 'dogedrip_ptc_active_view';
 
 // SHARED STYLE CLASSES
 const LABEL_CLS =
@@ -629,7 +630,15 @@ export default function App() {
   const [ptcLoading, setPtcLoading] = useState(false);
   const [ptcError, setPtcError] = useState('');
   const [ptcMessage, setPtcMessage] = useState('');
-  const [ptcActiveView, setPtcActiveView] = useState(null);
+  const [ptcActiveView, setPtcActiveView] = useState(() => {
+    try {
+      const saved = window.sessionStorage.getItem(PTC_VIEW_STORAGE_KEY);
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed && typeof parsed === 'object' && Number.isSafeInteger(parsed.viewId) && typeof parsed.viewToken === 'string' ? parsed : null;
+    } catch {
+      return null;
+    }
+  });
   const [ptcSecondsLeft, setPtcSecondsLeft] = useState(0);
   const [ptcStartingId, setPtcStartingId] = useState(null);
   const [ptcCompleting, setPtcCompleting] = useState(false);
@@ -753,6 +762,25 @@ export default function App() {
 
     return data;
   }, [firebaseUser]);
+
+  useEffect(() => {
+    try {
+      if (ptcActiveView) {
+        window.sessionStorage.setItem(PTC_VIEW_STORAGE_KEY, JSON.stringify(ptcActiveView));
+      } else {
+        window.sessionStorage.removeItem(PTC_VIEW_STORAGE_KEY);
+      }
+    } catch {
+      // PTC remains usable for the current page if session storage is unavailable.
+    }
+  }, [ptcActiveView]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!firebaseUser || (ptcActiveView && ptcActiveView.uid !== firebaseUser.uid)) {
+      if (ptcActiveView) setPtcActiveView(null);
+    }
+  }, [authLoading, firebaseUser, ptcActiveView]);
 
   useEffect(() => {
     if (!ptcActiveView) return undefined;
@@ -2590,6 +2618,7 @@ export default function App() {
       setPtcActiveView({
         viewId: Number(data.view_id),
         viewToken: data.view_token,
+        uid: firebaseUser.uid,
         title: campaign.title,
         targetUrl: campaign.target_url,
         durationSeconds: Number(campaign.duration_seconds),
