@@ -2597,6 +2597,11 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    if (activeTab !== 'advertiser' || !apiReady || !firebaseUser) return;
+    loadPtcAdvertiserRequests();
+  }, [activeTab, apiReady, firebaseUser]);
+
   const handlePtcAdvertiserSubmit = async (event) => {
     event.preventDefault();
     if (ptcAdvertiserSubmitting) return;
