@@ -4057,12 +4057,12 @@ async function handleRequest(request, env, json) {
     const endDate = reportUrl.searchParams.get("end");
     const isValidDate = value =>
       typeof value === "string" &&
-      /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value) &&
       Number.isFinite(Date.parse(value + "T00:00:00Z")) &&
       new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
 
-    if (!isValidDate(startDate) || !isValidDate(endDate) || startDate > endDate) {
-      throw new HttpError(400, "Provide valid start and end dates.");
+    if (!isValidDate(startDate) || !isValidDate(endDate) || startDate > endDate || endDate > getUtcDate()) {
+      throw new HttpError(400, "Provide valid dates; the end date cannot be in the future.");
     }
 
     const startMs = Date.parse(startDate + "T00:00:00Z");
@@ -4117,7 +4117,8 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT COALESCE(SUM(amount_koinu), 0) AS total_koinu, COUNT(*) AS withdrawals_count
         FROM withdrawals
-        WHERE status = 'pending'
+        WHERE status IN ('pending', 'processing', 'payment_unknown')
+           OR (status = 'approved' AND faucetpay_payout_id IS NULL)
       `).first(),
       env.DB.prepare(`
         SELECT available_koinu, locked_koinu, pending_koinu
