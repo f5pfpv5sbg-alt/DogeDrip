@@ -40,6 +40,7 @@ test("advertiser payment references are owner-scoped and admin approval is verif
   assert.match(routes, /body\.payment_verified !== true/);
   assert.match(routes, /payment_reference/);
   assert.match(routes, /campaign_id IS NULL/);
+  assert.match(routes, /advertiser-requests\\\\\/(\\\\d\+\)\$\//);
 });
 
 test("advertiser dashboard exposes campaign analytics only through owner-scoped requests", () => {
