@@ -104,7 +104,7 @@ test("public Advertise With Us page explains the reviewed campaign and funding p
   assert.match(page, /Payment verification/);
   assert.match(page, /campaign funding/);
   assert.match(page, /do not promise fixed traffic, conversions or results/);
-  assert.match(page, /support\.dogedrip@gmail\.com/);
   assert.ok(page.includes('href="/">Open DogeDrip to advertise</a>'));
   assert.doesNotMatch(page, /open=ptc-advertise/);
+  assert.doesNotMatch(page, /support\\.dogedrip@gmail/);
 });
