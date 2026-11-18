@@ -123,7 +123,9 @@ test("FaucetPay status endpoint is admin-only and exposes only configuration boo
 
 test("admin UI never treats uncertain or legacy-approved withdrawals as paid", () => {
   assert.ok(app.includes("w.status === 'approved' ? 'legacy-approved' : w.status"));
-  assert.ok(app.includes("w.status === 'payment_unknown' ? ("));
+  assert.ok(app.includes("w.status === 'payment_unknown' ||"));
+  assert.ok(app.includes("w.status === 'approved' && !w.faucetpayPayoutId"));
+  assert.ok(app.includes("w.status === 'processing' && w.timestamp !== null"));
   assert.ok(app.includes("w.status === 'paid'"));
   assert.ok(app.includes("Payment confirmed"));
 });
