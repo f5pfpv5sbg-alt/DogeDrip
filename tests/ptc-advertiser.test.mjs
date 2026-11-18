@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const [worker, migration] = await Promise.all([
+const [worker, migration, app] = await Promise.all([
   readFile(new URL("../worker.js", import.meta.url), "utf8"),
-  readFile(new URL("../migrations/0010_ptc_advertiser_requests.sql", import.meta.url), "utf8")
+  readFile(new URL("../migrations/0010_ptc_advertiser_requests.sql", import.meta.url), "utf8"),
+  readFile(new URL("../App.jsx", import.meta.url), "utf8")
 ]);
 
 test("PTC advertiser requests are stored separately from funded campaigns", () => {
@@ -51,4 +52,31 @@ test("advertiser dashboard exposes campaign analytics only through owner-scoped 
   assert.match(route, /campaign_views_completed/);
   assert.match(route, /campaign_remaining_budget_koinu/);
   assert.match(route, /campaign_spent_koinu/);
+});
+
+
+test("advertiser dashboard is a separate authenticated navigation destination and loads its own requests", () => {
+  assert.match(app, /setActiveTab\('advertiser'\)/);
+  assert.match(app, /activeTab === 'advertiser'/);
+  assert.match(app, /activeTab !== 'advertiser' \|\| !apiReady \|\| !firebaseUser/);
+  assert.match(app, /loadPtcAdvertiserRequests\(\)/);
+  const plansStart = app.indexOf("{activeTab === 'plans' && (");
+  const plansEnd = app.indexOf("{activeTab === 'wallet' && (", plansStart);
+  assert.ok(plansStart >= 0 && plansEnd > plansStart);
+  assert.doesNotMatch(app.slice(plansStart, plansEnd), /ptc-advertiser-portal/);
+});
+
+test("admin campaign activation locks reserve atomically and never activates without sufficient reserve", () => {
+  const start = worker.indexOf('const ptcCampaignMatch = path.match');
+  const end = worker.indexOf('if (path === "/api/ptc/advertiser/requests" && method === "GET")', start);
+  assert.ok(start >= 0 && end > start);
+  const route = worker.slice(start, end);
+  assert.match(route, /requireAdmin\(user, env\)/);
+  assert.match(route, /available_koinu = available_koinu - \?/);
+  assert.match(route, /locked_koinu = locked_koinu \+ \?/);
+  assert.match(route, /available_koinu >= \?/);
+  assert.match(route, /status = 'pending_review'/);
+  assert.match(route, /status = 'paused'/);
+  assert.match(route, /status = 'completed'/);
+  assert.match(route, /locked_koinu >= \?/);
 });
