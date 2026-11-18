@@ -41,7 +41,7 @@ test("Faucet claim requires verified auth, rate limiting and a valid Turnstile t
   const claim = section(
     worker,
     'if (path === "/api/claim" && method === "POST")',
-    "// PTC ADS:"
+    'if (path === "/api/claims"'
   );
   assert.match(claim, /await authenticate\(request\)/);
   assert.match(claim, /enforceRateLimit\([\s\S]*?RATE_LIMIT_POLICIES\.claim/);
@@ -52,7 +52,7 @@ test("claim reward is decided server-side with cooldown and daily limit predicat
   const claim = section(
     worker,
     'if (path === "/api/claim" && method === "POST")',
-    "// PTC ADS:"
+    'if (path === "/api/claims"'
   );
   assert.match(claim, /const plan = await getUserPlan\(env, user\.sub\)/);
   assert.match(claim, /balance_koinu = balance_koinu \+ \?/);
@@ -69,7 +69,7 @@ test("claim retries are idempotent and request IDs are strictly validated", () =
   const claim = section(
     worker,
     'if (path === "/api/claim" && method === "POST")',
-    "// PTC ADS:"
+    'if (path === "/api/claims"'
   );
   assert.match(claim, /getExistingClaim\(env, user\.sub, requestId\)/);
   assert.match(claim, /buildClaimResponse\(env, user\.sub, plan, existing, true\)/);
