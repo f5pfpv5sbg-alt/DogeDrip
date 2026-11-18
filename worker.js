@@ -3978,7 +3978,15 @@ async function handleRequest(request, env, json) {
     if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid request ID.");
     if (status === "awaiting_payment") {
       const quote = body.quoted_budget_koinu;
-      if (!Number.isSafeInteger(quote) || quote < 1 || quote > 1000000000000) throw new HttpError(400, "Invalid quoted budget.");
+      const pendingRequest = await env.DB.prepare(
+        "SELECT reward_koinu, max_views FROM ptc_advertiser_requests WHERE id = ? AND status = 'pending_review'"
+      ).bind(id).first();
+      if (!pendingRequest) throw new HttpError(409, "Request is no longer awaiting review.");
+      const minimumBudget = Number(pendingRequest.reward_koinu);
+      const maximumBudget = minimumBudget * Number(pendingRequest.max_views);
+      if (!Number.isSafeInteger(quote) || quote < minimumBudget || quote > maximumBudget || quote > 1000000000000) {
+        throw new HttpError(400, "Quoted budget must cover at least one view and cannot exceed reward × max views.");
+      }
       const updated = await env.DB.prepare(`
         UPDATE ptc_advertiser_requests
         SET quoted_budget_koinu = ?, admin_note = ?, status = 'awaiting_payment', updated_at = CURRENT_TIMESTAMP
