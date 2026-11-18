@@ -40,7 +40,7 @@ test("PTC settlement is admin-only and atomically debits pending reserve, credit
   assert.match(route, /INSERT INTO ledger_transactions/);
   assert.match(route, /'ptc_reward'/);
   assert.match(route, /ptc_settlement_items/);
-  assert.match(route, /Number\(results\[1\]?.meta?.changes \|\| 0\) !== viewsCount/);
+  assert.ok(route.includes("Number(results[1]?.meta?.changes || 0) !== viewsCount"));
   assert.match(route, /abs\(-9223372036854775808\)/);
   assert.match(route, /Settlement could not be completed/);
 });
