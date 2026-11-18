@@ -22,7 +22,9 @@ import {
   CalendarCheck,
   UserCircle,
   Sun,
-  Moon
+  Moon,
+  Eye,
+  ExternalLink
 } from 'lucide-react';
 
 // FIREBASE
@@ -476,10 +478,10 @@ export default function App() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [authMode, setAuthMode] = useState('login');
   const [securityTokens, setSecurityTokens] = useState({
-    signup: '', login: '', claim: '', withdraw: '', wheel_spin: '', wheel_buy: ''
+    signup: '', login: '', claim: '', withdraw: '', wheel_spin: '', wheel_buy: '', ptc_complete: ''
   });
   const [securityResets, setSecurityResets] = useState({
-    signup: 0, login: 0, claim: 0, withdraw: 0, wheel_spin: 0, wheel_buy: 0
+    signup: 0, login: 0, claim: 0, withdraw: 0, wheel_spin: 0, wheel_buy: 0, ptc_complete: 0
   });
   const setSecurityToken = useCallback((action, token) => {
     setSecurityTokens(current => ({ ...current, [action]: token }));
@@ -620,6 +622,18 @@ export default function App() {
   const wheelSpinRequestIdRef = useRef(null);
   const wheelBuyRequestRef = useRef(null);
   const [wheelCaps, setWheelCaps] = useState(null);
+  const [ptcAds, setPtcAds] = useState([]);
+  const [ptcHistory, setPtcHistory] = useState([]);
+  const [ptcPendingReward, setPtcPendingReward] = useState(0);
+  const [ptcCompletedViews, setPtcCompletedViews] = useState(0);
+  const [ptcLoading, setPtcLoading] = useState(false);
+  const [ptcError, setPtcError] = useState('');
+  const [ptcMessage, setPtcMessage] = useState('');
+  const [ptcActiveView, setPtcActiveView] = useState(null);
+  const [ptcSecondsLeft, setPtcSecondsLeft] = useState(0);
+  const [ptcStartingId, setPtcStartingId] = useState(null);
+  const [ptcCompleting, setPtcCompleting] = useState(false);
+
 
   const [streakInfo, setStreakInfo] = useState(null);
   const [streakLoading, setStreakLoading] = useState(false);
@@ -739,6 +753,43 @@ export default function App() {
 
     return data;
   }, [firebaseUser]);
+
+  useEffect(() => {
+    if (!ptcActiveView) return undefined;
+    const updateTimer = () => {
+      const deadline = ptcActiveView.startedAtMs + ptcActiveView.durationSeconds * 1000;
+      setPtcSecondsLeft(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+    };
+    updateTimer();
+    const timer = window.setInterval(updateTimer, 1000);
+    return () => window.clearInterval(timer);
+  }, [ptcActiveView]);
+
+  useEffect(() => {
+    if (activeTab !== 'ptc' || !firebaseUser || !apiReady) return undefined;
+    let cancelled = false;
+    const loadPtc = async () => {
+      setPtcLoading(true);
+      setPtcError('');
+      try {
+        const [adsData, historyData] = await Promise.all([
+          apiRequest('/api/ptc/ads'),
+          apiRequest('/api/ptc/history')
+        ]);
+        if (cancelled) return;
+        setPtcAds(Array.isArray(adsData.ads) ? adsData.ads : []);
+        setPtcHistory(Array.isArray(historyData.history) ? historyData.history : []);
+        setPtcPendingReward(Number(historyData.pending_reward_koinu || 0));
+        setPtcCompletedViews(Number(historyData.completed_views || 0));
+      } catch (error) {
+        if (!cancelled) setPtcError(error.message || 'Could not load PTC ads.');
+      } finally {
+        if (!cancelled) setPtcLoading(false);
+      }
+    };
+    loadPtc();
+    return () => { cancelled = true; };
+  }, [activeTab, firebaseUser, apiReady, apiRequest]);
 
   useEffect(() => {
     if (!firebaseUser || firebaseUser.emailVerified !== true || !apiReady) {
@@ -2515,6 +2566,75 @@ export default function App() {
     }
   };
 
+  const refreshPtcData = async () => {
+    const [adsData, historyData] = await Promise.all([
+      apiRequest('/api/ptc/ads'),
+      apiRequest('/api/ptc/history')
+    ]);
+    setPtcAds(Array.isArray(adsData.ads) ? adsData.ads : []);
+    setPtcHistory(Array.isArray(historyData.history) ? historyData.history : []);
+    setPtcPendingReward(Number(historyData.pending_reward_koinu || 0));
+    setPtcCompletedViews(Number(historyData.completed_views || 0));
+  };
+
+  const handlePtcStart = async (campaign) => {
+    if (ptcStartingId !== null || ptcActiveView) return;
+    setPtcStartingId(campaign.id);
+    setPtcError('');
+    setPtcMessage('');
+    try {
+      const data = await apiRequest('/api/ptc/start', {
+        method: 'POST',
+        body: JSON.stringify({ campaign_id: campaign.id })
+      });
+      setPtcActiveView({
+        viewId: Number(data.view_id),
+        viewToken: data.view_token,
+        title: campaign.title,
+        targetUrl: campaign.target_url,
+        durationSeconds: Number(campaign.duration_seconds),
+        rewardKoinu: Number(campaign.reward_koinu),
+        startedAtMs: Date.now()
+      });
+      setPtcSecondsLeft(Number(campaign.duration_seconds));
+    } catch (error) {
+      setPtcError(error.message || 'Could not start this ad.');
+      await refreshPtcData().catch(() => {});
+    } finally {
+      setPtcStartingId(null);
+    }
+  };
+
+  const handlePtcComplete = async () => {
+    if (!ptcActiveView || ptcSecondsLeft > 0 || ptcCompleting) return;
+    if (!securityTokens.ptc_complete) {
+      setPtcError('Complete the Cloudflare security check first.');
+      return;
+    }
+    setPtcCompleting(true);
+    setPtcError('');
+    setPtcMessage('');
+    try {
+      const data = await apiRequest('/api/ptc/complete', {
+        method: 'POST',
+        body: JSON.stringify({
+          view_id: ptcActiveView.viewId,
+          view_token: ptcActiveView.viewToken,
+          turnstileToken: securityTokens.ptc_complete
+        })
+      });
+      setPtcMessage('Ad completed. ' + (Number(data.reward_koinu || 0) / KOINU).toFixed(8) + ' DOGE is pending reserve settlement and is not withdrawable yet.');
+      setPtcActiveView(null);
+      resetSecurityToken('ptc_complete');
+      await refreshPtcData();
+    } catch (error) {
+      setPtcError(error.message || 'Could not complete this ad. Keep this session open and retry.');
+      resetSecurityToken('ptc_complete');
+    } finally {
+      setPtcCompleting(false);
+    }
+  };
+
   const refreshAdminWithdrawals = async () => {
     try {
       const data = await apiRequest('/api/admin/withdrawals');
@@ -3286,6 +3406,15 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => setActiveTab('ptc')}
+              className={tabBtnCls('ptc')}
+            >
+              <Eye className="w-4 h-4" />
+              <span>PTC Ads</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('wheel')}
               className={tabBtnCls('wheel')}
             >
@@ -3621,6 +3750,120 @@ export default function App() {
                             <td className="py-3 text-slate-400">
                               {formatDate(claim.claimed_at)}
                             </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'ptc' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-2xl font-black text-white font-['Space_Grotesk',sans-serif]">Paid To Click</h2>
+                  <p className="text-sm text-slate-400 mt-1">View sponsored websites for the required time and earn pending DOGE rewards.</p>
+                </div>
+                <button type="button" onClick={() => refreshPtcData().catch(error => setPtcError(error.message))} disabled={ptcLoading} className="px-3 py-2 rounded-lg border border-slate-700 text-xs font-bold text-slate-300 disabled:opacity-50">
+                  <RefreshCw className={`w-3 h-3 inline mr-2 ${ptcLoading ? 'animate-spin' : ''}`} />Refresh
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <StatTile label="Pending PTC Rewards" value={(ptcPendingReward / KOINU).toFixed(8) + ' DOGE'} />
+                <StatTile label="Completed Views" value={String(ptcCompletedViews)} />
+              </div>
+
+              <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 text-xs text-yellow-300">
+                PTC rewards are tracked in a separate reserve. They are pending and cannot be withdrawn or added to your wallet balance until reserve settlement is enabled.
+              </div>
+
+              {ptcError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">{ptcError}</div>}
+              {ptcMessage && <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-400">{ptcMessage}</div>}
+
+              {ptcActiveView && (
+                <div className="rounded-2xl border border-[#F4A6C1]/40 p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-[#F4A6C1] font-black">Ad in progress</p>
+                      <h3 className="text-base font-bold text-white mt-1">{ptcActiveView.title}</h3>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase text-slate-500">Time left</p>
+                      <p className="text-2xl font-black text-white tabular-nums">{ptcSecondsLeft}s</p>
+                    </div>
+                  </div>
+                  <a href={ptcActiveView.targetUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-4 py-3 text-sm font-bold text-[#F4A6C1]">
+                    Open advertiser website <ExternalLink className="w-4 h-4" />
+                  </a>
+                  <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                    <div className="h-full bg-[#F4A6C1] transition-all" style={{ width: (ptcActiveView.durationSeconds ? Math.min(100, Math.max(0, ((ptcActiveView.durationSeconds - ptcSecondsLeft) / ptcActiveView.durationSeconds) * 100)) : 0) + '%' }} />
+                  </div>
+                  {ptcSecondsLeft === 0 ? (
+                    <div className="space-y-3">
+                      <TurnstileWidget
+                        action="ptc_complete"
+                        onToken={token => setSecurityToken('ptc_complete', token)}
+                        resetKey={securityResets.ptc_complete}
+                      />
+                      <button type="button" onClick={handlePtcComplete} disabled={ptcCompleting || !securityTokens.ptc_complete} className={PRIMARY_BTN}>
+                        {ptcCompleting ? 'Verifying view...' : 'Complete Ad & Collect Reward'}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">Keep this session open until the timer finishes. The server verifies the actual viewing time.</p>
+                  )}
+                </div>
+              )}
+
+              {!ptcActiveView && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">Available Sponsored Ads</h3>
+                  {ptcLoading ? (
+                    <p className="text-sm text-slate-500">Loading available ads...</p>
+                  ) : ptcAds.length === 0 ? (
+                    <div className="rounded-xl border border-slate-800 p-6 text-center">
+                      <Eye className="w-7 h-7 mx-auto text-slate-600 mb-2" />
+                      <p className="text-sm font-bold text-white">No PTC ads available right now</p>
+                      <p className="text-xs text-slate-500 mt-1">New sponsored campaigns will appear here when approved and funded.</p>
+                    </div>
+                  ) : ptcAds.map(ad => (
+                    <div key={ad.id} className="rounded-xl border border-slate-800 p-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-white">{ad.title}</p>
+                        <p className="text-xs text-slate-400 mt-1">{ad.description}</p>
+                        <p className="text-[10px] text-slate-500 mt-2">{ad.advertiser_name} · {ad.duration_seconds}s · {Math.max(0, ad.max_views - ad.views_completed)} views left</p>
+                      </div>
+                      <div className="flex items-center justify-between md:justify-end gap-3">
+                        <span className="text-sm font-black text-[#F4A6C1] whitespace-nowrap">+{(Number(ad.reward_koinu) / KOINU).toFixed(8)} DOGE</span>
+                        <button type="button" onClick={() => handlePtcStart(ad)} disabled={ptcStartingId !== null || Boolean(ptcActiveView)} className="rounded-lg bg-[#F4A6C1] text-black px-4 py-2 text-xs font-black disabled:opacity-50">
+                          {ptcStartingId === ad.id ? 'Starting...' : 'Start Ad'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">PTC History</h3>
+                {ptcHistory.length === 0 ? (
+                  <p className="text-xs text-slate-500">Your completed and started ad views will appear here.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="text-slate-500 uppercase border-b border-slate-800">
+                        <tr><th className="py-2 pr-3">Campaign</th><th className="py-2 pr-3">Reward</th><th className="py-2">Status</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {ptcHistory.map(item => (
+                          <tr key={item.id}>
+                            <td className="py-3 pr-3 text-white">{item.title}</td>
+                            <td className="py-3 pr-3 text-[#F4A6C1]">{(Number(item.reward_koinu) / KOINU).toFixed(8)} DOGE</td>
+                            <td className="py-3 text-slate-400">{item.status === 'completed' ? 'Pending settlement' : item.status}</td>
                           </tr>
                         ))}
                       </tbody>
