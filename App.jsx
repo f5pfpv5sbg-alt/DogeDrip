@@ -683,6 +683,7 @@ export default function App() {
   const [adminAdRequests, setAdminAdRequests] = useState([]);
   const [adminPtcData, setAdminPtcData] = useState(null);
   const [ptcAdminLoading, setPtcAdminLoading] = useState(false);
+  const [ptcSettlingUid, setPtcSettlingUid] = useState(null);
   const [ptcFundingForm, setPtcFundingForm] = useState({
     amount_doge: '', external_reference: '', notes: '', externally_verified: false
   });
@@ -2614,6 +2615,35 @@ export default function App() {
       setAdminError(error.message || 'Could not refresh PTC administration.');
     } finally {
       setPtcAdminLoading(false);
+    }
+  };
+
+  const handlePtcRewardSettlement = async (pendingUser) => {
+    if (!isDemoAdmin || ptcSettlingUid || !pendingUser?.uid) return;
+    const amount = Number(pendingUser.amount_koinu || 0);
+    const reservePending = Number(adminPtcData?.reserve?.pending_koinu || 0);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > reservePending) {
+      setAdminError('Pending PTC reserve is insufficient for this settlement.');
+      return;
+    }
+    const confirmed = typeof window !== 'undefined' && window.confirm(
+      `Settle ${formatDoge(amount)} DOGE for ${pendingUser.email || pendingUser.username || pendingUser.uid}? This will add the reward to the user's withdrawable balance.`
+    );
+    if (!confirmed) return;
+    setPtcSettlingUid(pendingUser.uid);
+    setAdminError('');
+    try {
+      await apiRequest('/api/admin/ptc/settle', {
+        method: 'POST',
+        body: JSON.stringify({ uid: pendingUser.uid })
+      });
+      await refreshAdminPtc();
+      await refreshAdminStats();
+    } catch (error) {
+      setAdminError(error.message || 'Could not settle PTC rewards.');
+      await refreshAdminPtc();
+    } finally {
+      setPtcSettlingUid(null);
     }
   };
 
@@ -5201,6 +5231,29 @@ export default function App() {
                   <StatTile label="Available" value={formatDoge(adminPtcData?.reserve?.available_koinu || 0) + ' DOGE'} />
                   <StatTile label="Locked" value={formatDoge(adminPtcData?.reserve?.locked_koinu || 0) + ' DOGE'} />
                   <StatTile label="Pending Rewards" value={formatDoge(adminPtcData?.reserve?.pending_koinu || 0) + ' DOGE'} />
+                </div>
+
+                <div className="rounded-xl border border-slate-800 p-4 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-300">Pending reward settlement</h4>
+                    <p className="mt-1 text-[11px] text-slate-500">Completed PTC rewards become withdrawable only after an admin settles them from the funded pending reserve. Each view can be settled once.</p>
+                  </div>
+                  {!adminPtcData?.pending_settlements?.length ? (
+                    <p className="text-xs text-slate-500">No completed PTC rewards waiting for settlement.</p>
+                  ) : adminPtcData.pending_settlements.map(pendingUser => {
+                    const canSettle = Number(pendingUser.amount_koinu) > 0 &&
+                      Number(pendingUser.amount_koinu) <= Number(adminPtcData?.reserve?.pending_koinu || 0);
+                    return (
+                      <div key={pendingUser.uid} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-800 p-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-bold text-white">{pendingUser.username || pendingUser.email || pendingUser.uid}</p>
+                          <p className="text-[10px] text-slate-500">{pendingUser.email || pendingUser.uid} · {Number(pendingUser.views_count || 0)} completed views</p>
+                          <p className="mt-1 text-xs font-black text-[#F4A6C1]">{formatDoge(pendingUser.amount_koinu)} DOGE pending</p>
+                        </div>
+                        <button type="button" disabled={ptcSettlingUid !== null || !canSettle} onClick={() => handlePtcRewardSettlement(pendingUser)} className="rounded-lg border border-[#F4A6C1]/50 px-3 py-2 text-xs font-bold text-[#F4A6C1] disabled:opacity-40">{ptcSettlingUid === pendingUser.uid ? 'Settling…' : canSettle ? 'Settle rewards' : 'Reserve insufficient'}</button>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <form onSubmit={handlePtcReserveFunding} className="rounded-xl border border-slate-800 p-4 space-y-3">
