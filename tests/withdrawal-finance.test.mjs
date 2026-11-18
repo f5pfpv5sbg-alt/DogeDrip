@@ -81,6 +81,7 @@ test("admin can reconcile legacy approved withdrawals without payout IDs and sta
   assert.match(app, /w\.status === 'processing' && w\.timestamp !== null && Date\.now\(\) - w\.timestamp > 15 \* 60 \* 1000/);
   assert.match(app, /Legacy approval has no payout ID/);
   assert.match(app, /Legacy paid record has no payout ID/);
+  assert.ok(app.includes("w.status === 'paid' && !w.faucetpayPayoutId"));
   assert.match(app, /Processing for over 15 minutes/);
   assert.match(app, /handleAdminReconcile\(w\.id, 'paid'\)/);
   assert.match(app, /handleAdminReconcile\(w\.id, 'not_paid'\)/);
