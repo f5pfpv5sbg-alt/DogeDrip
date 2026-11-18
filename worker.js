@@ -1750,6 +1750,7 @@ async function getAdminDailyStats(env) {
     onlineUsers,
     adRevenue,
     verifiedSubscriptionRevenue,
+    verifiedOperatingExpenses,
     faucetReserve,
     wheelReserve,
     referralReserve
@@ -1869,6 +1870,13 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS count
+      FROM operating_expenses
+      WHERE verification_status = 'verified'
+        AND date(expense_date) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1934,6 +1942,11 @@ async function getAdminDailyStats(env) {
       vip: Number(verifiedSubscriptionRevenue?.vip_cents || 0)
     },
     subscription_revenue_verification_status: "faucetpay_callback_verified",
+    verified_operating_expenses_eur_cents: Number(verifiedOperatingExpenses?.total_cents || 0),
+    verified_operating_expenses_count: Number(verifiedOperatingExpenses?.count || 0),
+    verified_subscription_net_after_expenses_eur_cents:
+      Number(verifiedSubscriptionRevenue?.total_cents || 0) - Number(verifiedOperatingExpenses?.total_cents || 0),
+    expense_verification_status: "admin_verified_with_evidence_reference",
     wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu,
     rewards_credited_koinu: rewardsCreditedKoinu,
     external_doge_revenue_verified: false,
@@ -3854,6 +3867,83 @@ async function handleRequest(request, env, json) {
     }
 
     throw new HttpError(400, "Unsupported advertising request status.");
+  }
+
+  // ADMIN: OPERATING EXPENSES
+  if (path === "/api/admin/finance/expenses" && method === "GET") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_expenses_read", RATE_LIMIT_POLICIES.adminRead);
+
+    const rows = await env.DB.prepare(`
+      SELECT id, category, description, amount_cents, currency,
+             evidence_reference, verification_status, expense_date,
+             created_at, created_by, verified_at, verified_by
+      FROM operating_expenses
+      ORDER BY expense_date DESC, created_at DESC
+      LIMIT 100
+    `).all();
+
+    return json({ success: true, expenses: rows.results || [] });
+  }
+
+  if (path === "/api/admin/finance/expenses" && method === "POST") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_expenses_create", RATE_LIMIT_POLICIES.adminReject);
+
+    const body = await readJson(request);
+    const categories = new Set(["hosting", "infrastructure", "advertising", "payment_fees", "software", "other"]);
+    const category = typeof body.category === "string" ? body.category : "";
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const amountCents = body.amount_cents;
+    const expenseDate = typeof body.expense_date === "string" ? body.expense_date : getUtcDate();
+
+    if (!categories.has(category)) throw new HttpError(400, "Invalid expense category.");
+    if (description.length < 3 || description.length > 240) throw new HttpError(400, "Description must be 3–240 characters.");
+    if (!Number.isSafeInteger(amountCents) || amountCents < 1 || amountCents > 1000000000) {
+      throw new HttpError(400, "Expense amount must be a positive EUR cent value.");
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate) || !Number.isFinite(Date.parse(expenseDate + "T00:00:00Z")) ||
+        new Date(expenseDate + "T00:00:00Z").toISOString().slice(0, 10) !== expenseDate) {
+      throw new HttpError(400, "Invalid expense date.");
+    }
+
+    const id = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO operating_expenses
+        (id, category, description, amount_cents, currency, verification_status, created_by, expense_date)
+      VALUES (?, ?, ?, ?, 'EUR', 'unverified', ?, ?)
+    `).bind(id, category, description, amountCents, admin.uid, expenseDate).run();
+
+    return json({ success: true, id, verification_status: "unverified" }, 201);
+  }
+
+  const verifyExpenseMatch = path.match(/^\/api\/admin\/finance\/expenses\/([0-9a-f-]{36})\/verify$/i);
+  if (verifyExpenseMatch && method === "POST") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_expenses_verify", RATE_LIMIT_POLICIES.adminReject);
+
+    const body = await readJson(request);
+    const evidenceReference = typeof body.evidence_reference === "string"
+      ? body.evidence_reference.trim()
+      : "";
+    if (evidenceReference.length < 3 || evidenceReference.length > 240) {
+      throw new HttpError(400, "A receipt or transaction reference (3–240 characters) is required.");
+    }
+
+    const updated = await env.DB.prepare(`
+      UPDATE operating_expenses
+      SET evidence_reference = ?, verification_status = 'verified',
+          verified_by = ?, verified_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND verification_status = 'unverified'
+    `).bind(evidenceReference, admin.uid, verifyExpenseMatch[1]).run();
+
+    if (Number(updated?.meta?.changes || 0) !== 1) {
+      throw new HttpError(409, "Expense not found or already verified.");
+    }
+    return json({ success: true, verification_status: "verified" });
   }
 
   // ADMIN: READ-ONLY FINANCIAL INTEGRITY AUDIT
