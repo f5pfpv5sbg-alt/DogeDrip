@@ -4041,6 +4041,130 @@ async function handleRequest(request, env, json) {
     throw new HttpError(400, "Unsupported advertising request status.");
   }
 
+  // ADMIN: HISTORICAL FINANCIAL REPORT
+  if (path === "/api/admin/finance/report" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "admin_finance_report",
+      RATE_LIMIT_POLICIES.adminRead
+    );
+
+    const reportUrl = new URL(request.url);
+    const startDate = reportUrl.searchParams.get("start");
+    const endDate = reportUrl.searchParams.get("end");
+    const isValidDate = value =>
+      typeof value === "string" &&
+      /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+      Number.isFinite(Date.parse(value + "T00:00:00Z")) &&
+      new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
+
+    if (!isValidDate(startDate) || !isValidDate(endDate) || startDate > endDate) {
+      throw new HttpError(400, "Provide valid start and end dates.");
+    }
+
+    const startMs = Date.parse(startDate + "T00:00:00Z");
+    const endMs = Date.parse(endDate + "T00:00:00Z");
+    const dayCount = Math.floor((endMs - startMs) / 86400000) + 1;
+    if (dayCount > 366) {
+      throw new HttpError(400, "Financial report range cannot exceed 366 days.");
+    }
+
+    const exclusiveEnd = new Date(endMs + 86400000).toISOString().slice(0, 10);
+    const startTimestamp = startDate + " 00:00:00";
+    const endTimestamp = exclusiveEnd + " 00:00:00";
+
+    const [
+      subscriptionRevenue,
+      verifiedExpenses,
+      ptcFunding,
+      userLiabilities,
+      pendingWithdrawals,
+      ptcReserveSnapshot
+    ] = await Promise.all([
+      env.DB.prepare(`
+        SELECT
+          COALESCE(SUM(amount_cents), 0) AS total_cents,
+          COUNT(*) AS orders_count,
+          COALESCE(SUM(CASE WHEN plan = 'PREMIUM' THEN amount_cents ELSE 0 END), 0) AS premium_cents,
+          COALESCE(SUM(CASE WHEN plan = 'VIP' THEN amount_cents ELSE 0 END), 0) AS vip_cents
+        FROM subscription_orders
+        WHERE status = 'paid'
+          AND provider = 'faucetpay'
+          AND provider_transaction_id IS NOT NULL
+          AND paid_at IS NOT NULL
+          AND paid_at >= ? AND paid_at < ?
+      `).bind(startTimestamp, endTimestamp).first(),
+      env.DB.prepare(`
+        SELECT
+          COALESCE(SUM(amount_cents), 0) AS total_cents,
+          COUNT(*) AS expenses_count
+        FROM operating_expenses
+        WHERE verification_status = 'verified'
+          AND expense_date >= ? AND expense_date <= ?
+      `).bind(startDate, endDate).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(amount_koinu), 0) AS total_koinu, COUNT(*) AS records_count
+        FROM ptc_funding_events
+        WHERE created_at >= ? AND created_at < ?
+      `).bind(startTimestamp, endTimestamp).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(balance_koinu), 0) AS total_koinu, COUNT(*) AS users_count
+        FROM users
+      `).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(amount_koinu), 0) AS total_koinu, COUNT(*) AS withdrawals_count
+        FROM withdrawals
+        WHERE status = 'pending'
+      `).first(),
+      env.DB.prepare(`
+        SELECT available_koinu, locked_koinu, pending_koinu
+        FROM ptc_reserve WHERE id = 1
+      `).first()
+    ]);
+
+    const revenueCents = Number(subscriptionRevenue?.total_cents || 0);
+    const expensesCents = Number(verifiedExpenses?.total_cents || 0);
+
+    return json({
+      success: true,
+      period: { start: startDate, end: endDate, days: dayCount, timezone: "UTC" },
+      verified_subscription_revenue: {
+        total_eur_cents: revenueCents,
+        premium_eur_cents: Number(subscriptionRevenue?.premium_cents || 0),
+        vip_eur_cents: Number(subscriptionRevenue?.vip_cents || 0),
+        orders_count: Number(subscriptionRevenue?.orders_count || 0),
+        verification: "faucetpay_callback_verified"
+      },
+      verified_operating_expenses: {
+        total_eur_cents: expensesCents,
+        count: Number(verifiedExpenses?.expenses_count || 0),
+        verification: "admin_verified_with_evidence_reference"
+      },
+      partial_subscription_net_eur_cents: revenueCents - expensesCents,
+      partial_net_warning: "This is not total company profit. It includes only verified Premium/VIP receipts minus verified operating expenses.",
+      ptc_advertiser_funding: {
+        total_koinu: Number(ptcFunding?.total_koinu || 0),
+        count: Number(ptcFunding?.records_count || 0),
+        classification: "gross advertiser funding; not profit or free cash"
+      },
+      current_liabilities_snapshot: {
+        user_balances_koinu: Number(userLiabilities?.total_koinu || 0),
+        users_count: Number(userLiabilities?.users_count || 0),
+        pending_withdrawals_koinu: Number(pendingWithdrawals?.total_koinu || 0),
+        pending_withdrawals_count: Number(pendingWithdrawals?.withdrawals_count || 0),
+        ptc_reserve_available_koinu: Number(ptcReserveSnapshot?.available_koinu || 0),
+        ptc_reserve_locked_koinu: Number(ptcReserveSnapshot?.locked_koinu || 0),
+        ptc_reserve_pending_koinu: Number(ptcReserveSnapshot?.pending_koinu || 0),
+        as_of: new Date().toISOString()
+      },
+      total_profit_eur_cents: null,
+      profit_status: "not_calculated_incomplete_revenue_and_cost_reconciliation"
+    });
+  }
+
   // ADMIN: OPERATING EXPENSES
   if (path === "/api/admin/finance/expenses" && method === "GET") {
     const user = await authenticate(request);
