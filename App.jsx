@@ -5984,15 +5984,18 @@ export default function App() {
                               ) : (
                                 w.status === 'payment_unknown' ||
                                 (w.status === 'approved' && !w.faucetpayPayoutId) ||
+                                (w.status === 'paid' && !w.faucetpayPayoutId) ||
                                 (w.status === 'processing' && w.timestamp !== null && Date.now() - w.timestamp > 15 * 60 * 1000)
                               ) ? (
                                 <div className="min-w-[220px] space-y-2">
                                   <p className="text-[10px] text-red-300">
                                     {w.status === 'approved'
                                       ? 'Legacy approval has no payout ID. Verify FaucetPay history before resolving.'
-                                      : w.status === 'processing'
-                                        ? 'Processing for over 15 minutes. Check FaucetPay history before resolving.'
-                                        : 'Check FaucetPay payout history before choosing. Never retry an uncertain payment.'}
+                                      : w.status === 'paid'
+                                        ? 'Legacy paid record has no payout ID. Verify FaucetPay history before resolving.'
+                                        : w.status === 'processing'
+                                          ? 'Processing for over 15 minutes. Check FaucetPay history before resolving.'
+                                          : 'Check FaucetPay payout history before choosing. Never retry an uncertain payment.'}
                                   </p>
                                   <input
                                     type="text"
