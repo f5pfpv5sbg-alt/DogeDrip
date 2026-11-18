@@ -3916,6 +3916,15 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => setActiveTab('advertiser')}
+              className={tabBtnCls('advertiser')}
+            >
+              <Ticket className="w-4 h-4" />
+              <span>Advertiser Dashboard</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setActiveTab('wallet')}
               className={tabBtnCls('wallet')}
             >
@@ -4700,6 +4709,127 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'advertiser' && (
+            <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
+              <div>
+                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertiser Dashboard</h2>
+                <p className="text-sm text-slate-400 mt-1">Create sponsored PTC campaigns and monitor requests, views and campaign budgets.</p>
+              </div>
+              <section id="ptc-advertiser-portal" className="border-t border-slate-800 pt-7 space-y-5 scroll-mt-6">
+                <div>
+                  <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">PTC Campaign Manager</h2>
+                  <p className="text-sm text-slate-400 mt-1">Submit a sponsored website campaign. Our team reviews the details, confirms the price and verifies payment before the campaign can go live.</p>
+                </div>
+                {ptcAdvertiserMessage && (
+                  <div className={`p-3 rounded-xl text-sm border ${ptcAdvertiserMessageError ? 'bg-red-500/10 border-red-500/30 text-red-300' : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/30 text-[#F4A6C1]'}`}>
+                    {ptcAdvertiserMessage}
+                  </div>
+                )}
+                <form onSubmit={handlePtcAdvertiserSubmit} className="bg-black border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="block">
+                      <span className={LABEL_CLS}>Business / Advertiser Name</span>
+                      <input required minLength={2} maxLength={80} value={ptcAdvertiserForm.advertiser_name} onChange={e => setPtcAdvertiserForm(p => ({ ...p, advertiser_name: e.target.value }))} className={INPUT_CLS} placeholder="Your company" />
+                    </label>
+                    <label className="block">
+                      <span className={LABEL_CLS}>Campaign Title</span>
+                      <input required minLength={3} maxLength={80} value={ptcAdvertiserForm.title} onChange={e => setPtcAdvertiserForm(p => ({ ...p, title: e.target.value }))} className={INPUT_CLS} placeholder="Visit our website" />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className={LABEL_CLS}>Website URL</span>
+                      <input required type="url" maxLength={2048} value={ptcAdvertiserForm.target_url} onChange={e => setPtcAdvertiserForm(p => ({ ...p, target_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com" />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className={LABEL_CLS}>Campaign Description</span>
+                      <textarea required minLength={10} maxLength={500} rows={3} value={ptcAdvertiserForm.description} onChange={e => setPtcAdvertiserForm(p => ({ ...p, description: e.target.value }))} className={INPUT_CLS} placeholder="Describe the website or product users will visit." />
+                    </label>
+                    <label className="block">
+                      <span className={LABEL_CLS}>Reward per completed view (DOGE)</span>
+                      <input required type="number" min="0.00000001" max="1" step="0.00000001" value={ptcAdvertiserForm.reward_doge} onChange={e => setPtcAdvertiserForm(p => ({ ...p, reward_doge: e.target.value }))} className={INPUT_CLS} />
+                    </label>
+                    <label className="block">
+                      <span className={LABEL_CLS}>Visit duration</span>
+                      <select value={ptcAdvertiserForm.duration_seconds} onChange={e => setPtcAdvertiserForm(p => ({ ...p, duration_seconds: e.target.value }))} className={INPUT_CLS}>
+                        {[10, 15, 20, 30, 45, 60, 90, 120, 180].map(seconds => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className={LABEL_CLS}>Maximum views</span>
+                      <input required type="number" min="1" max="10000000" step="1" value={ptcAdvertiserForm.max_views} onChange={e => setPtcAdvertiserForm(p => ({ ...p, max_views: e.target.value }))} className={INPUT_CLS} />
+                    </label>
+                    <label className="block">
+                      <span className={LABEL_CLS}>Proposed campaign budget (DOGE)</span>
+                      <input required type="number" min="0.00000001" max="10000" step="0.00000001" value={ptcAdvertiserForm.requested_budget_doge} onChange={e => setPtcAdvertiserForm(p => ({ ...p, requested_budget_doge: e.target.value }))} className={INPUT_CLS} />
+                    </label>
+                  </div>
+                  <p className="text-xs text-slate-500">Submitting a request does not charge you. Final price and payment instructions are provided after review. Campaigns are not activated until payment is independently verified and the PTC reserve is funded.</p>
+                  <button type="submit" disabled={ptcAdvertiserSubmitting || !apiReady} className={PRIMARY_BTN}>{ptcAdvertiserSubmitting ? 'Submitting...' : 'Submit PTC Campaign'}</button>
+                </form>
+                <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">My PTC Campaign Requests</h3>
+                    <button type="button" disabled={ptcAdvertiserLoading} onClick={loadPtcAdvertiserRequests} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">{ptcAdvertiserLoading ? 'Loading...' : 'Refresh'}</button>
+                  </div>
+                  {ptcAdvertiserRequests.length === 0 ? (
+                    <p className="text-sm text-slate-500">No PTC campaign requests yet.</p>
+                  ) : ptcAdvertiserRequests.map(request => (
+                    <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <strong className="text-white">{request.title}</strong>
+                        <span className="text-[10px] uppercase font-black text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
+                      </div>
+                      <a href={request.target_url} target="_blank" rel="noopener noreferrer nofollow" className="text-xs text-[#F4A6C1] break-all">{request.target_url}</a>
+                      <p className="text-xs text-slate-400">{request.duration_seconds}s visit · {request.max_views} views · {formatDoge(request.reward_koinu)} DOGE/view</p>
+                      <p className="text-xs text-slate-500">Requested budget: {formatDoge(request.requested_budget_koinu)} DOGE{request.quoted_budget_koinu ? ` · Quoted: ${formatDoge(request.quoted_budget_koinu)} DOGE` : ''}</p>
+                      {request.status === 'awaiting_payment' && (
+                        <div className="space-y-2">
+                          <p className="text-xs text-slate-400">Pay using the instructions sent by DogeDrip, then enter the transaction reference.</p>
+                          <input value={ptcAdvertiserPaymentRefs[request.id] || ''} onChange={e => setPtcAdvertiserPaymentRefs(p => ({ ...p, [request.id]: e.target.value }))} maxLength={120} className={INPUT_CLS} placeholder="Payment transaction reference" />
+                          <button type="button" disabled={ptcAdvertiserLoading} onClick={() => handlePtcAdvertiserPayment(request.id)} className={PRIMARY_BTN}>Submit Payment Reference</button>
+                        </div>
+                      )}
+                      {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
+                      {request.status === 'approved' && (
+                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
+                          <p className="text-xs text-emerald-400">Payment verified · Campaign #{request.campaign_id}</p>
+                          {request.campaign_status ? (
+                            <>
+                              <div className="flex justify-between gap-2 text-xs">
+                                <span className="text-slate-400">Campaign status</span>
+                                <strong className="text-white uppercase">{String(request.campaign_status).replaceAll('_', ' ')}</strong>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Completed views</p>
+                                  <p className="text-sm font-black text-white">{Number(request.campaign_views_completed || 0).toLocaleString()} / {Number(request.max_views || 0).toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Views remaining</p>
+                                  <p className="text-sm font-black text-white">{Math.max(0, Number(request.max_views || 0) - Number(request.campaign_views_completed || 0)).toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Budget spent</p>
+                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_spent_koinu)} DOGE</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Budget remaining</p>
+                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_remaining_budget_koinu)} DOGE</p>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-xs text-slate-400">Campaign created and waiting for admin activation.</p>
+                          )}
+                        </div>
+                      )}
+                      {request.status === 'rejected' && <p className="text-xs text-red-300">{request.admin_note || 'This campaign request was rejected.'}</p>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </div>
+          )}
+
           {activeTab === 'plans' && (
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
@@ -4886,118 +5016,7 @@ export default function App() {
                 })}
               </div>
 
-              <section id="ptc-advertiser-portal" className="border-t border-slate-800 pt-7 space-y-5 scroll-mt-6">
-                <div>
-                  <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">PTC Campaign Manager</h2>
-                  <p className="text-sm text-slate-400 mt-1">Submit a sponsored website campaign. Our team reviews the details, confirms the price and verifies payment before the campaign can go live.</p>
-                </div>
-                {ptcAdvertiserMessage && (
-                  <div className={`p-3 rounded-xl text-sm border ${ptcAdvertiserMessageError ? 'bg-red-500/10 border-red-500/30 text-red-300' : 'bg-[#F4A6C1]/10 border-[#F4A6C1]/30 text-[#F4A6C1]'}`}>
-                    {ptcAdvertiserMessage}
-                  </div>
-                )}
-                <form onSubmit={handlePtcAdvertiserSubmit} className="bg-black border border-slate-800 rounded-2xl p-5 space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <label className="block">
-                      <span className={LABEL_CLS}>Business / Advertiser Name</span>
-                      <input required minLength={2} maxLength={80} value={ptcAdvertiserForm.advertiser_name} onChange={e => setPtcAdvertiserForm(p => ({ ...p, advertiser_name: e.target.value }))} className={INPUT_CLS} placeholder="Your company" />
-                    </label>
-                    <label className="block">
-                      <span className={LABEL_CLS}>Campaign Title</span>
-                      <input required minLength={3} maxLength={80} value={ptcAdvertiserForm.title} onChange={e => setPtcAdvertiserForm(p => ({ ...p, title: e.target.value }))} className={INPUT_CLS} placeholder="Visit our website" />
-                    </label>
-                    <label className="block md:col-span-2">
-                      <span className={LABEL_CLS}>Website URL</span>
-                      <input required type="url" maxLength={2048} value={ptcAdvertiserForm.target_url} onChange={e => setPtcAdvertiserForm(p => ({ ...p, target_url: e.target.value }))} className={INPUT_CLS} placeholder="https://example.com" />
-                    </label>
-                    <label className="block md:col-span-2">
-                      <span className={LABEL_CLS}>Campaign Description</span>
-                      <textarea required minLength={10} maxLength={500} rows={3} value={ptcAdvertiserForm.description} onChange={e => setPtcAdvertiserForm(p => ({ ...p, description: e.target.value }))} className={INPUT_CLS} placeholder="Describe the website or product users will visit." />
-                    </label>
-                    <label className="block">
-                      <span className={LABEL_CLS}>Reward per completed view (DOGE)</span>
-                      <input required type="number" min="0.00000001" max="1" step="0.00000001" value={ptcAdvertiserForm.reward_doge} onChange={e => setPtcAdvertiserForm(p => ({ ...p, reward_doge: e.target.value }))} className={INPUT_CLS} />
-                    </label>
-                    <label className="block">
-                      <span className={LABEL_CLS}>Visit duration</span>
-                      <select value={ptcAdvertiserForm.duration_seconds} onChange={e => setPtcAdvertiserForm(p => ({ ...p, duration_seconds: e.target.value }))} className={INPUT_CLS}>
-                        {[10, 15, 20, 30, 45, 60, 90, 120, 180].map(seconds => <option key={seconds} value={seconds}>{seconds} seconds</option>)}
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className={LABEL_CLS}>Maximum views</span>
-                      <input required type="number" min="1" max="10000000" step="1" value={ptcAdvertiserForm.max_views} onChange={e => setPtcAdvertiserForm(p => ({ ...p, max_views: e.target.value }))} className={INPUT_CLS} />
-                    </label>
-                    <label className="block">
-                      <span className={LABEL_CLS}>Proposed campaign budget (DOGE)</span>
-                      <input required type="number" min="0.00000001" max="10000" step="0.00000001" value={ptcAdvertiserForm.requested_budget_doge} onChange={e => setPtcAdvertiserForm(p => ({ ...p, requested_budget_doge: e.target.value }))} className={INPUT_CLS} />
-                    </label>
-                  </div>
-                  <p className="text-xs text-slate-500">Submitting a request does not charge you. Final price and payment instructions are provided after review. Campaigns are not activated until payment is independently verified and the PTC reserve is funded.</p>
-                  <button type="submit" disabled={ptcAdvertiserSubmitting || !apiReady} className={PRIMARY_BTN}>{ptcAdvertiserSubmitting ? 'Submitting...' : 'Submit PTC Campaign'}</button>
-                </form>
-                <div className="bg-black border border-slate-800 rounded-2xl p-5 space-y-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">My PTC Campaign Requests</h3>
-                    <button type="button" disabled={ptcAdvertiserLoading} onClick={loadPtcAdvertiserRequests} className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 font-bold">{ptcAdvertiserLoading ? 'Loading...' : 'Refresh'}</button>
-                  </div>
-                  {ptcAdvertiserRequests.length === 0 ? (
-                    <p className="text-sm text-slate-500">No PTC campaign requests yet.</p>
-                  ) : ptcAdvertiserRequests.map(request => (
-                    <div key={request.id} className="border border-slate-800 rounded-xl p-4 space-y-3">
-                      <div className="flex flex-wrap justify-between gap-2">
-                        <strong className="text-white">{request.title}</strong>
-                        <span className="text-[10px] uppercase font-black text-[#F4A6C1]">{String(request.status).replaceAll('_', ' ')}</span>
-                      </div>
-                      <a href={request.target_url} target="_blank" rel="noopener noreferrer nofollow" className="text-xs text-[#F4A6C1] break-all">{request.target_url}</a>
-                      <p className="text-xs text-slate-400">{request.duration_seconds}s visit · {request.max_views} views · {formatDoge(request.reward_koinu)} DOGE/view</p>
-                      <p className="text-xs text-slate-500">Requested budget: {formatDoge(request.requested_budget_koinu)} DOGE{request.quoted_budget_koinu ? ` · Quoted: ${formatDoge(request.quoted_budget_koinu)} DOGE` : ''}</p>
-                      {request.status === 'awaiting_payment' && (
-                        <div className="space-y-2">
-                          <p className="text-xs text-slate-400">Pay using the instructions sent by DogeDrip, then enter the transaction reference.</p>
-                          <input value={ptcAdvertiserPaymentRefs[request.id] || ''} onChange={e => setPtcAdvertiserPaymentRefs(p => ({ ...p, [request.id]: e.target.value }))} maxLength={120} className={INPUT_CLS} placeholder="Payment transaction reference" />
-                          <button type="button" disabled={ptcAdvertiserLoading} onClick={() => handlePtcAdvertiserPayment(request.id)} className={PRIMARY_BTN}>Submit Payment Reference</button>
-                        </div>
-                      )}
-                      {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
-                      {request.status === 'approved' && (
-                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
-                          <p className="text-xs text-emerald-400">Payment verified · Campaign #{request.campaign_id}</p>
-                          {request.campaign_status ? (
-                            <>
-                              <div className="flex justify-between gap-2 text-xs">
-                                <span className="text-slate-400">Campaign status</span>
-                                <strong className="text-white uppercase">{String(request.campaign_status).replaceAll('_', ' ')}</strong>
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <p className="text-[10px] uppercase text-slate-500">Completed views</p>
-                                  <p className="text-sm font-black text-white">{Number(request.campaign_views_completed || 0).toLocaleString()} / {Number(request.max_views || 0).toLocaleString()}</p>
-                                </div>
-                                <div>
-                                  <p className="text-[10px] uppercase text-slate-500">Views remaining</p>
-                                  <p className="text-sm font-black text-white">{Math.max(0, Number(request.max_views || 0) - Number(request.campaign_views_completed || 0)).toLocaleString()}</p>
-                                </div>
-                                <div>
-                                  <p className="text-[10px] uppercase text-slate-500">Budget spent</p>
-                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_spent_koinu)} DOGE</p>
-                                </div>
-                                <div>
-                                  <p className="text-[10px] uppercase text-slate-500">Budget remaining</p>
-                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_remaining_budget_koinu)} DOGE</p>
-                                </div>
-                              </div>
-                            </>
-                          ) : (
-                            <p className="text-xs text-slate-400">Campaign created and waiting for admin activation.</p>
-                          )}
-                        </div>
-                      )}
-                      {request.status === 'rejected' && <p className="text-xs text-red-300">{request.admin_note || 'This campaign request was rejected.'}</p>}
-                    </div>
-                  ))}
-                </div>
-              </section>
+              
 
               <div id="advertising-plans" className="border-t border-slate-800 pt-7 space-y-5 scroll-mt-6">
                 <div>
