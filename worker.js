@@ -45,6 +45,9 @@ function isAllowedOrigin(origin) {
   try {
     const url = new URL(origin);
     return (
+      url.origin === origin &&
+      !url.username &&
+      !url.password &&
       url.protocol === "https:" &&
       url.hostname.endsWith(".dogedrip.pages.dev") &&
       url.hostname.split(".").length === 4 &&
@@ -383,19 +386,18 @@ async function enforceRateLimit(env, identity, route, policy) {
     );
   }
 
-  if (Math.random() < 0.005) {
-    try {
-      await env.DB.prepare(`
-        DELETE FROM api_rate_limits
-        WHERE updated_at < datetime('now', '-1 day')
-      `).run();
-    } catch (error) {
-      console.warn("Rate limit cleanup skipped:", error);
-    }
-  }
 }
 
 async function readJson(request) {
+  const contentType = (request.headers.get("Content-Type") || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (contentType !== "application/json") {
+    throw new HttpError(415, "Content-Type must be application/json");
+  }
+
   const contentLength = Number(request.headers.get("Content-Length") || 0);
 
   if (
@@ -2501,14 +2503,6 @@ async function handleRequest(request, env, json) {
           last_seen_at = CURRENT_TIMESTAMP
       `).bind(user.sub).run();
 
-      if (Math.random() < 0.005) {
-        await env.DB.prepare(`
-          DELETE FROM user_daily_activity
-          WHERE utc_date < date('now', '-90 days')
-        `).run().catch(error => {
-          console.warn("Daily activity cleanup skipped:", error);
-        });
-      }
     }
 
     return json({
@@ -5433,6 +5427,20 @@ export default {
         status: 204,
         headers: { ...JSON_HEADERS, ...cors }
       });
+    }
+
+    if (!["GET", "POST", "PUT"].includes(request.method)) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Method not allowed" }),
+        {
+          status: 405,
+          headers: {
+            ...JSON_HEADERS,
+            ...cors,
+            "Allow": "GET, POST, PUT, OPTIONS"
+          }
+        }
+      );
     }
 
     try {
