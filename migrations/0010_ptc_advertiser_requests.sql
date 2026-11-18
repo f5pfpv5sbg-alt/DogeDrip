@@ -30,3 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_ptc_advertiser_requests_owner
   ON ptc_advertiser_requests(advertiser_uid, id DESC);
 CREATE INDEX IF NOT EXISTS idx_ptc_advertiser_requests_status
   ON ptc_advertiser_requests(status, id DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ptc_advertiser_payment_reference_unique
+  ON ptc_advertiser_requests(payment_reference)
+  WHERE payment_reference IS NOT NULL AND payment_reference != '';
