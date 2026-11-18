@@ -1750,7 +1750,6 @@ async function getAdminDailyStats(env) {
     onlineUsers,
     adRevenue,
     verifiedSubscriptionRevenue,
-    verifiedOperatingExpenses,
     faucetReserve,
     wheelReserve,
     referralReserve
@@ -1870,13 +1869,6 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
-      SELECT COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS count
-      FROM operating_expenses
-      WHERE verification_status = 'verified'
-        AND date(expense_date) = ?
-    `).bind(today).first(),
-
-    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1894,6 +1886,19 @@ async function getAdminDailyStats(env) {
       WHERE id = 1
     `).first()
   ]);
+
+  let verifiedOperatingExpenses = null;
+  let expenseTrackingAvailable = true;
+  try {
+    verifiedOperatingExpenses = await env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_cents), 0) AS total_cents, COUNT(*) AS count
+      FROM operating_expenses
+      WHERE verification_status = 'verified'
+        AND date(expense_date) = ?
+    `).bind(today).first();
+  } catch {
+    expenseTrackingAvailable = false;
+  }
 
   const sumCount = row => ({
     koinu: Number(row?.total || 0),
@@ -1942,10 +1947,12 @@ async function getAdminDailyStats(env) {
       vip: Number(verifiedSubscriptionRevenue?.vip_cents || 0)
     },
     subscription_revenue_verification_status: "faucetpay_callback_verified",
-    verified_operating_expenses_eur_cents: Number(verifiedOperatingExpenses?.total_cents || 0),
-    verified_operating_expenses_count: Number(verifiedOperatingExpenses?.count || 0),
-    verified_subscription_net_after_expenses_eur_cents:
-      Number(verifiedSubscriptionRevenue?.total_cents || 0) - Number(verifiedOperatingExpenses?.total_cents || 0),
+    expense_tracking_available: expenseTrackingAvailable,
+    verified_operating_expenses_eur_cents: expenseTrackingAvailable ? Number(verifiedOperatingExpenses?.total_cents || 0) : null,
+    verified_operating_expenses_count: expenseTrackingAvailable ? Number(verifiedOperatingExpenses?.count || 0) : null,
+    verified_subscription_net_after_expenses_eur_cents: expenseTrackingAvailable
+      ? Number(verifiedSubscriptionRevenue?.total_cents || 0) - Number(verifiedOperatingExpenses?.total_cents || 0)
+      : null,
     expense_verification_status: "admin_verified_with_evidence_reference",
     wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu,
     rewards_credited_koinu: rewardsCreditedKoinu,
