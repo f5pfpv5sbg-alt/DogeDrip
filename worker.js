@@ -4645,6 +4645,8 @@ async function handleRequest(request, env, json) {
       ptc_rewards: {
         pending_unsettled_koinu: Number(ptcPendingRewards?.total_koinu || 0),
         pending_unsettled_views: Number(ptcPendingRewards?.views_count || 0),
+        reserve_available_koinu: Number(ptcReserve?.available_koinu || 0),
+        reserve_locked_koinu: Number(ptcReserve?.locked_koinu || 0),
         reserve_pending_koinu: Number(ptcReserve?.pending_koinu || 0),
         pending_reserve_matches_views:
           Number(ptcReserve?.pending_koinu || 0) === Number(ptcPendingRewards?.total_koinu || 0),
