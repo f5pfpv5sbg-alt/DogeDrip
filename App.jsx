@@ -667,6 +667,18 @@ export default function App() {
   const [financeAudit, setFinanceAudit] = useState(null);
   const [financeAuditLoading, setFinanceAuditLoading] = useState(false);
   const [financeAuditError, setFinanceAuditError] = useState('');
+  const [adminExpenses, setAdminExpenses] = useState([]);
+  const [adminExpensesLoading, setAdminExpensesLoading] = useState(false);
+  const [adminExpensesError, setAdminExpensesError] = useState('');
+  const [adminExpenseSaving, setAdminExpenseSaving] = useState(false);
+  const [adminExpenseVerifying, setAdminExpenseVerifying] = useState(null);
+  const [adminExpenseEvidence, setAdminExpenseEvidence] = useState({});
+  const [adminExpenseForm, setAdminExpenseForm] = useState({
+    category: 'hosting',
+    description: '',
+    amount_eur: '',
+    expense_date: new Date().toISOString().slice(0, 10)
+  });
   const [myAdRequests, setMyAdRequests] = useState([]);
   const [adminAdRequests, setAdminAdRequests] = useState([]);
   const [adminPtcData, setAdminPtcData] = useState(null);
@@ -1537,6 +1549,25 @@ export default function App() {
       cancelled = true;
     };
   }, [firebaseUser, apiReady, isDemoAdmin, apiRequest]);
+
+  useEffect(() => {
+    if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'admin') return undefined;
+    let cancelled = false;
+    const loadExpenses = async () => {
+      setAdminExpensesLoading(true);
+      setAdminExpensesError('');
+      try {
+        const data = await apiRequest('/api/admin/finance/expenses');
+        if (!cancelled) setAdminExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+      } catch (error) {
+        if (!cancelled) setAdminExpensesError(error.message || 'Could not load operating expenses.');
+      } finally {
+        if (!cancelled) setAdminExpensesLoading(false);
+      }
+    };
+    loadExpenses();
+    return () => { cancelled = true; };
+  }, [firebaseUser, apiReady, isDemoAdmin, activeTab, apiRequest]);
 
   useEffect(() => {
     if (!firebaseUser || !apiReady || !isDemoAdmin || activeTab !== 'admin') {
@@ -2826,6 +2857,72 @@ export default function App() {
       setFinanceAuditError(error.message || 'Could not complete the financial integrity audit.');
     } finally {
       setFinanceAuditLoading(false);
+    }
+  };
+
+  const refreshAdminExpenses = async () => {
+    if (!isDemoAdmin) return;
+    setAdminExpensesLoading(true);
+    setAdminExpensesError('');
+    try {
+      const data = await apiRequest('/api/admin/finance/expenses');
+      setAdminExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+    } catch (error) {
+      setAdminExpensesError(error.message || 'Could not load operating expenses. Apply migration 0008 first if this is a new database.');
+    } finally {
+      setAdminExpensesLoading(false);
+    }
+  };
+
+  const handleAdminExpenseCreate = async (event) => {
+    event.preventDefault();
+    if (!isDemoAdmin || adminExpenseSaving) return;
+    const amount = Number(adminExpenseForm.amount_eur);
+    if (!Number.isFinite(amount) || amount <= 0 || !/^\\d+(?:\\.\\d{1,2})?$/.test(adminExpenseForm.amount_eur.trim())) {
+      setAdminExpensesError('Enter a valid expense amount in EUR.');
+      return;
+    }
+    setAdminExpenseSaving(true);
+    setAdminExpensesError('');
+    try {
+      await apiRequest('/api/admin/finance/expenses', {
+        method: 'POST',
+        body: JSON.stringify({
+          category: adminExpenseForm.category,
+          description: adminExpenseForm.description.trim(),
+          amount_cents: Math.round(amount * 100),
+          expense_date: adminExpenseForm.expense_date
+        })
+      });
+      setAdminExpenseForm(current => ({ ...current, description: '', amount_eur: '' }));
+      await Promise.all([refreshAdminExpenses(), refreshAdminStats()]);
+    } catch (error) {
+      setAdminExpensesError(error.message || 'Could not save expense.');
+    } finally {
+      setAdminExpenseSaving(false);
+    }
+  };
+
+  const handleAdminExpenseVerify = async (expenseId) => {
+    if (!isDemoAdmin || adminExpenseVerifying) return;
+    const evidence = String(adminExpenseEvidence[expenseId] || '').trim();
+    if (evidence.length < 3) {
+      setAdminExpensesError('Add a receipt or transaction reference before verifying.');
+      return;
+    }
+    setAdminExpenseVerifying(expenseId);
+    setAdminExpensesError('');
+    try {
+      await apiRequest(`/api/admin/finance/expenses/${encodeURIComponent(expenseId)}/verify`, {
+        method: 'POST',
+        body: JSON.stringify({ evidence_reference: evidence })
+      });
+      setAdminExpenseEvidence(current => ({ ...current, [expenseId]: '' }));
+      await Promise.all([refreshAdminExpenses(), refreshAdminStats()]);
+    } catch (error) {
+      setAdminExpensesError(error.message || 'Could not verify expense.');
+    } finally {
+      setAdminExpenseVerifying(null);
     }
   };
 
@@ -5416,6 +5513,45 @@ export default function App() {
                     valueCls="text-emerald-400"
                   />
                 </div>
+
+
+                <section className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-black uppercase tracking-wider text-white font-['Space_Grotesk',sans-serif]">Operating Expenses</h3>
+                      <p className="mt-1 text-xs text-slate-400">Only expenses with a receipt/reference verified by an admin are included in the daily report.</p>
+                    </div>
+                    <button type="button" onClick={refreshAdminExpenses} disabled={adminExpensesLoading} className="rounded-lg border border-white/15 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Refresh</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <StatTile label="Verified Expenses Today" value={adminStats?.expense_tracking_available === false ? 'Migration required' : adminStats ? `€${(Number(adminStats.verified_operating_expenses_eur_cents || 0) / 100).toFixed(2)}` : (adminStatsLoading ? '...' : 'N/A')} sub={adminStats?.expense_tracking_available === false ? 'Apply migration 0008_operating_expenses.sql' : `${Number(adminStats?.verified_operating_expenses_count || 0)} verified records`} valueCls="text-red-300" />
+                    <StatTile label="Premium/VIP After Expenses" value={adminStats?.verified_subscription_net_after_expenses_eur_cents == null ? 'N/A' : `€${(Number(adminStats.verified_subscription_net_after_expenses_eur_cents) / 100).toFixed(2)}`} sub="Partial net only; excludes unverified ad income and other costs" valueCls={adminAccentText} />
+                  </div>
+                  <form onSubmit={handleAdminExpenseCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <select value={adminExpenseForm.category} onChange={event => setAdminExpenseForm(current => ({ ...current, category: event.target.value }))} className="rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white">
+                      <option value="hosting">Hosting</option><option value="infrastructure">Infrastructure</option><option value="advertising">Advertising</option><option value="payment_fees">Payment fees</option><option value="software">Software</option><option value="other">Other</option>
+                    </select>
+                    <input type="date" value={adminExpenseForm.expense_date} onChange={event => setAdminExpenseForm(current => ({ ...current, expense_date: event.target.value }))} required className="rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white" />
+                    <input value={adminExpenseForm.description} onChange={event => setAdminExpenseForm(current => ({ ...current, description: event.target.value }))} minLength={3} maxLength={240} required placeholder="Expense description" className="rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white sm:col-span-2" />
+                    <input type="number" inputMode="decimal" min="0.01" step="0.01" value={adminExpenseForm.amount_eur} onChange={event => setAdminExpenseForm(current => ({ ...current, amount_eur: event.target.value }))} required placeholder="Amount in EUR" className="rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white" />
+                    <button type="submit" disabled={adminExpenseSaving} className="rounded-lg bg-[#F4A6C1] px-4 py-3 text-sm font-black text-black disabled:opacity-50">{adminExpenseSaving ? 'Saving…' : 'Add unverified expense'}</button>
+                  </form>
+                  {adminExpensesError && <p role="alert" className="text-xs text-red-300">{adminExpensesError}</p>}
+                  <div className="space-y-3">
+                    {adminExpensesLoading ? <p className="text-xs text-slate-400">Loading expenses…</p> : adminExpenses.length === 0 ? <p className="text-xs text-slate-500">No expense records yet.</p> : adminExpenses.map(expense => (
+                      <div key={expense.id} className="rounded-xl border border-white/10 p-3 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div><p className="text-sm font-bold text-white">{expense.description}</p><p className="text-xs text-slate-400">{expense.category.replaceAll('_', ' ')} · {expense.expense_date}</p></div>
+                          <div className="text-right"><p className="text-sm font-black text-white">€{(Number(expense.amount_cents) / 100).toFixed(2)}</p><p className={expense.verification_status === 'verified' ? 'text-xs text-emerald-300' : 'text-xs text-yellow-300'}>{expense.verification_status}</p></div>
+                        </div>
+                        {expense.verification_status !== 'verified' && <div className="flex flex-col sm:flex-row gap-2">
+                          <input value={adminExpenseEvidence[expense.id] || ''} onChange={event => setAdminExpenseEvidence(current => ({ ...current, [expense.id]: event.target.value }))} maxLength={240} placeholder="Receipt / transaction reference" className="min-w-0 flex-1 rounded-lg border border-white/15 bg-black px-3 py-2 text-xs text-white" />
+                          <button type="button" onClick={() => handleAdminExpenseVerify(expense.id)} disabled={adminExpenseVerifying === expense.id} className="rounded-lg border border-[#F4A6C1]/60 px-3 py-2 text-xs font-bold text-[#F4A6C1] disabled:opacity-50">{adminExpenseVerifying === expense.id ? 'Verifying…' : 'Verify expense'}</button>
+                        </div>}
+                      </div>
+                    ))}
+                  </div>
+                </section>
 
                 <h3 className="pt-2 text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
                   Withdrawals & Reserves
