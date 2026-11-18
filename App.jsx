@@ -5512,6 +5512,18 @@ export default function App() {
                     }
                     valueCls="text-emerald-400"
                   />
+                  <StatTile
+                    label="PTC Advertiser Funding Today"
+                    value={adminStats ? `${formatDoge(adminStats.ptc_advertiser_funding_today_koinu || 0)} DOGE` : (adminStatsLoading ? '...' : 'N/A')}
+                    sub={adminStats ? `${Number(adminStats.ptc_advertiser_funding_today_count || 0)} admin-verified funding records; gross funding, not profit` : 'External transaction references checked manually'}
+                    valueCls={adminAccentText}
+                  />
+                  <StatTile
+                    label="PTC Reserve / Pending Rewards"
+                    value={adminStats?.ptc_reserve ? `${formatDoge(adminStats.ptc_reserve.available_koinu)} DOGE` : (adminStatsLoading ? '...' : 'N/A')}
+                    sub={adminStats?.ptc_reserve ? `Available · ${formatDoge(adminStats.ptc_reserve.locked_koinu)} locked · ${formatDoge(adminStats.ptc_reserve.pending_koinu)} pending rewards` : 'Dedicated advertiser-funded reserve'}
+                    valueCls="text-yellow-300"
+                  />
                 </div>
 
 
