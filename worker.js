@@ -3574,10 +3574,10 @@ async function handleRequest(request, env, json) {
           GROUP BY v.uid
           HAVING SUM(v.reward_koinu) = ?
              AND COUNT(*) = ?
-             AND EXISTS (
-               SELECT 1 FROM ptc_reserve r
-               WHERE r.id = 1 AND r.pending_koinu >= SUM(v.reward_koinu)
-             )
+             AND COALESCE(
+               (SELECT pending_koinu FROM ptc_reserve WHERE id = 1),
+               -1
+             ) >= SUM(v.reward_koinu)
         `).bind(settlementId, admin.uid, `ptc_settlement:${uid}:${settlementId}`, uid, amount, viewsCount),
 
         env.DB.prepare(`
