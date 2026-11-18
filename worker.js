@@ -3535,6 +3535,7 @@ async function handleRequest(request, env, json) {
     });
   }
 
+  // Settlement is idempotent per completed view and is backed by ptc_reserve.pending_koinu.
   if (path === "/api/admin/ptc/settle" && method === "POST") {
     const user = await authenticate(request);
     const admin = await requireAdmin(user, env);
