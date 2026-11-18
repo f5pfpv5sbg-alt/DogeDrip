@@ -88,3 +88,10 @@ test("PTC is a single role-aware destination for users, advertisers and admins",
   assert.doesNotMatch(app, /setActiveTab\('advertiser'\)/);
   assert.doesNotMatch(app, /activeTab === 'advertiser'/);
 });
+
+test("PTC heading and description change for each panel role", () => {
+  assert.match(app, /PTC Administration/);
+  assert.match(app, /Advertiser PTC/);
+  assert.match(app, /Paid To Click/);
+  assert.match(app, /Create sponsored campaigns, submit payment references and track your campaign performance/);
+});
