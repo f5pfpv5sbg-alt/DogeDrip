@@ -55,15 +55,13 @@ test("advertiser dashboard exposes campaign analytics only through owner-scoped 
 });
 
 
-test("advertiser dashboard is a separate authenticated navigation destination and loads its own requests", () => {
-  assert.match(app, /setActiveTab\('advertiser'\)/);
-  assert.match(app, /activeTab === 'advertiser'/);
-  assert.match(app, /activeTab !== 'advertiser' \|\| !apiReady \|\| !firebaseUser/);
-  assert.match(app, /loadPtcAdvertiserRequests\(\)/);
-  const plansStart = app.indexOf("{activeTab === 'plans' && (");
-  const plansEnd = app.indexOf("{activeTab === 'wallet' && (", plansStart);
-  assert.ok(plansStart >= 0 && plansEnd > plansStart);
-  assert.doesNotMatch(app.slice(plansStart, plansEnd), /ptc-advertiser-portal/);
+test("advertiser tools load inside the unified PTC panel without a separate navigation destination", () => {
+  assert.match(app, /setActiveTab\('ptc'\)/);
+  assert.match(app, /activeTab === 'ptc'/);
+  assert.match(app, /ptcPanelMode === 'advertiser'/);
+  assert.match(app, /activeTab !== 'ptc' \|\| ptcPanelMode !== 'advertiser'/);
+  assert.doesNotMatch(app, /setActiveTab\('advertiser'\)/);
+  assert.doesNotMatch(app, /activeTab === 'advertiser'/);
 });
 
 test("admin campaign activation locks reserve atomically and never activates without sufficient reserve", () => {
