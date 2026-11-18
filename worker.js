@@ -4951,7 +4951,13 @@ async function handleRequest(request, env, json) {
             processed_by = ?,
             processed_at = CURRENT_TIMESTAMP
         WHERE id = ?
-          AND status IN ('processing', 'payment_unknown')
+          AND (
+            status IN ('processing', 'payment_unknown')
+            OR (
+              status = 'approved'
+              AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
+            )
+          )
       `).bind(payoutId, admin.uid, id).run();
 
       if (result.meta.changes !== 1) {
@@ -4970,7 +4976,13 @@ async function handleRequest(request, env, json) {
             processed_by = NULL,
             processed_at = NULL
         WHERE id = ?
-          AND status IN ('processing', 'payment_unknown')
+          AND (
+            status IN ('processing', 'payment_unknown')
+            OR (
+              status = 'approved'
+              AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
+            )
+          )
       `).bind(id).run();
 
       if (result.meta.changes !== 1) {
