@@ -53,3 +53,14 @@ test("admin UI requires explicit confirmation and shows settlement only when pen
   assert.match(app, /Settle rewards/);
   assert.match(app, /Reserve insufficient/);
 });
+
+test("user PTC history removes settled views from pending rewards and labels credited views", () => {
+  const history = section(worker, 'if (path === "/api/ptc/history" && method === "GET")', 'if (path === "/api/ptc/start"');
+  assert.match(history, /LEFT JOIN ptc_settlement_items/);
+  assert.match(history, /THEN 'settled' ELSE v\.status END AS status/);
+  assert.match(history, /si\.view_id IS NULL/);
+  assert.match(history, /settled_koinu/);
+  assert.match(history, /settled_views/);
+  assert.match(app, /Settled PTC Rewards/);
+  assert.match(app, /Credited to balance/);
+});
