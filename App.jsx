@@ -2645,8 +2645,8 @@ export default function App() {
       if (!['http:', 'https:'].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password) {
         throw new Error('Use a public HTTP or HTTPS campaign website URL.');
       }
-      if (!/^\\d+(?:\\.\\d{1,8})?$/.test(ptcAdvertiserForm.reward_doge.trim()) ||
-          !/^\\d+(?:\\.\\d{1,8})?$/.test(ptcAdvertiserForm.requested_budget_doge.trim()) ||
+      if (!/^\d+(?:\.\d{1,8})?$/.test(ptcAdvertiserForm.reward_doge.trim()) ||
+          !/^\d+(?:\.\d{1,8})?$/.test(ptcAdvertiserForm.requested_budget_doge.trim()) ||
           !Number.isSafeInteger(reward) || reward < 1 || reward > KOINU ||
           !Number.isSafeInteger(budget) || budget < reward ||
           !Number.isSafeInteger(maxViews) || maxViews < 1 || maxViews > 10000000 ||
