@@ -3939,11 +3939,19 @@ async function handleRequest(request, env, json) {
     const reference = typeof body.payment_reference === "string" ? body.payment_reference.trim() : "";
     if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "Invalid request ID.");
     if (reference.length < 5 || reference.length > 120) throw new HttpError(400, "Payment reference must be 5-120 characters.");
-    const updated = await env.DB.prepare(`
-      UPDATE ptc_advertiser_requests
-      SET payment_reference = ?, status = 'payment_submitted', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND advertiser_uid = ? AND status = 'awaiting_payment'
-    `).bind(reference, id, user.sub).run();
+    let updated;
+    try {
+      updated = await env.DB.prepare(`
+        UPDATE ptc_advertiser_requests
+        SET payment_reference = ?, status = 'payment_submitted', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND advertiser_uid = ? AND status = 'awaiting_payment'
+      `).bind(reference, id, user.sub).run();
+    } catch (error) {
+      if (String(error?.message || "").includes("UNIQUE constraint failed")) {
+        throw new HttpError(409, "This payment reference has already been used.");
+      }
+      throw error;
+    }
     if (updated.meta.changes !== 1) throw new HttpError(409, "Request is not awaiting payment or does not belong to your account.");
     return json({ success: true, status: "payment_submitted" });
   }
