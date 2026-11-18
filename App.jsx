@@ -745,6 +745,24 @@ export default function App() {
   const isDemoAdmin = Boolean(adminTheme);
   const isBlueAdmin = adminTheme === 'blue';
 
+  const internalBackingRequiredKoinu = financeAudit
+    ? [
+        financeAudit.liabilities.user_balances_koinu,
+        financeAudit.liabilities.outstanding_withdrawals_koinu,
+        financeAudit.reserves.faucet_available_koinu,
+        financeAudit.reserves.wheel_available_koinu,
+        financeAudit.reserves.wheel_locked_koinu,
+        financeAudit.reserves.referral_available_koinu,
+        financeAudit.ptc_rewards.reserve_available_koinu,
+        financeAudit.ptc_rewards.reserve_locked_koinu,
+        financeAudit.ptc_rewards.reserve_pending_koinu
+      ].reduce((total, value) => total + Number(value || 0), 0)
+    : null;
+  const faucetPayCoverageDifferenceDoge =
+    faucetPayBalance !== null && Number.isFinite(faucetPayBalance) && internalBackingRequiredKoinu !== null
+      ? faucetPayBalance - internalBackingRequiredKoinu / KOINU
+      : null;
+
   const planName =
     typeof planInfo?.name === 'string' && planInfo.name ? planInfo.name : null;
   const claimAmount = isNum(planInfo?.claimAmount) ? planInfo.claimAmount : null;
@@ -5492,6 +5510,18 @@ export default function App() {
                         <p className="text-[11px] text-slate-400">D1 contains internal reserve figures only. It does not contain wallet-deposit proof or a reserve funding history, so these numbers cannot confirm real DOGE backing.</p>
                         <p className="text-[11px] text-slate-400">Faucet reserve: {formatDoge(financeAudit.reserves.faucet_available_koinu)} DOGE · Wheel reserve: {formatDoge(financeAudit.reserves.wheel_available_koinu)} DOGE · Wheel locked: {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE · Referral reserve: {formatDoge(financeAudit.reserves.referral_available_koinu)} DOGE</p>
                         <p className={`text-[11px] ${financeAudit.reserves.paid_spin_reserve_backed ? 'text-emerald-400' : 'text-red-400'}`}>Paid spins reserve: {financeAudit.reserves.paid_spins_outstanding} spins · {formatDoge(financeAudit.reserves.wheel_locked_koinu)} DOGE locked / {formatDoge(financeAudit.reserves.paid_spin_reserve_required_koinu)} DOGE required · {financeAudit.reserves.paid_spin_reserve_backed ? 'BACKED INTERNALLY' : 'UNDERFUNDED'}</p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-black/40 p-3 space-y-1">
+                        <p className="text-xs font-bold text-white">FaucetPay balance coverage snapshot</p>
+                        {faucetPayCoverageDifferenceDoge === null ? (
+                          <p className="text-[11px] text-slate-400">Run the financial audit and check FaucetPay balance to compare actual provider balance with recorded liabilities and earmarked reserves.</p>
+                        ) : (
+                          <>
+                            <p className="text-[11px] text-slate-400">FaucetPay balance: {faucetPayBalance.toFixed(8)} DOGE · Recorded liabilities and earmarked reserves: {formatDoge(internalBackingRequiredKoinu)} DOGE</p>
+                            <p className={`text-[11px] font-bold ${faucetPayCoverageDifferenceDoge >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{faucetPayCoverageDifferenceDoge >= 0 ? 'Above recorded reserves by' : 'Below recorded reserves by'} {Math.abs(faucetPayCoverageDifferenceDoge).toFixed(8)} DOGE</p>
+                          </>
+                        )}
+                        <p className="text-[10px] text-slate-500">This is a snapshot comparison, not profit and not proof of funds held in any other wallet.</p>
                       </div>
                     </>
                   )}
