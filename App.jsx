@@ -4399,7 +4399,7 @@ export default function App() {
                 <div className="space-y-5">
                   <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
-                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertiser Dashboard</h2>
+                <h2 className="text-xl font-black text-white font-['Space_Grotesk',sans-serif]">Advertise on DogeDrip</h2>
                 <p className="text-sm text-slate-400 mt-1">Create sponsored PTC campaigns and monitor requests, views and campaign budgets.</p>
               </div>
               <section id="ptc-advertiser-portal" className="border-t border-slate-800 pt-7 space-y-5 scroll-mt-6">
