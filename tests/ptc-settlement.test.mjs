@@ -63,4 +63,7 @@ test("user PTC history removes settled views from pending rewards and labels cre
   assert.match(history, /settled_views/);
   assert.match(app, /Settled PTC Rewards/);
   assert.match(app, /Credited to balance/);
+  const refresh = section(app, "const refreshPtcData = async () =>", "const handlePtcStart =");
+  assert.match(refresh, /setPtcSettledReward/);
+  assert.match(refresh, /setPtcSettledViews/);
 });
