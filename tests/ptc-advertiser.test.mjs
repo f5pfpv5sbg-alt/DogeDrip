@@ -41,6 +41,29 @@ test("admin advertiser quotes must cover one view and stay within the maximum ca
   assert.match(route, /Number\.isSafeInteger\(quote\)/);
 });
 
+test("advertiser payment references cannot be reused to fund multiple campaigns", async () => {
+  const migration = await readFile(new URL("../migrations/0011_unique_ptc_campaign_payment_reference.sql", import.meta.url), "utf8");
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS idx_ptc_campaigns_payment_reference_unique/);
+  assert.match(migration, /ON ptc_campaigns\(advertiser_payment_reference\)/);
+  const start = worker.indexOf("const advertiserPaymentMatch");
+  const end = worker.indexOf("// ADMIN: PTC ADVERTISER REQUEST REVIEW", start);
+  assert.ok(start >= 0 && end > start);
+  assert.match(worker.slice(start, end), /This payment reference has already been used/);
+});
+
+test("advertiser campaign form validates campaign details and budget limits before API submission", () => {
+  const start = app.indexOf("const handlePtcAdvertiserSubmit");
+  const end = app.indexOf("const handlePtcAdvertiserPayment", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = app.slice(start, end);
+  assert.match(handler, /title\.length < 3/);
+  assert.match(handler, /description\.length < 10/);
+  assert.match(handler, /targetUrl\.protocol/);
+  assert.match(handler, /budget < reward/);
+  assert.match(handler, /budget > reward \* maxViews/);
+  assert.match(handler, /duration < 10 \|\| duration > 180/);
+});
+
 test("advertiser payment references are owner-scoped and admin approval is verified", () => {
   const start = worker.indexOf('const advertiserPaymentMatch');
   const end = worker.indexOf("// ADVERTISING: USER REQUESTS AND LIVE PLACEMENTS", start);
