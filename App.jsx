@@ -5400,6 +5400,21 @@ export default function App() {
                     }
                     valueCls={adminAccentText}
                   />
+
+                  <StatTile
+                    label="Verified Premium + VIP Revenue Today"
+                    value={
+                      adminStats
+                        ? `€${(Number(adminStats.verified_subscription_revenue_eur_cents || 0) / 100).toFixed(2)}`
+                        : (adminStatsLoading ? '...' : 'N/A')
+                    }
+                    sub={
+                      adminStats
+                        ? `${Number(adminStats.verified_subscription_orders_today || 0)} FaucetPay-verified payments · Premium €${(Number(adminStats.subscription_revenue_breakdown_eur_cents?.premium || 0) / 100).toFixed(2)} · VIP €${(Number(adminStats.subscription_revenue_breakdown_eur_cents?.vip || 0) / 100).toFixed(2)}`
+                        : 'Only provider-verified paid orders are counted'
+                    }
+                    valueCls="text-emerald-400"
+                  />
                 </div>
 
                 <h3 className="pt-2 text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
