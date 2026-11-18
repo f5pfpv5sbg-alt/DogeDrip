@@ -18,6 +18,8 @@ test("finance audit checks pending PTC views against the pending reserve", () =>
   assert.ok(route.includes("ptc_settlement_items"));
   assert.ok(route.includes("pending_reserve_matches_views"));
   assert.ok(route.includes("reserve_pending_koinu"));
+  assert.ok(route.includes("reserve_available_koinu"));
+  assert.ok(route.includes("reserve_locked_koinu"));
 });
 
 test("finance audit detects PTC settlements missing ledger entries and item total mismatches", () => {
