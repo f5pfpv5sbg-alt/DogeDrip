@@ -626,7 +626,9 @@ export default function App() {
   const [ptcAds, setPtcAds] = useState([]);
   const [ptcHistory, setPtcHistory] = useState([]);
   const [ptcPendingReward, setPtcPendingReward] = useState(0);
+  const [ptcSettledReward, setPtcSettledReward] = useState(0);
   const [ptcCompletedViews, setPtcCompletedViews] = useState(0);
+  const [ptcSettledViews, setPtcSettledViews] = useState(0);
   const [ptcLoading, setPtcLoading] = useState(false);
   const [ptcError, setPtcError] = useState('');
   const [ptcMessage, setPtcMessage] = useState('');
@@ -839,7 +841,9 @@ export default function App() {
         setPtcAds(Array.isArray(adsData.ads) ? adsData.ads : []);
         setPtcHistory(Array.isArray(historyData.history) ? historyData.history : []);
         setPtcPendingReward(Number(historyData.pending_reward_koinu || 0));
+        setPtcSettledReward(Number(historyData.settled_reward_koinu || 0));
         setPtcCompletedViews(Number(historyData.completed_views || 0));
+        setPtcSettledViews(Number(historyData.settled_views || 0));
       } catch (error) {
         if (!cancelled) setPtcError(error.message || 'Could not load PTC ads.');
       } finally {
@@ -4079,13 +4083,15 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatTile label="Pending PTC Rewards" value={(ptcPendingReward / KOINU).toFixed(8) + ' DOGE'} />
-                <StatTile label="Completed Views" value={String(ptcCompletedViews)} />
+                <StatTile label="Settled PTC Rewards" value={(ptcSettledReward / KOINU).toFixed(8) + ' DOGE'} sub={`${ptcSettledViews} views credited to balance`} />
+                <StatTile label="Pending Views" value={String(ptcCompletedViews)} />
+                <StatTile label="Completed Views" value={String(ptcCompletedViews + ptcSettledViews)} />
               </div>
 
               <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 text-xs text-yellow-300">
-                PTC rewards are tracked in a separate reserve. They are pending and cannot be withdrawn or added to your wallet balance until reserve settlement is enabled.
+                Pending rewards are not withdrawable. Once an admin settles them from the funded PTC reserve, they are credited to your DOGE balance.
               </div>
 
               {ptcError && <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">{ptcError}</div>}
@@ -4170,7 +4176,7 @@ export default function App() {
                           <tr key={item.id}>
                             <td className="py-3 pr-3 text-white">{item.title}</td>
                             <td className="py-3 pr-3 text-[#F4A6C1]">{(Number(item.reward_koinu) / KOINU).toFixed(8)} DOGE</td>
-                            <td className="py-3 text-slate-400">{item.status === 'completed' ? 'Pending settlement' : item.status}</td>
+                            <td className="py-3 text-slate-400">{item.status === 'settled' ? 'Credited to balance' : item.status === 'completed' ? 'Pending settlement' : item.status}</td>
                           </tr>
                         ))}
                       </tbody>
