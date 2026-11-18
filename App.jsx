@@ -667,6 +667,13 @@ export default function App() {
   const [financeAudit, setFinanceAudit] = useState(null);
   const [financeAuditLoading, setFinanceAuditLoading] = useState(false);
   const [financeAuditError, setFinanceAuditError] = useState('');
+  const [financeReport, setFinanceReport] = useState(null);
+  const [financeReportLoading, setFinanceReportLoading] = useState(false);
+  const [financeReportError, setFinanceReportError] = useState('');
+  const [financeReportRange, setFinanceReportRange] = useState(() => ({
+    start: new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10),
+    end: new Date().toISOString().slice(0, 10)
+  }));
   const [adminExpenses, setAdminExpenses] = useState([]);
   const [adminExpensesLoading, setAdminExpensesLoading] = useState(false);
   const [adminExpensesError, setAdminExpensesError] = useState('');
@@ -2871,6 +2878,26 @@ export default function App() {
       setAdminStatsError(error.message || 'Could not refresh daily statistics.');
     } finally {
       setAdminStatsLoading(false);
+    }
+  };
+
+  const refreshFinancialReport = async () => {
+    if (!isDemoAdmin || financeReportLoading) return;
+    const { start, end } = financeReportRange;
+    if (!start || !end || start > end) {
+      setFinanceReportError('Choose a valid date range.');
+      return;
+    }
+    setFinanceReportLoading(true);
+    setFinanceReportError('');
+    try {
+      const query = new URLSearchParams({ start, end });
+      const data = await apiRequest(`/api/admin/finance/report?${query.toString()}`);
+      setFinanceReport(data);
+    } catch (error) {
+      setFinanceReportError(error.message || 'Could not load the historical financial report.');
+    } finally {
+      setFinanceReportLoading(false);
     }
   };
 
@@ -5616,6 +5643,38 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+                </section>
+
+                <section className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-4">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-white font-['Space_Grotesk',sans-serif]">Historical Financial Report</h3>
+                    <p className="mt-1 text-xs text-slate-400">UTC date range · up to 366 days · only verified records are counted</p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <label className="text-xs text-slate-400">From
+                      <input type="date" value={financeReportRange.start} max={financeReportRange.end} onChange={event => setFinanceReportRange(current => ({ ...current, start: event.target.value }))} className="mt-1 w-full rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white" />
+                    </label>
+                    <label className="text-xs text-slate-400">To
+                      <input type="date" value={financeReportRange.end} min={financeReportRange.start} onChange={event => setFinanceReportRange(current => ({ ...current, end: event.target.value }))} className="mt-1 w-full rounded-lg border border-white/15 bg-black px-3 py-3 text-sm text-white" />
+                    </label>
+                    <button type="button" onClick={refreshFinancialReport} disabled={financeReportLoading} className="self-end rounded-lg bg-[#F4A6C1] px-4 py-3 text-sm font-black text-black disabled:opacity-50">{financeReportLoading ? 'Loading…' : 'Generate report'}</button>
+                  </div>
+                  {financeReportError && <p role="alert" className="text-xs text-red-300">{financeReportError}</p>}
+                  {financeReport && <div className="space-y-3">
+                    <p className="text-xs text-slate-400">Report: {financeReport.period.start} — {financeReport.period.end} ({financeReport.period.days} days)</p>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <StatTile label="Verified Premium + VIP" value={`€${(Number(financeReport.verified_subscription_revenue.total_eur_cents) / 100).toFixed(2)}`} sub={`${financeReport.verified_subscription_revenue.orders_count} provider-verified orders`} valueCls="text-emerald-400" />
+                      <StatTile label="Verified Expenses" value={`€${(Number(financeReport.verified_operating_expenses.total_eur_cents) / 100).toFixed(2)}`} sub={`${financeReport.verified_operating_expenses.count} verified records`} valueCls="text-red-300" />
+                      <StatTile label="Partial Net" value={`€${(Number(financeReport.partial_subscription_net_eur_cents) / 100).toFixed(2)}`} sub="Subscriptions minus verified expenses only" valueCls={adminAccentText} />
+                      <StatTile label="PTC Gross Funding" value={`${formatDoge(financeReport.ptc_advertiser_funding.total_koinu)} DOGE`} sub="Advertiser funding, not profit" valueCls="text-yellow-300" />
+                    </div>
+                    <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
+                      <p className="text-xs font-bold text-yellow-200">Profit is not calculated</p>
+                      <p className="text-xs text-slate-400">{financeReport.partial_net_warning}</p>
+                      <p className="text-xs text-slate-400">Current user balances: {formatDoge(financeReport.current_liabilities_snapshot.user_balances_koinu)} DOGE · Pending withdrawals: {formatDoge(financeReport.current_liabilities_snapshot.pending_withdrawals_koinu)} DOGE</p>
+                      <p className="text-xs text-slate-400">PTC reserve: {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_available_koinu)} available · {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_locked_koinu)} locked · {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_pending_koinu)} pending</p>
+                    </div>
+                  </div>}
                 </section>
 
                 <h3 className="pt-2 text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
