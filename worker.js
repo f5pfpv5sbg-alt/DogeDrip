@@ -4019,11 +4019,11 @@ async function handleRequest(request, env, json) {
           UPDATE ptc_advertiser_requests
           SET status = 'approved',
               campaign_id = (SELECT id FROM ptc_campaigns
-                WHERE advertiser_payment_reference = ? ORDER BY id DESC LIMIT 1),
+                WHERE advertiser_payment_reference = ? AND created_by = (SELECT advertiser_uid FROM ptc_advertiser_requests WHERE id = ?) ORDER BY id DESC LIMIT 1),
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ? AND status = 'payment_submitted' AND campaign_id IS NULL
             AND changes() = 1
-        `).bind(paymentReference, id)
+        `).bind(paymentReference, id, id)
       ]);
       const campaignId = Number(results[0]?.results?.[0]?.id || 0);
       if (!campaignId || Number(results[1]?.meta?.changes || 0) !== 1) {
