@@ -95,3 +95,14 @@ test("PTC heading and description change for each panel role", () => {
   assert.match(app, /Paid To Click/);
   assert.match(app, /Create sponsored campaigns, submit payment references and track your campaign performance/);
 });
+
+test("public Advertise With Us page explains the reviewed campaign and funding process", async () => {
+  const page = await readFile(new URL("../public/advertise.html", import.meta.url), "utf8");
+  assert.match(page, /PTC Sponsored Campaigns/);
+  assert.match(page, /Sponsored Banner Placements/);
+  assert.match(page, /Review &amp; quote|Review & quote/);
+  assert.match(page, /Payment verification/);
+  assert.match(page, /campaign funding/);
+  assert.match(page, /do not promise fixed traffic, conversions or results/);
+  assert.match(page, /support\.dogedrip@gmail\.com/);
+});
