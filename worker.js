@@ -3492,7 +3492,7 @@ async function handleRequest(request, env, json) {
     await requireAdmin(user, env);
     await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
 
-    const [campaigns, reserve, funding] = await Promise.all([
+    const [campaigns, reserve, funding, pendingSettlements] = await Promise.all([
       env.DB.prepare(`
         SELECT id, title, advertiser_name, target_url, reward_koinu,
                duration_seconds, max_views, total_budget_koinu,
@@ -3504,6 +3504,21 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT id, amount_koinu, external_reference, notes, created_at
         FROM ptc_funding_events ORDER BY id DESC LIMIT 30
+      `).all(),
+      env.DB.prepare(`
+        SELECT v.uid, u.email, u.username,
+               COALESCE(SUM(v.reward_koinu), 0) AS amount_koinu,
+               COUNT(*) AS views_count
+        FROM ptc_views v
+        JOIN users u ON u.uid = v.uid
+        WHERE v.status = 'completed'
+          AND NOT EXISTS (
+            SELECT 1 FROM ptc_settlement_items si WHERE si.view_id = v.id
+          )
+        GROUP BY v.uid
+        HAVING SUM(v.reward_koinu) > 0
+        ORDER BY amount_koinu DESC
+        LIMIT 200
       `).all()
     ]);
 
@@ -3515,8 +3530,130 @@ async function handleRequest(request, env, json) {
         locked_koinu: Number(reserve?.locked_koinu || 0),
         pending_koinu: Number(reserve?.pending_koinu || 0)
       },
-      funding_events: funding.results || []
+      funding_events: funding.results || [],
+      pending_settlements: pendingSettlements.results || []
     });
+  }
+
+  if (path === "/api/admin/ptc/settle" && method === "POST") {
+    const user = await authenticate(request);
+    const admin = await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+
+    const body = await readJson(request);
+    const uid = typeof body.uid === "string" ? body.uid.trim() : "";
+    if (!uid || uid.length > 128) throw new HttpError(400, "Invalid user account.");
+
+    const summary = await env.DB.prepare(`
+      SELECT COALESCE(SUM(v.reward_koinu), 0) AS amount_koinu, COUNT(*) AS views_count
+      FROM ptc_views v
+      WHERE v.uid = ? AND v.status = 'completed'
+        AND NOT EXISTS (
+          SELECT 1 FROM ptc_settlement_items si WHERE si.view_id = v.id
+        )
+    `).bind(uid).first();
+
+    const amount = Number(summary?.amount_koinu || 0);
+    const viewsCount = Number(summary?.views_count || 0);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || !Number.isSafeInteger(viewsCount) || viewsCount <= 0) {
+      throw new HttpError(409, "This user has no pending PTC rewards to settle.");
+    }
+
+    const settlementId = crypto.randomUUID();
+    try {
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO ptc_settlements
+            (id, uid, amount_koinu, views_count, settled_by, idempotency_key)
+          SELECT ?, v.uid, SUM(v.reward_koinu), COUNT(*), ?, ?
+          FROM ptc_views v
+          WHERE v.uid = ? AND v.status = 'completed'
+            AND NOT EXISTS (
+              SELECT 1 FROM ptc_settlement_items si WHERE si.view_id = v.id
+            )
+          GROUP BY v.uid
+          HAVING SUM(v.reward_koinu) = ?
+             AND COUNT(*) = ?
+             AND EXISTS (
+               SELECT 1 FROM ptc_reserve r
+               WHERE r.id = 1 AND r.pending_koinu >= SUM(v.reward_koinu)
+             )
+        `).bind(settlementId, admin.uid, `ptc_settlement:${uid}:${settlementId}`, uid, amount, viewsCount),
+
+        env.DB.prepare(`
+          INSERT INTO ptc_settlement_items (view_id, settlement_id, uid, amount_koinu)
+          SELECT v.id, ?, v.uid, v.reward_koinu
+          FROM ptc_views v
+          WHERE v.uid = ? AND v.status = 'completed'
+            AND NOT EXISTS (
+              SELECT 1 FROM ptc_settlement_items si WHERE si.view_id = v.id
+            )
+            AND EXISTS (
+              SELECT 1 FROM ptc_settlements ps
+              WHERE ps.id = ? AND ps.uid = v.uid
+            )
+        `).bind(settlementId, uid, settlementId),
+
+        env.DB.prepare(`
+          UPDATE ptc_reserve
+          SET pending_koinu = pending_koinu - (
+                SELECT amount_koinu FROM ptc_settlements WHERE id = ?
+              ),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1
+            AND pending_koinu >= (SELECT amount_koinu FROM ptc_settlements WHERE id = ?)
+            AND changes() = (SELECT views_count FROM ptc_settlements WHERE id = ?)
+        `).bind(settlementId, settlementId, settlementId),
+
+        env.DB.prepare(`
+          UPDATE users
+          SET balance_koinu = balance_koinu + (
+                SELECT amount_koinu FROM ptc_settlements WHERE id = ?
+              )
+          WHERE uid = ?
+            AND changes() = 1
+            AND EXISTS (SELECT 1 FROM ptc_settlements WHERE id = ?)
+        `).bind(settlementId, uid, settlementId),
+
+        env.DB.prepare(`
+          INSERT INTO ledger_transactions (
+            uid, transaction_type, amount_koinu,
+            balance_before_koinu, balance_after_koinu,
+            reference_type, reference_id, idempotency_key
+          )
+          SELECT u.uid, 'ptc_reward', ps.amount_koinu,
+                 u.balance_koinu - ps.amount_koinu, u.balance_koinu,
+                 'ptc_settlement', ps.id, ps.idempotency_key
+          FROM users u
+          JOIN ptc_settlements ps ON ps.uid = u.uid
+          WHERE u.uid = ? AND ps.id = ? AND changes() = 1
+        `).bind(uid, settlementId),
+
+        env.DB.prepare(`
+          SELECT CASE WHEN changes() != 1
+            THEN abs(-9223372036854775808)
+            ELSE 1
+          END
+        `)
+      ]);
+
+      if (results.some((result, index) => index < 5 && Number(result?.meta?.changes || 0) !== 1) ||
+          Number(results[5]?.results?.[0]?.["CASE WHEN changes() != 1 THEN abs(-9223372036854775808) ELSE 1 END"] || 0) !== 1) {
+        throw new Error("PTC settlement transaction was not confirmed.");
+      }
+    } catch (error) {
+      console.error("PTC reward settlement failed:", error);
+      throw new HttpError(409, "Settlement could not be completed. Pending rewards and balances were not changed.");
+    }
+
+    return json({
+      success: true,
+      settlement_id: settlementId,
+      uid,
+      amount_koinu: amount,
+      views_count: viewsCount,
+      status: "settled"
+    }, 201);
   }
 
   if (path === "/api/admin/ptc/fund" && method === "POST") {
