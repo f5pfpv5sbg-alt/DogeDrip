@@ -14,19 +14,19 @@ function section(source, startMarker, endMarker) {
 
 test("historical finance report is admin-only, rate-limited, and date-range bounded", () => {
   const route = section(worker, "// ADMIN: HISTORICAL FINANCIAL REPORT", "// ADMIN: OPERATING EXPENSES");
-  assert.match(route, /authenticate\\(request\\)/);
-  assert.match(route, /requireAdmin\\(user, env\\)/);
+  assert.match(route, /authenticate\(request\)/);
+  assert.match(route, /requireAdmin\(user, env\)/);
   assert.match(route, /admin_finance_report/);
-  assert.match(route, /isValidDate\\(startDate\\)/);
-  assert.match(route, /isValidDate\\(endDate\\)/);
+  assert.match(route, /isValidDate\(startDate\)/);
+  assert.match(route, /isValidDate\(endDate\)/);
   assert.match(route, /startDate > endDate/);
   assert.match(route, /dayCount > 366/);
 });
 
 test("historical report counts only provider-verified subscriptions and evidence-verified expenses", () => {
   const route = section(worker, "// ADMIN: HISTORICAL FINANCIAL REPORT", "// ADMIN: OPERATING EXPENSES");
-  assert.match(route, /FROM subscription_orders[\\s\\S]*status = 'paid'[\\s\\S]*provider = 'faucetpay'[\\s\\S]*provider_transaction_id IS NOT NULL[\\s\\S]*paid_at IS NOT NULL/);
-  assert.match(route, /FROM operating_expenses[\\s\\S]*verification_status = 'verified'/);
+  assert.match(route, /FROM subscription_orders[\s\S]*status = 'paid'[\s\S]*provider = 'faucetpay'[\s\S]*provider_transaction_id IS NOT NULL[\s\S]*paid_at IS NOT NULL/);
+  assert.match(route, /FROM operating_expenses[\s\S]*verification_status = 'verified'/);
   assert.match(route, /partial_subscription_net_eur_cents/);
   assert.match(route, /total_profit_eur_cents: null/);
 });
