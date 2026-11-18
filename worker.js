@@ -3637,8 +3637,13 @@ async function handleRequest(request, env, json) {
         `)
       ]);
 
-      if (results.some((result, index) => index < 5 && Number(result?.meta?.changes || 0) !== 1) ||
-          Number(results[5]?.results?.[0]?.["CASE WHEN changes() != 1 THEN abs(-9223372036854775808) ELSE 1 END"] || 0) !== 1) {
+      if (
+        Number(results[0]?.meta?.changes || 0) !== 1 ||
+        Number(results[1]?.meta?.changes || 0) !== viewsCount ||
+        Number(results[2]?.meta?.changes || 0) !== 1 ||
+        Number(results[3]?.meta?.changes || 0) !== 1 ||
+        Number(results[4]?.meta?.changes || 0) !== 1
+      ) {
         throw new Error("PTC settlement transaction was not confirmed.");
       }
     } catch (error) {
