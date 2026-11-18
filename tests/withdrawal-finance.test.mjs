@@ -108,6 +108,8 @@ test("finance audit treats pending, processing, payment_unknown and ambiguous le
   );
   assert.match(route, /const outstandingStatuses = \["pending", "processing", "payment_unknown"\]/);
   assert.match(route, /legacyApprovedOutstanding/);
+  assert.match(route, /legacyPaidOutstanding/);
+  assert.match(route, /legacyApprovedOutstanding \+ legacyPaidOutstanding/);
   assert.match(route, /outstanding_withdrawals_koinu: outstanding/);
   assert.match(route, /status = 'paid'[\s\S]*faucetpay_payout_id IS NULL/);
   assert.match(route, /status = 'processing'[\s\S]*datetime\(COALESCE\(processed_at, created_at\)\)/);
