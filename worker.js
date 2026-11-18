@@ -5005,7 +5005,7 @@ async function handleRequest(request, env, json) {
           AND (
             status IN ('processing', 'payment_unknown')
             OR (
-              status = 'approved'
+              status IN ('approved', 'paid')
               AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
             )
           )
@@ -5030,7 +5030,7 @@ async function handleRequest(request, env, json) {
           AND (
             status IN ('processing', 'payment_unknown')
             OR (
-              status = 'approved'
+              status IN ('approved', 'paid')
               AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
             )
           )
