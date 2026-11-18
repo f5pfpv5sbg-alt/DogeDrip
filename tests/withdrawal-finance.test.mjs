@@ -67,9 +67,20 @@ test("uncertain payout reconciliation requires a verified numeric payout ID or a
   assert.match(route, /resolution === "paid"/);
   assert.match(route, /!\/\^\d\{1,32\}\$\//);
   assert.match(route, /status IN \('processing', 'payment_unknown'\)/);
+  assert.match(route, /status = 'approved'[\\s\\S]*faucetpay_payout_id IS NULL/);
   assert.match(route, /resolution === "not_paid"/);
   assert.match(route, /SET status = 'pending'/);
   assert.doesNotMatch(route, /balance_koinu = balance_koinu \+/);
+});
+
+test("admin can reconcile legacy approved withdrawals without payout IDs and stale processing requests", async () => {
+  const app = await readFile(new URL("../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /w\.status === 'approved' && !w\.faucetpayPayoutId/);
+  assert.match(app, /w\.status === 'processing' && w\.timestamp !== null && Date\.now\(\) - w\.timestamp > 15 \* 60 \* 1000/);
+  assert.match(app, /Legacy approval has no payout ID/);
+  assert.match(app, /Processing for over 15 minutes/);
+  assert.match(app, /handleAdminReconcile\(w\.id, 'paid'\)/);
+  assert.match(app, /handleAdminReconcile\(w\.id, 'not_paid'\)/);
 });
 
 test("rejecting a pending withdrawal refunds once and records a refund ledger entry", () => {
