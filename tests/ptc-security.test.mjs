@@ -33,7 +33,7 @@ test("PTC user routes authenticate, rate-limit and require server-timed completi
   }
   assert.match(worker, /verifyTurnstileToken\(body\.turnstileToken, request, env, "ptc_complete"\)/);
   assert.match(worker, /started_at <= datetime\('now', '-' \|\| \([\s\S]{0,120}duration_seconds/);
-  assert.match(worker, /UNIQUE \(uid, campaign_id, utc_date\)/);
+  assert.match(migration, /UNIQUE \(uid, campaign_id, utc_date\)/);
 });
 
 test("PTC rewards remain pending and are never added to the withdrawable user balance", () => {
