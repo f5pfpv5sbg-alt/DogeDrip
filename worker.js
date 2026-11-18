@@ -3930,7 +3930,7 @@ async function handleRequest(request, env, json) {
     return json({ success: true, request: inserted }, 201);
   }
 
-  const advertiserPaymentMatch = path.match(/^\/api\/ptc\/advertiser\/requests\/(\\d+)\/payment$/);
+  const advertiserPaymentMatch = path.match(/^\/api\/ptc\/advertiser\/requests\/(\d+)\/payment$/);
   if (advertiserPaymentMatch && method === "POST") {
     const user = await authenticate(request);
     await enforceRateLimit(env, `uid:${user.sub}`, "ad_payment_reference", RATE_LIMIT_POLICIES.adPaymentReference);
