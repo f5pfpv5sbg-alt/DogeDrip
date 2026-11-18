@@ -4002,26 +4002,34 @@ async function handleRequest(request, env, json) {
       if (!Number.isSafeInteger(budget) || budget < Number(requestRow.reward_koinu) || budget > Number(requestRow.reward_koinu) * Number(requestRow.max_views)) {
         throw new HttpError(409, "The approved budget is invalid.");
       }
-      const campaign = await env.DB.prepare(`
-        INSERT INTO ptc_campaigns (
-          title, description, advertiser_name, target_url, reward_koinu,
-          duration_seconds, max_views, total_budget_koinu, remaining_budget_koinu,
-          advertiser_payment_reference, payment_verified_by, created_by
-        )
-        SELECT title, description, advertiser_name, target_url, reward_koinu,
-               duration_seconds, max_views, ?, ?, ?, ?, advertiser_uid
-        FROM ptc_advertiser_requests
-        WHERE id = ? AND status = 'payment_submitted'
-        RETURNING id, status
-      `).bind(budget, budget, paymentReference, user.sub, id).first();
-      if (!campaign?.id) throw new HttpError(409, "Campaign could not be created.");
-      const updated = await env.DB.prepare(`
-        UPDATE ptc_advertiser_requests
-        SET status = 'approved', campaign_id = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND status = 'payment_submitted'
-      `).bind(campaign.id, id).run();
-      if (updated.meta.changes !== 1) throw new HttpError(409, "Request status changed; contact support before retrying.");
-      return json({ success: true, status: "approved", campaign_id: Number(campaign.id) }, 201);
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO ptc_campaigns (
+            title, description, advertiser_name, target_url, reward_koinu,
+            duration_seconds, max_views, total_budget_koinu, remaining_budget_koinu,
+            advertiser_payment_reference, payment_verified_by, created_by
+          )
+          SELECT title, description, advertiser_name, target_url, reward_koinu,
+                 duration_seconds, max_views, ?, ?, ?, ?, advertiser_uid
+          FROM ptc_advertiser_requests
+          WHERE id = ? AND status = 'payment_submitted' AND campaign_id IS NULL
+          RETURNING id
+        `).bind(budget, budget, paymentReference, user.sub, id),
+        env.DB.prepare(`
+          UPDATE ptc_advertiser_requests
+          SET status = 'approved',
+              campaign_id = (SELECT id FROM ptc_campaigns
+                WHERE advertiser_payment_reference = ? ORDER BY id DESC LIMIT 1),
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'payment_submitted' AND campaign_id IS NULL
+            AND changes() = 1
+        `).bind(paymentReference, id)
+      ]);
+      const campaignId = Number(results[0]?.results?.[0]?.id || 0);
+      if (!campaignId || Number(results[1]?.meta?.changes || 0) !== 1) {
+        throw new HttpError(409, "Request could not be approved safely.");
+      }
+      return json({ success: true, status: "approved", campaign_id: campaignId }, 201);
     }
     throw new HttpError(400, "Unsupported advertiser request status.");
   }
