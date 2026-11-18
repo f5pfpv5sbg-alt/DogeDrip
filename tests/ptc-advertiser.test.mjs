@@ -80,3 +80,13 @@ test("admin campaign activation locks reserve atomically and never activates wit
   assert.match(route, /status = 'completed'/);
   assert.match(route, /locked_koinu >= \?/);
 });
+
+
+test("PTC is a single role-aware destination for users, advertisers and admins", () => {
+  assert.match(app, /setActiveTab\('ptc'\)/);
+  assert.match(app, /ptcPanelMode === 'user'/);
+  assert.match(app, /ptcPanelMode === 'advertiser'/);
+  assert.match(app, /isDemoAdmin && \(/);
+  assert.doesNotMatch(app, /setActiveTab\('advertiser'\)/);
+  assert.doesNotMatch(app, /activeTab === 'advertiser'/);
+});
