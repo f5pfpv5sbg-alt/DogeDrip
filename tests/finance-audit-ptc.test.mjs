@@ -40,4 +40,16 @@ test("admin finance audit displays PTC reserve and settlement integrity statuses
   assert.ok(app.includes("faucetPayCoverageDifferenceDoge"));
   assert.ok(app.includes("Recorded liabilities and earmarked reserves"));
   assert.ok(app.includes("This is a snapshot comparison, not profit"));
+  const coverage = section(app, "const internalBackingRequiredKoinu", "const faucetPayCoverageDifferenceDoge");
+  for (const field of [
+    "user_balances_koinu",
+    "outstanding_withdrawals_koinu",
+    "faucet_available_koinu",
+    "wheel_available_koinu",
+    "wheel_locked_koinu",
+    "referral_available_koinu",
+    "reserve_available_koinu",
+    "reserve_locked_koinu",
+    "reserve_pending_koinu"
+  ]) assert.ok(coverage.includes(field), `missing coverage field: ${field}`);
 });
