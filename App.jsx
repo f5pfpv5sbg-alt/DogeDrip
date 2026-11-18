@@ -2624,17 +2624,43 @@ export default function App() {
       const budget = Math.round(Number(ptcAdvertiserForm.requested_budget_doge) * KOINU);
       const maxViews = Number(ptcAdvertiserForm.max_views);
       const duration = Number(ptcAdvertiserForm.duration_seconds);
-      if (!Number.isSafeInteger(reward) || !Number.isSafeInteger(budget) ||
-          !Number.isSafeInteger(maxViews) || !Number.isSafeInteger(duration)) {
-        throw new Error('Enter valid numeric campaign values.');
+      const title = ptcAdvertiserForm.title.trim();
+      const description = ptcAdvertiserForm.description.trim();
+      const advertiserName = ptcAdvertiserForm.advertiser_name.trim();
+      let targetUrl;
+      try {
+        targetUrl = new URL(ptcAdvertiserForm.target_url.trim());
+      } catch {
+        throw new Error('Enter a valid campaign website URL.');
+      }
+      if (title.length < 3 || title.length > 80) {
+        throw new Error('Campaign title must be 3-80 characters.');
+      }
+      if (description.length < 10 || description.length > 500) {
+        throw new Error('Campaign description must be 10-500 characters.');
+      }
+      if (advertiserName.length < 2 || advertiserName.length > 80) {
+        throw new Error('Advertiser name must be 2-80 characters.');
+      }
+      if (!['http:', 'https:'].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password) {
+        throw new Error('Use a public HTTP or HTTPS campaign website URL.');
+      }
+      if (!/^\\d+(?:\\.\\d{1,8})?$/.test(ptcAdvertiserForm.reward_doge.trim()) ||
+          !/^\\d+(?:\\.\\d{1,8})?$/.test(ptcAdvertiserForm.requested_budget_doge.trim()) ||
+          !Number.isSafeInteger(reward) || reward < 1 || reward > KOINU ||
+          !Number.isSafeInteger(budget) || budget < reward ||
+          !Number.isSafeInteger(maxViews) || maxViews < 1 || maxViews > 10000000 ||
+          !Number.isSafeInteger(duration) || duration < 10 || duration > 180 ||
+          budget > reward * maxViews) {
+        throw new Error('Check reward, budget, views and duration. Budget must cover at least one view and no more than reward × maximum views.');
       }
       await apiRequest('/api/ptc/advertiser/requests', {
         method: 'POST',
         body: JSON.stringify({
-          title: ptcAdvertiserForm.title,
-          description: ptcAdvertiserForm.description,
-          advertiser_name: ptcAdvertiserForm.advertiser_name,
-          target_url: ptcAdvertiserForm.target_url,
+          title,
+          description,
+          advertiser_name: advertiserName,
+          target_url: targetUrl.toString(),
           reward_koinu: reward,
           duration_seconds: duration,
           max_views: maxViews,
