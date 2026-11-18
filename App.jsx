@@ -4518,12 +4518,22 @@ export default function App() {
                 <div className="space-y-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-2xl font-black text-white font-['Space_Grotesk',sans-serif]">Paid To Click</h2>
-                  <p className="text-sm text-slate-400 mt-1">View sponsored websites for the required time and earn pending DOGE rewards.</p>
+                  <h2 className="text-2xl font-black text-white font-['Space_Grotesk',sans-serif]">
+                    {isDemoAdmin ? 'PTC Administration' : ptcPanelMode === 'advertiser' ? 'Advertiser PTC' : 'Paid To Click'}
+                  </h2>
+                  <p className="text-sm text-slate-400 mt-1">
+                    {isDemoAdmin
+                      ? 'Review advertiser campaigns, manage the funded DOGE reserve and settle user rewards.'
+                      : ptcPanelMode === 'advertiser'
+                        ? 'Create sponsored campaigns, submit payment references and track your campaign performance.'
+                        : 'View sponsored websites for the required time and earn pending DOGE rewards.'}
+                  </p>
                 </div>
-                <button type="button" onClick={() => refreshPtcData().catch(error => setPtcError(error.message))} disabled={ptcLoading} className="px-3 py-2 rounded-lg border border-slate-700 text-xs font-bold text-slate-300 disabled:opacity-50">
-                  <RefreshCw className={`w-3 h-3 inline mr-2 ${ptcLoading ? 'animate-spin' : ''}`} />Refresh
-                </button>
+                {!isDemoAdmin && ptcPanelMode === 'user' && (
+                  <button type="button" onClick={() => refreshPtcData().catch(error => setPtcError(error.message))} disabled={ptcLoading} className="px-3 py-2 rounded-lg border border-slate-700 text-xs font-bold text-slate-300 disabled:opacity-50">
+                    <RefreshCw className={`w-3 h-3 inline mr-2 ${ptcLoading ? 'animate-spin' : ''}`} />Refresh
+                  </button>
+                )}
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
