@@ -4289,6 +4289,10 @@ async function handleRequest(request, env, json) {
       withdrawalsWithoutDebitLedger,
       rejectedWithoutRefundLedger,
       legacyApproved,
+      paidWithoutPayoutId,
+      staleProcessingWithdrawals,
+      paymentUnknownWithdrawals,
+      duplicatePayoutIds,
       faucetReserve,
       wheelReserve,
       referralReserve,
@@ -4488,6 +4492,34 @@ async function handleRequest(request, env, json) {
         WHERE status = 'approved'
           AND faucetpay_payout_id IS NULL
       `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
+        FROM withdrawals
+        WHERE status = 'paid'
+          AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
+        FROM withdrawals
+        WHERE status = 'processing'
+          AND datetime(COALESCE(processed_at, created_at)) < datetime('now', '-15 minutes')
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
+        FROM withdrawals
+        WHERE status = 'payment_unknown'
+      `).first(),
+      env.DB.prepare(`
+        SELECT COUNT(*) AS count
+        FROM (
+          SELECT faucetpay_payout_id
+          FROM withdrawals
+          WHERE faucetpay_payout_id IS NOT NULL
+            AND trim(faucetpay_payout_id) != ''
+          GROUP BY faucetpay_payout_id
+          HAVING COUNT(*) > 1
+        )
+      `).first(),
       env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM faucet_reserve WHERE id = 1`).first(),
       env.DB.prepare(`SELECT available_koinu, locked_koinu, payouts_enabled FROM wheel_reserve WHERE id = 1`).first(),
       env.DB.prepare(`SELECT available_koinu, payouts_enabled FROM referral_reserve WHERE id = 1`).first(),
@@ -4562,7 +4594,14 @@ async function handleRequest(request, env, json) {
         rejected_without_refund_ledger_count: Number(rejectedWithoutRefundLedger?.count || 0),
         rejected_without_refund_ledger_koinu: Number(rejectedWithoutRefundLedger?.total_koinu || 0),
         legacy_approved_without_payout_id_count: Number(legacyApproved?.count || 0),
-        legacy_approved_without_payout_id_koinu: Number(legacyApproved?.total_koinu || 0)
+        legacy_approved_without_payout_id_koinu: Number(legacyApproved?.total_koinu || 0),
+        paid_without_payout_id_count: Number(paidWithoutPayoutId?.count || 0),
+        paid_without_payout_id_koinu: Number(paidWithoutPayoutId?.total_koinu || 0),
+        stale_processing_count: Number(staleProcessingWithdrawals?.count || 0),
+        stale_processing_koinu: Number(staleProcessingWithdrawals?.total_koinu || 0),
+        payment_unknown_count: Number(paymentUnknownWithdrawals?.count || 0),
+        payment_unknown_koinu: Number(paymentUnknownWithdrawals?.total_koinu || 0),
+        duplicate_payout_id_groups: Number(duplicatePayoutIds?.count || 0)
       },
       reserves: {
         faucet_available_koinu: Number(faucetReserve?.available_koinu || 0),
