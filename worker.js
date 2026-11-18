@@ -1750,6 +1750,8 @@ async function getAdminDailyStats(env) {
     onlineUsers,
     adRevenue,
     verifiedSubscriptionRevenue,
+    ptcFundingToday,
+    ptcReserve,
     faucetReserve,
     wheelReserve,
     referralReserve
@@ -1869,6 +1871,18 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
+      SELECT COALESCE(SUM(amount_koinu), 0) AS total, COUNT(*) AS count
+      FROM ptc_funding_events
+      WHERE date(created_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
+      SELECT available_koinu, locked_koinu, pending_koinu
+      FROM ptc_reserve
+      WHERE id = 1
+    `).first(),
+
+    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1954,6 +1968,14 @@ async function getAdminDailyStats(env) {
       ? Number(verifiedSubscriptionRevenue?.total_cents || 0) - Number(verifiedOperatingExpenses?.total_cents || 0)
       : null,
     expense_verification_status: "admin_verified_with_evidence_reference",
+    ptc_advertiser_funding_today_koinu: Number(ptcFundingToday?.total || 0),
+    ptc_advertiser_funding_today_count: Number(ptcFundingToday?.count || 0),
+    ptc_funding_verification_status: "admin_confirmed_external_reference",
+    ptc_reserve: {
+      available_koinu: Number(ptcReserve?.available_koinu || 0),
+      locked_koinu: Number(ptcReserve?.locked_koinu || 0),
+      pending_koinu: Number(ptcReserve?.pending_koinu || 0)
+    },
     wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu,
     rewards_credited_koinu: rewardsCreditedKoinu,
     external_doge_revenue_verified: false,
