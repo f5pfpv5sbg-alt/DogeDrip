@@ -65,7 +65,7 @@ test("uncertain payout reconciliation requires a verified numeric payout ID or a
     "// ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER"
   );
   assert.match(route, /resolution === "paid"/);
-  assert.match(route, /!\/\^\\d\{1,32\}\$\//);
+  assert.match(route, /!\/\^\d\{1,32\}\$\//);
   assert.match(route, /status IN \('processing', 'payment_unknown'\)/);
   assert.match(route, /resolution === "not_paid"/);
   assert.match(route, /SET status = 'pending'/);
@@ -95,10 +95,10 @@ test("finance audit treats pending, processing, payment_unknown and ambiguous le
   assert.match(route, /const outstandingStatuses = \["pending", "processing", "payment_unknown"\]/);
   assert.match(route, /legacyApprovedOutstanding/);
   assert.match(route, /outstanding_withdrawals_koinu: outstanding/);
-  assert.match(route, /status = 'paid'[\\s\\S]*faucetpay_payout_id IS NULL/);
-  assert.match(route, /status = 'processing'[\\s\\S]*datetime\\(COALESCE\\(processed_at, created_at\\)\\)/);
+  assert.match(route, /status = 'paid'[\s\S]*faucetpay_payout_id IS NULL/);
+  assert.match(route, /status = 'processing'[\s\S]*datetime\(COALESCE\(processed_at, created_at\)\)/);
   assert.match(route, /status = 'payment_unknown'/);
-  assert.match(route, /GROUP BY faucetpay_payout_id[\\s\\S]*HAVING COUNT\\(\\*\\) > 1/);
+  assert.match(route, /GROUP BY faucetpay_payout_id[\s\S]*HAVING COUNT\(\*\) > 1/);
   assert.match(route, /paid_without_payout_id_count/);
   assert.match(route, /stale_processing_count/);
   assert.match(route, /payment_unknown_count/);
