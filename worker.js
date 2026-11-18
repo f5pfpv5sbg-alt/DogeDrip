@@ -3869,13 +3869,21 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
     await enforceRateLimit(env, `uid:${user.sub}`, "ptc_read", RATE_LIMIT_POLICIES.ptcRead);
     const result = await env.DB.prepare(`
-      SELECT id, title, description, advertiser_name, target_url,
-             reward_koinu, duration_seconds, max_views, requested_budget_koinu,
-             status, quoted_budget_koinu, payment_reference, campaign_id,
-             admin_note, created_at, updated_at
-      FROM ptc_advertiser_requests
-      WHERE advertiser_uid = ?
-      ORDER BY id DESC
+      SELECT r.id, r.title, r.description, r.advertiser_name, r.target_url,
+             r.reward_koinu, r.duration_seconds, r.max_views, r.requested_budget_koinu,
+             r.status, r.quoted_budget_koinu, r.payment_reference, r.campaign_id,
+             r.admin_note, r.created_at, r.updated_at,
+             c.status AS campaign_status,
+             COALESCE(c.views_completed, 0) AS campaign_views_completed,
+             COALESCE(c.total_budget_koinu, 0) AS campaign_total_budget_koinu,
+             COALESCE(c.remaining_budget_koinu, 0) AS campaign_remaining_budget_koinu,
+             CASE WHEN c.id IS NULL THEN 0
+                  ELSE MAX(0, c.total_budget_koinu - c.remaining_budget_koinu)
+             END AS campaign_spent_koinu
+      FROM ptc_advertiser_requests r
+      LEFT JOIN ptc_campaigns c ON c.id = r.campaign_id
+      WHERE r.advertiser_uid = ?
+      ORDER BY r.id DESC
       LIMIT 50
     `).bind(user.sub).all();
     return json({ success: true, requests: result.results || [] });
