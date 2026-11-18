@@ -309,7 +309,11 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   adPaymentReference: { limit: 5, windowSeconds: 86400 },
   adminRead: { limit: 60, windowSeconds: 60 },
   adminReject: { limit: 10, windowSeconds: 60 },
-  adminApprove: { limit: 5, windowSeconds: 60 }
+  adminApprove: { limit: 5, windowSeconds: 60 },
+  ptcRead: { limit: 60, windowSeconds: 60 },
+  ptcStart: { limit: 10, windowSeconds: 60 },
+  ptcComplete: { limit: 10, windowSeconds: 60 },
+  adminPtc: { limit: 30, windowSeconds: 60 }
 });
 
 async function enforceRateLimit(env, identity, route, policy) {
@@ -3175,6 +3179,466 @@ async function handleRequest(request, env, json) {
       success: true,
       withdrawals: result.results || []
     });
+  }
+
+  // ==========================================
+  // PTC ADS: USER VIEWING AND PENDING REWARDS
+  // ==========================================
+
+  if (path === "/api/ptc/ads" && method === "GET") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_read", RATE_LIMIT_POLICIES.ptcRead);
+
+    const result = await env.DB.prepare(`
+      SELECT id, title, description, advertiser_name, target_url,
+             reward_koinu, duration_seconds, max_views, views_completed,
+             remaining_budget_koinu
+      FROM ptc_campaigns
+      WHERE status = 'active'
+        AND remaining_budget_koinu >= reward_koinu
+        AND views_completed < max_views
+      ORDER BY id DESC
+      LIMIT 50
+    `).all();
+
+    return json({ success: true, ads: result.results || [] });
+  }
+
+  if (path === "/api/ptc/history" && method === "GET") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_read", RATE_LIMIT_POLICIES.ptcRead);
+
+    const [history, totals] = await Promise.all([
+      env.DB.prepare(`
+        SELECT v.id, v.campaign_id, c.title, v.status, v.reward_koinu,
+               v.started_at, v.completed_at
+        FROM ptc_views v
+        JOIN ptc_campaigns c ON c.id = v.campaign_id
+        WHERE v.uid = ?
+        ORDER BY v.id DESC
+        LIMIT 50
+      `).bind(user.sub).all(),
+      env.DB.prepare(`
+        SELECT
+          COALESCE(SUM(CASE WHEN status = 'completed' THEN reward_koinu ELSE 0 END), 0) AS pending_koinu,
+          COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_views
+        FROM ptc_views
+        WHERE uid = ?
+      `).bind(user.sub).first()
+    ]);
+
+    return json({
+      success: true,
+      history: history.results || [],
+      pending_reward_koinu: Number(totals?.pending_koinu || 0),
+      completed_views: Number(totals?.completed_views || 0),
+      reward_status: "pending_not_withdrawable"
+    });
+  }
+
+  if (path === "/api/ptc/start" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_start", RATE_LIMIT_POLICIES.ptcStart);
+
+    const body = await readJson(request);
+    const campaignId = Number(body.campaign_id);
+    if (!Number.isSafeInteger(campaignId) || campaignId < 1) {
+      throw new HttpError(400, "Invalid PTC campaign.");
+    }
+
+    const account = await env.DB.prepare(
+      "SELECT uid FROM users WHERE uid = ? AND email_verified = 1"
+    ).bind(user.sub).first();
+    if (!account) throw new HttpError(403, "Verified account required.");
+
+    const token = crypto.randomUUID();
+    const tokenDigest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(token)
+    );
+    const tokenHash = Array.from(new Uint8Array(tokenDigest),
+      byte => byte.toString(16).padStart(2, "0")).join("");
+
+    const started = await env.DB.prepare(`
+      INSERT INTO ptc_views (uid, campaign_id, utc_date, view_token_hash)
+      SELECT ?, c.id, date('now'), ?
+      FROM ptc_campaigns c
+      WHERE c.id = ?
+        AND c.status = 'active'
+        AND c.remaining_budget_koinu >= c.reward_koinu
+        AND c.views_completed < c.max_views
+        AND NOT EXISTS (
+          SELECT 1 FROM ptc_views v
+          WHERE v.uid = ? AND v.campaign_id = c.id AND v.utc_date = date('now')
+        )
+      RETURNING id, started_at
+    `).bind(user.sub, tokenHash, campaignId, user.sub).first();
+
+    if (!started?.id) {
+      throw new HttpError(409, "This ad is unavailable or you have already viewed it today.");
+    }
+
+    return json({
+      success: true,
+      view_id: Number(started.id),
+      view_token: token,
+      started_at: started.started_at
+    }, 201);
+  }
+
+  if (path === "/api/ptc/complete" && method === "POST") {
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ptc_complete", RATE_LIMIT_POLICIES.ptcComplete);
+
+    const body = await readJson(request);
+    await verifyTurnstileToken(body.turnstileToken, request, env, "ptc_complete");
+
+    const viewId = Number(body.view_id);
+    const viewToken = typeof body.view_token === "string" ? body.view_token : "";
+    if (!Number.isSafeInteger(viewId) || viewId < 1 || !/^[0-9a-f-]{36}$/i.test(viewToken)) {
+      throw new HttpError(400, "Invalid PTC view session.");
+    }
+
+    const tokenDigest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(viewToken)
+    );
+    const tokenHash = Array.from(new Uint8Array(tokenDigest),
+      byte => byte.toString(16).padStart(2, "0")).join("");
+
+    const view = await env.DB.prepare(`
+      SELECT v.id, v.status, v.started_at, c.duration_seconds,
+             c.reward_koinu, c.status AS campaign_status,
+             c.remaining_budget_koinu, c.views_completed, c.max_views
+      FROM ptc_views v
+      JOIN ptc_campaigns c ON c.id = v.campaign_id
+      WHERE v.id = ? AND v.uid = ? AND v.view_token_hash = ?
+    `).bind(viewId, user.sub, tokenHash).first();
+
+    if (!view) throw new HttpError(404, "PTC view session not found.");
+    if (view.status === "completed") {
+      return json({
+        success: true,
+        already_completed: true,
+        reward_koinu: Number(view.reward_koinu),
+        reward_status: "pending_not_withdrawable"
+      });
+    }
+    if (view.status !== "started") throw new HttpError(409, "This PTC view session is no longer active.");
+
+    const elapsedSeconds = Math.floor((Date.now() - new Date(view.started_at.replace(" ", "T") + "Z").getTime()) / 1000);
+    const requiredSeconds = Number(view.duration_seconds);
+    if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < requiredSeconds) {
+      throw new HttpError(409, "The viewing timer has not finished.", {
+        seconds_remaining: Math.max(1, requiredSeconds - Math.max(0, elapsedSeconds))
+      });
+    }
+    if (view.campaign_status !== "active" ||
+        Number(view.remaining_budget_koinu) < Number(view.reward_koinu) ||
+        Number(view.views_completed) >= Number(view.max_views)) {
+      throw new HttpError(409, "This campaign is no longer available.");
+    }
+
+    let results;
+    try {
+      results = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE ptc_views
+          SET status = 'completed',
+              reward_koinu = (SELECT reward_koinu FROM ptc_campaigns WHERE id = ptc_views.campaign_id),
+              completed_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND uid = ? AND view_token_hash = ? AND status = 'started'
+            AND started_at <= datetime('now', '-' || (
+              SELECT duration_seconds FROM ptc_campaigns WHERE id = ptc_views.campaign_id
+            ) || ' seconds')
+            AND EXISTS (
+              SELECT 1 FROM ptc_campaigns c
+              WHERE c.id = ptc_views.campaign_id
+                AND c.status = 'active'
+                AND c.remaining_budget_koinu >= c.reward_koinu
+                AND c.views_completed < c.max_views
+            )
+        `).bind(viewId, user.sub, tokenHash),
+
+        env.DB.prepare(`
+          UPDATE ptc_campaigns
+          SET remaining_budget_koinu = remaining_budget_koinu - reward_koinu,
+              views_completed = views_completed + 1,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = (SELECT campaign_id FROM ptc_views WHERE id = ? AND uid = ? AND status = 'completed')
+            AND status = 'active'
+            AND remaining_budget_koinu >= reward_koinu
+            AND views_completed < max_views
+            AND changes() = 1
+        `).bind(viewId, user.sub),
+
+        env.DB.prepare(`
+          UPDATE ptc_reserve
+          SET locked_koinu = locked_koinu - ?,
+              pending_koinu = pending_koinu + ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND locked_koinu >= ? AND changes() = 1
+        `).bind(Number(view.reward_koinu), Number(view.reward_koinu), Number(view.reward_koinu)),
+
+        env.DB.prepare(`
+          SELECT CASE WHEN changes() != 1
+            THEN abs(-9223372036854775808)
+            ELSE 1
+          END
+        `)
+      ]);
+    } catch (error) {
+      const current = await env.DB.prepare(
+        "SELECT status, reward_koinu FROM ptc_views WHERE id = ? AND uid = ?"
+      ).bind(viewId, user.sub).first();
+
+      if (current?.status === "completed") {
+        return json({
+          success: true,
+          already_completed: true,
+          reward_koinu: Number(current.reward_koinu),
+          reward_status: "pending_not_withdrawable"
+        });
+      }
+      console.error("PTC completion transaction failed:", error);
+      throw new HttpError(409, "PTC reward could not be confirmed. Please retry the same view.");
+    }
+
+    if (results[0].meta.changes !== 1 ||
+        results[1].meta.changes !== 1 ||
+        results[2].meta.changes !== 1) {
+      throw new HttpError(409, "PTC reward transaction could not be confirmed.");
+    }
+
+    return json({
+      success: true,
+      reward_koinu: Number(view.reward_koinu),
+      reward_status: "pending_not_withdrawable",
+      message: "View completed. Reward is pending reserve settlement and is not withdrawable yet."
+    });
+  }
+
+  // ==========================================
+  // PTC ADS: ADMIN CAMPAIGNS AND RESERVE
+  // ==========================================
+
+  if (path === "/api/admin/ptc" && method === "GET") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+
+    const [campaigns, reserve, funding] = await Promise.all([
+      env.DB.prepare(`
+        SELECT id, title, advertiser_name, target_url, reward_koinu,
+               duration_seconds, max_views, total_budget_koinu,
+               remaining_budget_koinu, views_completed, status,
+               advertiser_payment_reference, payment_verified_at, created_at
+        FROM ptc_campaigns ORDER BY id DESC LIMIT 200
+      `).all(),
+      env.DB.prepare("SELECT available_koinu, locked_koinu, pending_koinu FROM ptc_reserve WHERE id = 1").first(),
+      env.DB.prepare(`
+        SELECT id, amount_koinu, external_reference, notes, created_at
+        FROM ptc_funding_events ORDER BY id DESC LIMIT 30
+      `).all()
+    ]);
+
+    return json({
+      success: true,
+      campaigns: campaigns.results || [],
+      reserve: {
+        available_koinu: Number(reserve?.available_koinu || 0),
+        locked_koinu: Number(reserve?.locked_koinu || 0),
+        pending_koinu: Number(reserve?.pending_koinu || 0)
+      },
+      funding_events: funding.results || []
+    });
+  }
+
+  if (path === "/api/admin/ptc/fund" && method === "POST") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+
+    const body = await readJson(request);
+    const amount = body.amount_koinu;
+    const reference = typeof body.external_reference === "string" ? body.external_reference.trim() : "";
+    const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+
+    if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000000000000) {
+      throw new HttpError(400, "Enter a valid DOGE reserve amount in koinu.");
+    }
+    if (reference.length < 6 || reference.length > 120) {
+      throw new HttpError(400, "A verified external transaction reference is required.");
+    }
+    if (body.externally_verified !== true) {
+      throw new HttpError(400, "Confirm that the incoming DOGE transaction was checked externally.");
+    }
+    if (notes.length > 300) throw new HttpError(400, "Notes cannot exceed 300 characters.");
+
+    try {
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          INSERT INTO ptc_funding_events (admin_uid, amount_koinu, external_reference, notes)
+          VALUES (?, ?, ?, ?)
+        `).bind(user.sub, amount, reference, notes || null),
+        env.DB.prepare(`
+          UPDATE ptc_reserve
+          SET available_koinu = available_koinu + ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND changes() = 1
+        `).bind(amount),
+        env.DB.prepare("SELECT CASE WHEN changes() != 1 THEN abs(-9223372036854775808) ELSE 1 END")
+      ]);
+      if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1) {
+        throw new Error("PTC reserve funding was not committed.");
+      }
+    } catch (error) {
+      if (String(error?.message || "").includes("UNIQUE")) {
+        throw new HttpError(409, "This external funding reference has already been recorded.");
+      }
+      throw new HttpError(409, "PTC reserve funding could not be confirmed.");
+    }
+
+    return json({ success: true, available_koinu_added: amount }, 201);
+  }
+
+  if (path === "/api/admin/ptc/campaigns" && method === "POST") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+
+    const body = await readJson(request);
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const advertiser = typeof body.advertiser_name === "string" ? body.advertiser_name.trim() : "";
+    const paymentReference = typeof body.advertiser_payment_reference === "string"
+      ? body.advertiser_payment_reference.trim() : "";
+    const reward = body.reward_koinu;
+    const duration = body.duration_seconds;
+    const maxViews = body.max_views;
+    const budget = body.total_budget_koinu;
+
+    if (title.length < 3 || title.length > 80) throw new HttpError(400, "Campaign title must be 3-80 characters.");
+    if (description.length < 10 || description.length > 500) throw new HttpError(400, "Description must be 10-500 characters.");
+    if (advertiser.length < 2 || advertiser.length > 80) throw new HttpError(400, "Advertiser name must be 2-80 characters.");
+    if (paymentReference.length < 5 || paymentReference.length > 120) throw new HttpError(400, "Verified advertiser payment reference is required.");
+    if (body.payment_verified !== true) throw new HttpError(400, "Confirm that advertiser payment was verified.");
+    if (!Number.isSafeInteger(reward) || reward < 1 || reward > 100000000) throw new HttpError(400, "Invalid reward amount.");
+    if (!Number.isSafeInteger(duration) || duration < 10 || duration > 180) throw new HttpError(400, "Viewing duration must be 10-180 seconds.");
+    if (!Number.isSafeInteger(maxViews) || maxViews < 1 || maxViews > 10000000) throw new HttpError(400, "Invalid maximum views.");
+    if (!Number.isSafeInteger(budget) || budget < reward || budget > 1000000000000 || budget > reward * maxViews) {
+      throw new HttpError(400, "Campaign budget must cover at least one view and cannot exceed reward × max views.");
+    }
+    const targetUrl = validatePublicHttpUrl(body.target_url, "target URL");
+
+    const inserted = await env.DB.prepare(`
+      INSERT INTO ptc_campaigns (
+        title, description, advertiser_name, target_url, reward_koinu,
+        duration_seconds, max_views, total_budget_koinu,
+        remaining_budget_koinu, advertiser_payment_reference,
+        payment_verified_by, created_by
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING id, status
+    `).bind(
+      title, description, advertiser, targetUrl, reward, duration,
+      maxViews, budget, budget, paymentReference, user.sub, user.sub
+    ).first();
+
+    if (!inserted?.id) throw new HttpError(500, "PTC campaign could not be created.");
+    return json({ success: true, campaign_id: Number(inserted.id), status: inserted.status }, 201);
+  }
+
+  const ptcCampaignMatch = path.match(/^\/api\/admin\/ptc\/campaigns\/(\d+)$/);
+  if (ptcCampaignMatch && method === "PUT") {
+    const user = await authenticate(request);
+    await requireAdmin(user, env);
+    await enforceRateLimit(env, `uid:${user.sub}`, "admin_ptc", RATE_LIMIT_POLICIES.adminPtc);
+
+    const campaignId = Number(ptcCampaignMatch[1]);
+    const body = await readJson(request);
+    const nextStatus = body.status;
+    if (!Number.isSafeInteger(campaignId) || campaignId < 1) throw new HttpError(400, "Invalid campaign ID.");
+
+    const campaign = await env.DB.prepare(`
+      SELECT id, status, remaining_budget_koinu
+      FROM ptc_campaigns WHERE id = ?
+    `).bind(campaignId).first();
+    if (!campaign) throw new HttpError(404, "PTC campaign not found.");
+
+    if (nextStatus === "active" && campaign.status === "pending_review") {
+      const remaining = Number(campaign.remaining_budget_koinu);
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE ptc_reserve
+          SET available_koinu = available_koinu - ?,
+              locked_koinu = locked_koinu + ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND available_koinu >= ?
+        `).bind(remaining, remaining, remaining),
+        env.DB.prepare(`
+          UPDATE ptc_campaigns
+          SET status = 'active', updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = 'pending_review' AND changes() = 1
+        `).bind(campaignId),
+        env.DB.prepare("SELECT CASE WHEN changes() != 1 THEN abs(-9223372036854775808) ELSE 1 END")
+      ]);
+      if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1) {
+        throw new HttpError(409, "Insufficient available PTC reserve or campaign status changed.");
+      }
+      return json({ success: true, status: "active" });
+    }
+
+    if (nextStatus === "active" && campaign.status === "paused") {
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_campaigns SET status = 'active', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'paused' AND remaining_budget_koinu > 0
+      `).bind(campaignId).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Campaign cannot be reactivated.");
+      return json({ success: true, status: "active" });
+    }
+
+    if (nextStatus === "paused" && campaign.status === "active") {
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_campaigns SET status = 'paused', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'active'
+      `).bind(campaignId).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Campaign status changed.");
+      return json({ success: true, status: "paused" });
+    }
+
+    if (nextStatus === "completed" && ["active", "paused"].includes(campaign.status)) {
+      const remaining = Number(campaign.remaining_budget_koinu);
+      const results = await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE ptc_campaigns
+          SET status = 'completed', remaining_budget_koinu = 0, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status IN ('active', 'paused')
+        `).bind(campaignId),
+        env.DB.prepare(`
+          UPDATE ptc_reserve
+          SET locked_koinu = locked_koinu - ?,
+              available_koinu = available_koinu + ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1 AND locked_koinu >= ? AND changes() = 1
+        `).bind(remaining, remaining, remaining),
+        env.DB.prepare("SELECT CASE WHEN changes() != 1 THEN abs(-9223372036854775808) ELSE 1 END")
+      ]);
+      if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1) {
+        throw new HttpError(409, "Campaign could not be completed and its unused budget released.");
+      }
+      return json({ success: true, status: "completed", released_koinu: remaining });
+    }
+
+    if (nextStatus === "rejected" && campaign.status === "pending_review") {
+      const updated = await env.DB.prepare(`
+        UPDATE ptc_campaigns SET status = 'rejected', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'pending_review'
+      `).bind(campaignId).run();
+      if (updated.meta.changes !== 1) throw new HttpError(409, "Campaign status changed.");
+      return json({ success: true, status: "rejected" });
+    }
+
+    throw new HttpError(400, "Unsupported PTC campaign status transition.");
   }
 
   // ADVERTISING: USER REQUESTS AND LIVE PLACEMENTS
