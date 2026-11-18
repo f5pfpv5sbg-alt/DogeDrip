@@ -35,6 +35,7 @@ test("PTC settlement is admin-only and atomically debits pending reserve, credit
   assert.match(route, /requireAdmin\(user, env\)/);
   assert.match(route, /admin_ptc/);
   assert.match(route, /ptc_reserve/);
+  assert.match(route, /COALESCE\([\s\S]*SELECT pending_koinu FROM ptc_reserve/);
   assert.match(route, /pending_koinu = pending_koinu -/);
   assert.match(route, /balance_koinu = balance_koinu \+/);
   assert.match(route, /INSERT INTO ledger_transactions/);
