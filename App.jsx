@@ -4960,7 +4960,39 @@ export default function App() {
                         </div>
                       )}
                       {request.status === 'payment_submitted' && <p className="text-xs text-emerald-400">Payment reference submitted. Waiting for verification.</p>}
-                      {request.status === 'approved' && <p className="text-xs text-emerald-400">Payment verified. Campaign #{request.campaign_id} was created and is awaiting admin activation.</p>}
+                      {request.status === 'approved' && (
+                        <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
+                          <p className="text-xs text-emerald-400">Payment verified · Campaign #{request.campaign_id}</p>
+                          {request.campaign_status ? (
+                            <>
+                              <div className="flex justify-between gap-2 text-xs">
+                                <span className="text-slate-400">Campaign status</span>
+                                <strong className="text-white uppercase">{String(request.campaign_status).replaceAll('_', ' ')}</strong>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Completed views</p>
+                                  <p className="text-sm font-black text-white">{Number(request.campaign_views_completed || 0).toLocaleString()} / {Number(request.max_views || 0).toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Views remaining</p>
+                                  <p className="text-sm font-black text-white">{Math.max(0, Number(request.max_views || 0) - Number(request.campaign_views_completed || 0)).toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Budget spent</p>
+                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_spent_koinu)} DOGE</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] uppercase text-slate-500">Budget remaining</p>
+                                  <p className="text-sm font-black text-white">{formatDoge(request.campaign_remaining_budget_koinu)} DOGE</p>
+                                </div>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-xs text-slate-400">Campaign created and waiting for admin activation.</p>
+                          )}
+                        </div>
+                      )}
                       {request.status === 'rejected' && <p className="text-xs text-red-300">{request.admin_note || 'This campaign request was rejected.'}</p>}
                     </div>
                   ))}
