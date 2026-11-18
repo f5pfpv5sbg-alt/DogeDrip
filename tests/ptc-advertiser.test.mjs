@@ -30,6 +30,17 @@ test("advertisers can only read their own requests and submit valid campaign det
   assert.match(routes, /requestedBudget > reward \* maxViews/);
 });
 
+test("admin advertiser quotes must cover one view and stay within the maximum campaign budget", () => {
+  const start = worker.indexOf('if (status === "awaiting_payment")');
+  const end = worker.indexOf('if (status === "rejected")', start);
+  assert.ok(start >= 0 && end > start);
+  const route = worker.slice(start, end);
+  assert.match(route, /SELECT reward_koinu, max_views FROM ptc_advertiser_requests/);
+  assert.match(route, /quote < minimumBudget/);
+  assert.match(route, /quote > maximumBudget/);
+  assert.match(route, /Number\.isSafeInteger\(quote\)/);
+});
+
 test("advertiser payment references are owner-scoped and admin approval is verified", () => {
   const start = worker.indexOf('const advertiserPaymentMatch');
   const end = worker.indexOf("// ADVERTISING: USER REQUESTS AND LIVE PLACEMENTS", start);
