@@ -65,7 +65,7 @@ test("uncertain payout reconciliation requires a verified numeric payout ID or a
     "// ADMIN: REJECT WITHDRAWAL + REFUND + LEDGER"
   );
   assert.match(route, /resolution === "paid"/);
-  assert.match(route, /!\/\^\d\{1,32\}\$\//);
+  assert.ok(route.includes("!/^\\d{1,32}$/.test(payoutId)"));
   assert.match(route, /status IN \('processing', 'payment_unknown'\)/);
   assert.ok(route.includes("status = 'approved'"));
   assert.ok(route.includes("faucetpay_payout_id IS NULL"));
