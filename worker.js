@@ -1749,6 +1749,7 @@ async function getAdminDailyStats(env) {
     activity,
     onlineUsers,
     adRevenue,
+    verifiedSubscriptionRevenue,
     faucetReserve,
     wheelReserve,
     referralReserve
@@ -1854,6 +1855,20 @@ async function getAdminDailyStats(env) {
     `).bind(today).first(),
 
     env.DB.prepare(`
+      SELECT
+        COALESCE(SUM(amount_cents), 0) AS total_cents,
+        COUNT(*) AS orders_count,
+        COALESCE(SUM(CASE WHEN plan = 'PREMIUM' THEN amount_cents ELSE 0 END), 0) AS premium_cents,
+        COALESCE(SUM(CASE WHEN plan = 'VIP' THEN amount_cents ELSE 0 END), 0) AS vip_cents
+      FROM subscription_orders
+      WHERE status = 'paid'
+        AND provider = 'faucetpay'
+        AND provider_transaction_id IS NOT NULL
+        AND paid_at IS NOT NULL
+        AND date(paid_at) = ?
+    `).bind(today).first(),
+
+    env.DB.prepare(`
       SELECT available_koinu, payouts_enabled
       FROM faucet_reserve
       WHERE id = 1
@@ -1911,6 +1926,14 @@ async function getAdminDailyStats(env) {
     ad_campaign_value_eur: Number(adRevenue?.total || 0),
     ad_campaigns_activated_today: Number(adRevenue?.count || 0),
     ad_payment_verification_status: "manual_review_not_provider_verified",
+    verified_subscription_revenue_eur_cents: Number(verifiedSubscriptionRevenue?.total_cents || 0),
+    verified_subscription_revenue_eur: Number(verifiedSubscriptionRevenue?.total_cents || 0) / 100,
+    verified_subscription_orders_today: Number(verifiedSubscriptionRevenue?.orders_count || 0),
+    subscription_revenue_breakdown_eur_cents: {
+      premium: Number(verifiedSubscriptionRevenue?.premium_cents || 0),
+      vip: Number(verifiedSubscriptionRevenue?.vip_cents || 0)
+    },
+    subscription_revenue_verification_status: "faucetpay_callback_verified",
     wheel_purchase_volume_koinu: wheelPurchaseVolumeKoinu,
     rewards_credited_koinu: rewardsCreditedKoinu,
     external_doge_revenue_verified: false,
