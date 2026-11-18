@@ -3275,20 +3275,31 @@ async function handleRequest(request, env, json) {
 
     const [history, totals] = await Promise.all([
       env.DB.prepare(`
-        SELECT v.id, v.campaign_id, c.title, v.status, v.reward_koinu,
-               v.started_at, v.completed_at
+        SELECT v.id, v.campaign_id, c.title,
+               CASE WHEN si.view_id IS NOT NULL THEN 'settled' ELSE v.status END AS status,
+               v.reward_koinu, v.started_at, v.completed_at
         FROM ptc_views v
         JOIN ptc_campaigns c ON c.id = v.campaign_id
+        LEFT JOIN ptc_settlement_items si ON si.view_id = v.id
         WHERE v.uid = ?
         ORDER BY v.id DESC
         LIMIT 50
       `).bind(user.sub).all(),
       env.DB.prepare(`
         SELECT
-          COALESCE(SUM(CASE WHEN status = 'completed' THEN reward_koinu ELSE 0 END), 0) AS pending_koinu,
-          COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed_views
-        FROM ptc_views
-        WHERE uid = ?
+          COALESCE(SUM(CASE
+            WHEN v.status = 'completed' AND si.view_id IS NULL THEN v.reward_koinu
+            ELSE 0
+          END), 0) AS pending_koinu,
+          COALESCE(SUM(CASE
+            WHEN si.view_id IS NOT NULL THEN v.reward_koinu
+            ELSE 0
+          END), 0) AS settled_koinu,
+          COUNT(CASE WHEN v.status = 'completed' AND si.view_id IS NULL THEN 1 END) AS completed_views,
+          COUNT(CASE WHEN si.view_id IS NOT NULL THEN 1 END) AS settled_views
+        FROM ptc_views v
+        LEFT JOIN ptc_settlement_items si ON si.view_id = v.id
+        WHERE v.uid = ?
       `).bind(user.sub).first()
     ]);
 
@@ -3296,8 +3307,12 @@ async function handleRequest(request, env, json) {
       success: true,
       history: history.results || [],
       pending_reward_koinu: Number(totals?.pending_koinu || 0),
+      settled_reward_koinu: Number(totals?.settled_koinu || 0),
       completed_views: Number(totals?.completed_views || 0),
-      reward_status: "pending_not_withdrawable"
+      settled_views: Number(totals?.settled_views || 0),
+      reward_status: Number(totals?.pending_koinu || 0) > 0
+        ? "pending_not_withdrawable"
+        : "settled_rewards_credited_to_balance"
     });
   }
 
