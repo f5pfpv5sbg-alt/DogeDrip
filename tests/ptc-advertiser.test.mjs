@@ -40,8 +40,8 @@ test("advertiser payment references are owner-scoped and admin approval is verif
   assert.match(routes, /body\.payment_verified !== true/);
   assert.match(routes, /payment_reference/);
   assert.match(routes, /campaign_id IS NULL/);
-  assert.ok(routes.includes(String.raw`const advertiserPaymentMatch = path.match(/^\\/api\\/ptc\\/advertiser\\/requests\\/(\\d+)\\/payment$/);`));
-  assert.ok(routes.includes(String.raw`const adminPtcRequestMatch = path.match(/^\\/api\\/admin\\/ptc\\/advertiser-requests\\/(\\d+)$/);`));
+  assert.ok(routes.includes('const advertiserPaymentMatch = path.match(/^\\/api\\/ptc\\/advertiser\\/requests\\/(\\d+)\\/payment$/);'));
+  assert.ok(routes.includes('const adminPtcRequestMatch = path.match(/^\\/api\\/admin\\/ptc\\/advertiser-requests\\/(\\d+)$/);'));
 });
 
 test("advertiser dashboard exposes campaign analytics only through owner-scoped requests", () => {
