@@ -121,28 +121,83 @@ let cachedKeys = null;
 let cachedKeysAt = 0;
 
 async function getGoogleKeys(force = false) {
-  const now = Date.now();
-
-  if (!force && cachedKeys && now - cachedKeysAt < 3600000) {
+  if (!force && cachedKeys && Date.now() - cachedKeysAt < 3600000) {
     return cachedKeys;
   }
 
-  const res = await fetch(GOOGLE_KEYS_URL, {
-    cf: { cacheTtl: 3600, cacheEverything: true }
-  });
+  let response;
+  try {
+    response = await fetch(GOOGLE_KEYS_URL, {
+      cf: { cacheTtl: 3600, cacheEverything: true },
+      signal: AbortSignal.timeout(8000)
+    });
+  } catch {
+    throw new HttpError(503, "Firebase signing keys are temporarily unavailable");
+  }
 
-  if (!res.ok) {
+  if (
+    !response.ok ||
+    !(response.headers.get("Content-Type") || "").toLowerCase().includes("application/json")
+  ) {
     throw new HttpError(503, "Could not retrieve Firebase keys");
   }
 
-  const keySet = await res.json();
-
-  if (!Array.isArray(keySet.keys)) {
+  let raw;
+  try {
+    raw = await response.text();
+  } catch {
     throw new HttpError(503, "Could not retrieve Firebase keys");
   }
 
-  cachedKeys = keySet.keys;
-  cachedKeysAt = now;
+  if (!raw || new TextEncoder().encode(raw).length > 65536) {
+    throw new HttpError(503, "Firebase signing key response is invalid");
+  }
+
+  let keySet;
+  try {
+    keySet = JSON.parse(raw);
+  } catch {
+    throw new HttpError(503, "Firebase signing key response is invalid");
+  }
+
+  if (
+    !keySet ||
+    !Array.isArray(keySet.keys) ||
+    keySet.keys.length < 1 ||
+    keySet.keys.length > 20
+  ) {
+    throw new HttpError(503, "Firebase signing key set is invalid");
+  }
+
+  const seenKids = new Set();
+  const validatedKeys = [];
+
+  for (const key of keySet.keys) {
+    if (
+      !key ||
+      typeof key !== "object" ||
+      Array.isArray(key) ||
+      key.kty !== "RSA" ||
+      typeof key.kid !== "string" ||
+      !/^[A-Za-z0-9_-]{1,128}$/.test(key.kid) ||
+      typeof key.n !== "string" ||
+      !/^[A-Za-z0-9_-]+$/.test(key.n) ||
+      typeof key.e !== "string" ||
+      !/^[A-Za-z0-9_-]+$/.test(key.e) ||
+      (key.use !== undefined && key.use !== "sig") ||
+      (key.alg !== undefined && key.alg !== "RS256") ||
+      (key.key_ops !== undefined && (!Array.isArray(key.key_ops) || !key.key_ops.includes("verify"))) ||
+      seenKids.has(key.kid)
+    ) {
+      throw new HttpError(503, "Firebase signing key set is invalid");
+    }
+
+    seenKids.add(key.kid);
+    validatedKeys.push(key);
+  }
+
+  cachedKeys = validatedKeys;
+  cachedKeysAt = Date.now();
 
   return cachedKeys;
 }
@@ -163,16 +218,19 @@ async function verifyFirebaseToken(token) {
   try {
     parts = token.split(".");
 
-    if (parts.length !== 3) {
+    if (
+      parts.length !== 3 ||
+      parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))
+    ) {
       throw new Error("Invalid token");
     }
 
     tokenHeader = JSON.parse(
-      new TextDecoder().decode(decodeBase64Url(parts[0]))
+      new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(parts[0]))
     );
 
     claims = JSON.parse(
-      new TextDecoder().decode(decodeBase64Url(parts[1]))
+      new TextDecoder("utf-8", { fatal: true }).decode(decodeBase64Url(parts[1]))
     );
   } catch {
     throw new HttpError(401, "Invalid token");
@@ -186,23 +244,27 @@ async function verifyFirebaseToken(token) {
     !claims ||
     typeof claims !== "object" ||
     tokenHeader.alg !== "RS256" ||
+    tokenHeader.typ !== "JWT" ||
     typeof tokenHeader.kid !== "string" ||
-    !tokenHeader.kid ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(tokenHeader.kid) ||
     claims.aud !== PROJECT_ID ||
     claims.iss !== `https://securetoken.google.com/${PROJECT_ID}` ||
     typeof claims.sub !== "string" ||
     !claims.sub ||
     claims.sub.length > 128 ||
     typeof claims.email !== "string" ||
-    !claims.email ||
-    !Number.isFinite(claims.exp) ||
-    !Number.isFinite(claims.iat) ||
-    !Number.isFinite(claims.auth_time) ||
+    !claims.email.trim() ||
+    claims.email.length > 320 ||
+    /[\r\n\u0000-\u001F]/.test(claims.email) ||
+    !Number.isSafeInteger(claims.exp) ||
+    !Number.isSafeInteger(claims.iat) ||
+    !Number.isSafeInteger(claims.auth_time) ||
     claims.exp <= now ||
     claims.iat > now ||
     claims.auth_time > now ||
     claims.iat < now - 3600 ||
-    claims.auth_time > claims.iat
+    claims.auth_time > claims.iat ||
+    (claims.nbf !== undefined && (!Number.isSafeInteger(claims.nbf) || claims.nbf > now))
   ) {
     throw new HttpError(401, "Invalid Firebase token");
   }
@@ -399,28 +461,64 @@ async function readJson(request) {
     throw new HttpError(415, "Content-Type must be application/json");
   }
 
-  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  const contentLengthHeader = request.headers.get("Content-Length");
+  if (contentLengthHeader !== null) {
+    if (!/^\d+$/.test(contentLengthHeader)) {
+      throw new HttpError(400, "Invalid Content-Length");
+    }
 
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_REQUEST_BODY_BYTES
-  ) {
-    throw new HttpError(413, "Request body too large");
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength > MAX_REQUEST_BODY_BYTES) {
+      throw new HttpError(413, "Request body too large");
+    }
   }
 
-  let raw;
-
-  try {
-    raw = await request.text();
-  } catch {
+  const reader = request.body?.getReader();
+  if (!reader) {
     throw new HttpError(400, "Invalid request body");
   }
 
-  if (
-    !raw ||
-    new TextEncoder().encode(raw).length > MAX_REQUEST_BODY_BYTES
-  ) {
-    throw new HttpError(413, "Request body too large");
+  const chunks = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+
+      if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The oversized stream is already rejected.
+        }
+        throw new HttpError(413, "Request body too large");
+      }
+
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "Invalid request body");
+  }
+
+  if (totalBytes === 0) {
+    throw new HttpError(400, "Invalid request body");
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let raw;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new HttpError(400, "Invalid request body");
   }
 
   try {
