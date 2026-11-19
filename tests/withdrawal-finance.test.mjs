@@ -148,3 +148,18 @@ test("claim history marks legacy claims without request IDs and ledger entries",
   assert.ok(route.includes("lt.reference_id = CAST(c.id AS TEXT)"));
   assert.ok(route.includes("lt.amount_koinu = c.amount_koinu"));
 });
+
+
+test("FaucetPay admin status reports missing subscription settings without exposing values", () => {
+  const route = section(
+    worker,
+    'if (path === "/api/admin/faucetpay/status" && method === "GET")',
+    "// ADMIN: READ FAUCETPAY DOGE BALANCE"
+  );
+  assert.ok(route.includes("subscription_payments_ready"));
+  assert.ok(route.includes("FAUCETPAY_MERCHANT_USERNAME"));
+  assert.ok(route.includes("FAUCETPAY_PREMIUM_USDT"));
+  assert.ok(route.includes("FAUCETPAY_VIP_USDT"));
+  assert.ok(route.includes("subscription_settings"));
+  assert.doesNotMatch(route, /merchant_username:\\s*env\\./);
+});
