@@ -161,6 +161,7 @@ test("FaucetPay admin status reports missing subscription settings without expos
   assert.ok(route.includes("FAUCETPAY_PREMIUM_USDT"));
   assert.ok(route.includes("FAUCETPAY_VIP_USDT"));
   assert.ok(route.includes("subscription_settings"));
-  assert.ok(route.includes("/^\\\\d+(?:\\\\.\\\\d{1,2})?$/"));
+  assert.ok(route.includes("validMerchantAmount(premiumAmount)"));
+  assert.ok(route.includes("validMerchantAmount(vipAmount)"));
   assert.doesNotMatch(route, /merchant_username:\\s*env\\./);
 });
