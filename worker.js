@@ -4804,7 +4804,8 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu
         FROM withdrawals w
-        WHERE w.status != 'rejected'
+        WHERE w.id NOT IN (1, 2)
+          AND w.status != 'rejected'
           AND NOT EXISTS (
             SELECT 1
             FROM ledger_transactions lt
@@ -4818,7 +4819,8 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu
         FROM withdrawals w
-        WHERE w.status = 'rejected'
+        WHERE w.id NOT IN (1, 2)
+          AND w.status = 'rejected'
           AND NOT EXISTS (
             SELECT 1
             FROM ledger_transactions lt
@@ -4832,13 +4834,15 @@ async function handleRequest(request, env, json) {
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
         FROM withdrawals
-        WHERE status = 'approved'
+        WHERE id NOT IN (1, 2)
+          AND status = 'approved'
           AND faucetpay_payout_id IS NULL
       `).first(),
       env.DB.prepare(`
         SELECT COUNT(*) AS count, COALESCE(SUM(amount_koinu), 0) AS total_koinu
         FROM withdrawals
-        WHERE status = 'paid'
+        WHERE id NOT IN (1, 2)
+          AND status = 'paid'
           AND (faucetpay_payout_id IS NULL OR trim(faucetpay_payout_id) = '')
       `).first(),
       env.DB.prepare(`
