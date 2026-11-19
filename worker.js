@@ -255,7 +255,7 @@ async function verifyFirebaseToken(token) {
     typeof claims.email !== "string" ||
     !claims.email.trim() ||
     claims.email.length > 320 ||
-    /[\\r\\n\\u0000-\\u001F]/.test(claims.email) ||
+    /[\r\n\u0000-\u001F]/.test(claims.email) ||
     !Number.isSafeInteger(claims.exp) ||
     !Number.isSafeInteger(claims.iat) ||
     !Number.isSafeInteger(claims.auth_time) ||
@@ -463,7 +463,7 @@ async function readJson(request) {
 
   const contentLengthHeader = request.headers.get("Content-Length");
   if (contentLengthHeader !== null) {
-    if (!/^\\d+$/.test(contentLengthHeader)) {
+    if (!/^\d+$/.test(contentLengthHeader)) {
       throw new HttpError(400, "Invalid Content-Length");
     }
 
