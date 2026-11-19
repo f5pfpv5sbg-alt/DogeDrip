@@ -2973,10 +2973,27 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
 
     const result = await env.DB.prepare(`
-      SELECT id, amount_koinu, claimed_at
-      FROM claims
-      WHERE uid = ?
-      ORDER BY id DESC
+      SELECT
+        c.id,
+        c.amount_koinu,
+        c.claimed_at,
+        CASE
+          WHEN c.request_id IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM ledger_transactions lt
+              WHERE lt.uid = c.uid
+                AND lt.transaction_type = 'claim'
+                AND lt.reference_type = 'claim'
+                AND lt.reference_id = CAST(c.id AS TEXT)
+                AND lt.amount_koinu = c.amount_koinu
+            )
+          THEN 1
+          ELSE 0
+        END AS legacy_unverified
+      FROM claims c
+      WHERE c.uid = ?
+      ORDER BY c.id DESC
       LIMIT 50
     `).bind(user.sub).all();
 
@@ -4929,10 +4946,36 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.adminRead
     );
 
+    const apiKeyConfigured =
+      typeof env.FAUCETPAY_API_KEY === "string" &&
+      env.FAUCETPAY_API_KEY.trim().length > 0;
+    const merchantConfigured =
+      typeof env.FAUCETPAY_MERCHANT_USERNAME === "string" &&
+      env.FAUCETPAY_MERCHANT_USERNAME.trim().length > 0;
+    const premiumAmount = String(env.FAUCETPAY_PREMIUM_USDT || "");
+    const vipAmount = String(env.FAUCETPAY_VIP_USDT || "");
+    const validMerchantAmount = value =>
+      /^\d+(?:\.\d{1,2})?$/.test(value) && Number(value) > 0;
+    const premiumAmountConfigured = validMerchantAmount(premiumAmount);
+    const vipAmountConfigured = validMerchantAmount(vipAmount);
+    const missingSubscriptionSettings = [];
+
+    if (!merchantConfigured) missingSubscriptionSettings.push("FAUCETPAY_MERCHANT_USERNAME");
+    if (!premiumAmountConfigured) missingSubscriptionSettings.push("FAUCETPAY_PREMIUM_USDT");
+    if (!vipAmountConfigured) missingSubscriptionSettings.push("FAUCETPAY_VIP_USDT");
+
     return json({
       success: true,
-      configured: typeof env.FAUCETPAY_API_KEY === "string" && env.FAUCETPAY_API_KEY.length > 0,
-      payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true"
+      configured: apiKeyConfigured,
+      payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true",
+      subscription_payments_ready:
+        merchantConfigured && premiumAmountConfigured && vipAmountConfigured,
+      subscription_settings: {
+        merchant_configured: merchantConfigured,
+        premium_amount_configured: premiumAmountConfigured,
+        vip_amount_configured: vipAmountConfigured,
+        missing: missingSubscriptionSettings
+      }
     });
   }
 

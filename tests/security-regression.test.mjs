@@ -116,8 +116,10 @@ test("FaucetPay payout IDs are persisted in the withdrawals schema", () => {
 
 test("FaucetPay status endpoint is admin-only and exposes only configuration booleans", () => {
   assert.ok(worker.includes('if (path === "/api/admin/faucetpay/status" && method === "GET")'));
-  assert.ok(worker.includes('configured: typeof env.FAUCETPAY_API_KEY === "string" && env.FAUCETPAY_API_KEY.length > 0'));
+  assert.ok(worker.includes("configured: apiKeyConfigured"));
   assert.ok(worker.includes('payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true"'));
+  assert.ok(worker.includes("subscription_payments_ready"));
+  assert.ok(worker.includes("subscription_settings"));
   assert.match(worker, /requireAdmin\(user, env\)/);
 });
 
