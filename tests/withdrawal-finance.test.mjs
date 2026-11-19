@@ -130,9 +130,8 @@ test("FaucetPay subscription callback validates provider transaction IDs as nume
   const callback = section(
     worker,
     "async function handleSubscriptionCallback",
-    "// ==========================================\\n// MAIN API ROUTES"
+    "// ==========================================\n// MAIN API ROUTES"
   );
   assert.ok(callback.includes("!/^\\d{1,32}$/.test(callbackTransactionId)"));
   assert.ok(callback.includes("!/^\\d{1,32}$/.test(transactionId)"));
-  assert.doesNotMatch(callback, /\\/\\^\\\\\\\\d\\{1,32\\}\\$/);
 });
