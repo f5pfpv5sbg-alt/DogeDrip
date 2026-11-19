@@ -4235,6 +4235,7 @@ export default function App() {
                         <tr>
                           <th className="py-3 pr-4">ID</th>
                           <th className="py-3 pr-4">Reward</th>
+                          <th className="py-3 pr-4">Record</th>
                           <th className="py-3">Date</th>
                         </tr>
                       </thead>
@@ -4245,10 +4246,17 @@ export default function App() {
                             <td className="py-3 pr-4 text-slate-500">
                               #{claim.id}
                             </td>
-                            <td className="py-3 pr-4 text-emerald-400 font-bold">
+                            <td className={`py-3 pr-4 font-bold ${claim.legacy_unverified ? 'text-slate-400' : 'text-emerald-400'}`}>
                               +{(
                                 Number(claim.amount_koinu) / KOINU
                               ).toFixed(6)} DOGE
+                            </td>
+                            <td className="py-3 pr-4">
+                              {claim.legacy_unverified ? (
+                                <span className="text-amber-300">Legacy record — not ledger-backed</span>
+                              ) : (
+                                <span className="text-emerald-400">Recorded in account ledger</span>
+                              )}
                             </td>
                             <td className="py-3 text-slate-400">
                               {formatDate(claim.claimed_at)}
