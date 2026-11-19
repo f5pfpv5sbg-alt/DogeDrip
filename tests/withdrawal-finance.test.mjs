@@ -165,3 +165,23 @@ test("FaucetPay admin status reports missing subscription settings without expos
   assert.ok(route.includes("validMerchantAmount(vipAmount)"));
   assert.doesNotMatch(route, /merchant_username:\\s*env\\./);
 });
+
+
+test("faucet claims require an enabled funded reserve and debit it atomically", () => {
+  const route = section(
+    worker,
+    'if (path === "/api/claim" && method === "POST")',
+    "// CLAIM HISTORY"
+  );
+  assert.ok(route.includes("SELECT available_koinu, payouts_enabled"));
+  assert.ok(route.includes("faucetReserve.payouts_enabled) !== 1"));
+  assert.ok(route.includes("Faucet reserve is insufficient"));
+  assert.ok(route.includes("UPDATE faucet_reserve"));
+  assert.ok(route.includes("available_koinu = available_koinu - ?"));
+  assert.ok(route.includes("AND changes() = 1"));
+});
+
+test("wheel paid spins are unavailable whenever wheel payouts are disabled", () => {
+  const wheel = section(worker, "const canFreeSpin =", "const canBuy =");
+  assert.match(wheel, /const canPaidSpin =\\s+payoutsEnabled &&/);
+});
