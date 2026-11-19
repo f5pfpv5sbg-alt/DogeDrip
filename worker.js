@@ -2973,10 +2973,27 @@ async function handleRequest(request, env, json) {
     const user = await authenticate(request);
 
     const result = await env.DB.prepare(`
-      SELECT id, amount_koinu, claimed_at
-      FROM claims
-      WHERE uid = ?
-      ORDER BY id DESC
+      SELECT
+        c.id,
+        c.amount_koinu,
+        c.claimed_at,
+        CASE
+          WHEN c.request_id IS NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM ledger_transactions lt
+              WHERE lt.uid = c.uid
+                AND lt.transaction_type = 'claim'
+                AND lt.reference_type = 'claim'
+                AND lt.reference_id = CAST(c.id AS TEXT)
+                AND lt.amount_koinu = c.amount_koinu
+            )
+          THEN 1
+          ELSE 0
+        END AS legacy_unverified
+      FROM claims c
+      WHERE c.uid = ?
+      ORDER BY c.id DESC
       LIMIT 50
     `).bind(user.sub).all();
 
