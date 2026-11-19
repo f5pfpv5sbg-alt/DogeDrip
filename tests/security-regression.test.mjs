@@ -573,3 +573,64 @@ test("authenticated account read endpoints are rate-limited", () => {
     assert.ok(route.includes("RATE_LIMIT_POLICIES.accountRead"), `${path} must use the account read policy`);
   }
 });
+
+test("Firebase JWKS retrieval has a bounded timeout and validates the response type and size", () => {
+  const start = worker.indexOf("async function getGoogleKeys");
+  const end = worker.indexOf("async function verifyFirebaseToken", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /AbortSignal\.timeout\(8000\)/);
+  assert.match(fn, /Content-Type/);
+  assert.match(fn, /65536/);
+  assert.match(fn, /response\.text\(\)/);
+});
+
+test("Firebase JWKS accepts only a small non-empty set of unique RSA signature keys", () => {
+  const start = worker.indexOf("async function getGoogleKeys");
+  const end = worker.indexOf("async function verifyFirebaseToken", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /keySet\.keys\.length < 1/);
+  assert.match(fn, /keySet\.keys\.length > 20/);
+  assert.match(fn, /key\.kty !== "RSA"/);
+  assert.match(fn, /key\.use !== "sig"/);
+  assert.match(fn, /key\.alg !== "RS256"/);
+  assert.match(fn, /seenKids\.has\(key\.kid\)/);
+});
+
+test("Firebase ID tokens enforce JWT header, strict base64url segments and safe key identifiers", () => {
+  const start = worker.indexOf("async function verifyFirebaseToken");
+  const end = worker.indexOf("// By default", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /parts\.some\(part => !\/\^\[A-Za-z0-9_-\]\+\$\/\.test\(part\)\)/);
+  assert.match(fn, /tokenHeader\.typ !== "JWT"/);
+  assert.match(fn, /A-Za-z0-9_-\]\{1,128\}/);
+});
+
+test("Firebase ID token claims reject unsafe email fields and invalid not-before timestamps", () => {
+  const start = worker.indexOf("async function verifyFirebaseToken");
+  const end = worker.indexOf("// By default", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /claims\.email\.length > 320/);
+  assert.match(fn, /claims\.nbf !== undefined/);
+  assert.match(fn, /Number\.isSafeInteger\(claims\.exp\)/);
+  assert.match(fn, /Number\.isSafeInteger\(claims\.iat\)/);
+  assert.match(fn, /Number\.isSafeInteger\(claims\.auth_time\)/);
+});
+
+test("JSON request bodies are streamed and rejected immediately above the configured byte limit", () => {
+  const start = worker.indexOf("async function readJson");
+  const end = worker.indexOf("function generateRefCode", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /request\.body\?\.getReader\(\)/);
+  assert.match(fn, /totalBytes > MAX_REQUEST_BODY_BYTES/);
+  assert.match(fn, /await reader\.cancel\(\)/);
+  assert.doesNotMatch(fn, /request\.text\(\)/);
+});
+
+test("JSON request parsing rejects malformed lengths and invalid UTF-8", () => {
+  const start = worker.indexOf("async function readJson");
+  const end = worker.indexOf("function generateRefCode", start);
+  const fn = worker.slice(start, end);
+  assert.match(fn, /Invalid Content-Length/);
+  assert.match(fn, /TextDecoder\("utf-8", \{ fatal: true \}\)/);
+  assert.match(fn, /totalBytes === 0/);
+});
