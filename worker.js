@@ -1173,6 +1173,7 @@ async function getWheelData(env, uid, plan) {
     available >= maxPrize;
 
   const canPaidSpin =
+    payoutsEnabled &&
     paidRemaining > 0 &&
     locked >= maxPrize;
 
@@ -2734,6 +2735,20 @@ async function handleRequest(request, env, json) {
       );
     }
 
+    const faucetReserve = await env.DB.prepare(`
+      SELECT available_koinu, payouts_enabled
+      FROM faucet_reserve
+      WHERE id = 1
+    `).first();
+
+    if (!faucetReserve || Number(faucetReserve.payouts_enabled) !== 1) {
+      throw new HttpError(503, "Faucet claims are temporarily disabled until the reserve is funded and verified.");
+    }
+
+    if (Number(faucetReserve.available_koinu) < plan.amount_koinu) {
+      throw new HttpError(503, "Faucet reserve is insufficient for this claim.");
+    }
+
     let results;
 
     try {
@@ -2760,6 +2775,17 @@ async function handleRequest(request, env, json) {
           `-${plan.cooldown_seconds} seconds`,
           plan.daily_limit
         ),
+
+        env.DB.prepare(`
+          UPDATE faucet_reserve
+          SET
+            available_koinu = available_koinu - ?,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = 1
+            AND payouts_enabled = 1
+            AND available_koinu >= ?
+            AND changes() = 1
+        `).bind(plan.amount_koinu, plan.amount_koinu),
 
         env.DB.prepare(`
           INSERT INTO claims (uid, amount_koinu, request_id)
