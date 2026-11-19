@@ -4946,10 +4946,36 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.adminRead
     );
 
+    const apiKeyConfigured =
+      typeof env.FAUCETPAY_API_KEY === "string" &&
+      env.FAUCETPAY_API_KEY.trim().length > 0;
+    const merchantConfigured =
+      typeof env.FAUCETPAY_MERCHANT_USERNAME === "string" &&
+      env.FAUCETPAY_MERCHANT_USERNAME.trim().length > 0;
+    const premiumAmount = String(env.FAUCETPAY_PREMIUM_USDT || "");
+    const vipAmount = String(env.FAUCETPAY_VIP_USDT || "");
+    const validMerchantAmount = value =>
+      /^\\d+(?:\\.\\d{1,2})?$/.test(value) && Number(value) > 0;
+    const premiumAmountConfigured = validMerchantAmount(premiumAmount);
+    const vipAmountConfigured = validMerchantAmount(vipAmount);
+    const missingSubscriptionSettings = [];
+
+    if (!merchantConfigured) missingSubscriptionSettings.push("FAUCETPAY_MERCHANT_USERNAME");
+    if (!premiumAmountConfigured) missingSubscriptionSettings.push("FAUCETPAY_PREMIUM_USDT");
+    if (!vipAmountConfigured) missingSubscriptionSettings.push("FAUCETPAY_VIP_USDT");
+
     return json({
       success: true,
-      configured: typeof env.FAUCETPAY_API_KEY === "string" && env.FAUCETPAY_API_KEY.length > 0,
-      payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true"
+      configured: apiKeyConfigured,
+      payouts_enabled: env.FAUCETPAY_PAYOUTS_ENABLED === "true",
+      subscription_payments_ready:
+        merchantConfigured && premiumAmountConfigured && vipAmountConfigured,
+      subscription_settings: {
+        merchant_configured: merchantConfigured,
+        premium_amount_configured: premiumAmountConfigured,
+        vip_amount_configured: vipAmountConfigured,
+        missing: missingSubscriptionSettings
+      }
     });
   }
 
