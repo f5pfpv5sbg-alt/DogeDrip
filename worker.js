@@ -2218,7 +2218,7 @@ async function handleSubscriptionCallback(request, env) {
   // A paid order is already backed by a previously verified provider callback.
   // Recover a missing subscription without reusing FaucetPay's one-time token.
   if (order.status === "paid") {
-    if (!/^\\d{1,32}$/.test(callbackTransactionId) || callbackTransactionId !== String(order.provider_transaction_id || "")) {
+    if (!/^\d{1,32}$/.test(callbackTransactionId) || callbackTransactionId !== String(order.provider_transaction_id || "")) {
       throw new HttpError(409, "This order was already paid with another transaction");
     }
     if (await ensureSubscriptionForPaidOrder(env, order, callbackTransactionId)) {
@@ -2260,7 +2260,7 @@ async function handleSubscriptionCallback(request, env) {
   if (
     String(verified.merchant_username || "").trim().toLowerCase() !== env.FAUCETPAY_MERCHANT_USERNAME.trim().toLowerCase() ||
     String(verified.custom || "") !== order.id ||
-    !/^\\d{1,32}$/.test(transactionId) ||
+    !/^\d{1,32}$/.test(transactionId) ||
     !expectedAmount || !receivedAmount || receivedAmount !== expectedAmount ||
     String(verified.currency1 || "").toUpperCase() !== order.merchant_currency ||
     callbackTransactionId !== transactionId
