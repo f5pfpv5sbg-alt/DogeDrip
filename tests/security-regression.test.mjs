@@ -543,3 +543,11 @@ test("FaucetPay checkout cannot be used until merchant credentials and USDT pric
   assert.match(route, /FAUCETPAY_VIP_USDT/);
   assert.match(route, /https:\/\/faucetpay\.io\/merchant\/webscr/);
 });
+test("currently online metric includes users active across UTC midnight", () => {
+  const start = worker.indexOf("async function getAdminDailyStats(env)");
+  const end = worker.indexOf("async function handleRequest(request, env, json)", start);
+  const stats = worker.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(stats, /SELECT COUNT\(DISTINCT uid\) AS total[\s\S]*?FROM user_daily_activity[\s\S]*?last_seen_at >= datetime\('now', '-5 minutes'\)/);
+  assert.doesNotMatch(stats, /FROM user_daily_activity\s+WHERE utc_date = \?[\s\S]{0,100}last_seen_at >= datetime\('now', '-5 minutes'\)/);
+});
