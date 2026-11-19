@@ -4955,7 +4955,7 @@ async function handleRequest(request, env, json) {
     const premiumAmount = String(env.FAUCETPAY_PREMIUM_USDT || "");
     const vipAmount = String(env.FAUCETPAY_VIP_USDT || "");
     const validMerchantAmount = value =>
-      /^\\d+(?:\\.\\d{1,2})?$/.test(value) && Number(value) > 0;
+      /^\d+(?:\.\d{1,2})?$/.test(value) && Number(value) > 0;
     const premiumAmountConfigured = validMerchantAmount(premiumAmount);
     const vipAmountConfigured = validMerchantAmount(vipAmount);
     const missingSubscriptionSettings = [];
