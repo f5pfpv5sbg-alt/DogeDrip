@@ -247,6 +247,7 @@ const mapWithdrawal = (w) => ({
   status: w.status || 'pending',
   faucetpayPayoutId: w.faucetpay_payout_id || '',
   payoutError: w.payout_error || '',
+  legacyDemo: [1, 2].includes(Number(w.id)),
   timestamp: parseServerDate(w.created_at)?.getTime() ?? null
 });
 
@@ -6327,7 +6328,7 @@ export default function App() {
                                         ? 'bg-red-500/10 text-red-300 border border-red-500/30'
                                         : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
                                 }`}>
-                                  {w.status === 'approved' ? 'legacy-approved' : w.status}
+                                  {w.legacyDemo ? (w.status === 'rejected' ? 'demo-rejected' : 'demo-not-paid') : (w.status === 'approved' ? 'legacy-approved' : w.status)}
                                 </span>
                                 {w.faucetpayPayoutId && (
                                   <span className="text-[10px] text-slate-500 break-all">
@@ -6343,7 +6344,13 @@ export default function App() {
                             </td>
 
                             <td className="p-4">
-                              {w.status === 'pending' ? (
+                              {w.legacyDemo ? (
+                                <span className="text-xs text-slate-400">
+                                  {w.status === 'rejected'
+                                    ? 'Demo record — no DOGE was debited; no refund was issued.'
+                                    : 'Demo record — no real DOGE payment was made.'}
+                                </span>
+                              ) : w.status === 'pending' ? (
                                 <div className="flex flex-wrap gap-2">
                                   {faucetPayStatus?.configured && faucetPayStatus?.payouts_enabled ? (
                                     <button
