@@ -190,21 +190,15 @@ test("historical DEMO withdrawals 1 and 2 are excluded from real financial audit
   const route = section(
     worker,
     'if (path === "/api/admin/finance/audit" && method === "GET")',
-    "\\n  }\\n\\n  return json({\\n    success: false,"
+    "\n  }\n\n  return json({\n    success: false,"
   );
 
-  const debitCheck = route.slice(
-    route.indexOf("SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu"),
-    route.indexOf("SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu") + 700
-  );
-  const refundCheck = route.slice(
-    route.indexOf("WHERE w.status = 'rejected'"),
-    route.indexOf("WHERE w.status = 'rejected'") + 500
-  );
-  const approvedCheck = route.slice(
-    route.indexOf("WHERE id NOT IN (1, 2)\\n          AND status = 'approved'"),
-    route.indexOf("WHERE id NOT IN (1, 2)\\n          AND status = 'approved'") + 180
-  );
+  const debitStart = route.indexOf("SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu");
+  const debitCheck = route.slice(debitStart, debitStart + 700);
+  const refundStart = route.indexOf("FROM withdrawals w\n        WHERE w.id NOT IN (1, 2)\n          AND w.status = 'rejected'");
+  const refundCheck = route.slice(refundStart, refundStart + 500);
+  const approvedStart = route.indexOf("WHERE id NOT IN (1, 2)\n          AND status = 'approved'");
+  const approvedCheck = route.slice(approvedStart, approvedStart + 180);
 
   assert.ok(debitCheck.includes("w.id NOT IN (1, 2)"));
   assert.ok(refundCheck.includes("w.id NOT IN (1, 2)"));
