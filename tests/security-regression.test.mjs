@@ -551,3 +551,25 @@ test("currently online metric includes users active across UTC midnight", () => 
   assert.match(stats, /SELECT COUNT\(DISTINCT uid\) AS total[\s\S]*?FROM user_daily_activity[\s\S]*?last_seen_at >= datetime\('now', '-5 minutes'\)/);
   assert.doesNotMatch(stats, /FROM user_daily_activity\s+WHERE utc_date = \?[\s\S]{0,100}last_seen_at >= datetime\('now', '-5 minutes'\)/);
 });
+test("authenticated account read endpoints are rate-limited", () => {
+  assert.match(worker, /accountRead: \\{ limit: 120, windowSeconds: 60 \\}/);
+  const routes = [
+    ["/api/profile", "profile_read"],
+    ["/api/claims", "claims_read"],
+    ["/api/streak", "streak_read"],
+    ["/api/balance", "balance_read"],
+    ["/api/withdrawals", "withdrawals_read"],
+    ["/api/ads", "ads_read"],
+    ["/api/ads/placements", "ad_placements_read"]
+  ];
+  for (const [path, bucket] of routes) {
+    const marker = `if (path === "${path}" && method === "GET") {`;
+    const start = worker.indexOf(marker);
+    assert.ok(start >= 0, `missing read route ${path}`);
+    const end = worker.indexOf("\\n  }", start);
+    const route = worker.slice(start, end > start ? end : start + 1200);
+    assert.ok(route.includes("authenticate(request)"), `${path} must authenticate`);
+    assert.ok(route.includes(`"${bucket}"`), `${path} must use its own rate-limit bucket`);
+    assert.ok(route.includes("RATE_LIMIT_POLICIES.accountRead"), `${path} must use the account read policy`);
+  }
+});
