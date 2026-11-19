@@ -4252,10 +4252,12 @@ export default function App() {
                               ).toFixed(6)} DOGE
                             </td>
                             <td className="py-3 pr-4">
-                              {claim.legacy_unverified ? (
+                              {claim.legacy_unverified === true ? (
                                 <span className="text-amber-300">Legacy record — not ledger-backed</span>
-                              ) : (
+                              ) : claim.legacy_unverified === false ? (
                                 <span className="text-emerald-400">Recorded in account ledger</span>
+                              ) : (
+                                <span className="text-slate-500">Verification unavailable</span>
                               )}
                             </td>
                             <td className="py-3 text-slate-400">
