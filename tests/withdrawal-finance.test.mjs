@@ -185,3 +185,28 @@ test("wheel paid spins are unavailable whenever wheel payouts are disabled", () 
   const wheel = section(worker, "const canFreeSpin =", "const canBuy =");
   assert.match(wheel, /const canPaidSpin =\s+payoutsEnabled &&/);
 });
+
+test("historical DEMO withdrawals 1 and 2 are excluded from real financial audit mismatches and liabilities", () => {
+  const route = section(
+    worker,
+    'if (path === "/api/admin/finance/audit" && method === "GET")',
+    "\\n  }\\n\\n  return json({\\n    success: false,"
+  );
+
+  const debitCheck = route.slice(
+    route.indexOf("SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu"),
+    route.indexOf("SELECT COUNT(*) AS count, COALESCE(SUM(w.amount_koinu), 0) AS total_koinu") + 700
+  );
+  const refundCheck = route.slice(
+    route.indexOf("WHERE w.status = 'rejected'"),
+    route.indexOf("WHERE w.status = 'rejected'") + 500
+  );
+  const approvedCheck = route.slice(
+    route.indexOf("WHERE id NOT IN (1, 2)\\n          AND status = 'approved'"),
+    route.indexOf("WHERE id NOT IN (1, 2)\\n          AND status = 'approved'") + 180
+  );
+
+  assert.ok(debitCheck.includes("w.id NOT IN (1, 2)"));
+  assert.ok(refundCheck.includes("w.id NOT IN (1, 2)"));
+  assert.ok(approvedCheck.includes("id NOT IN (1, 2)"));
+});
