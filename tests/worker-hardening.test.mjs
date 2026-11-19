@@ -26,7 +26,7 @@ test("API accepts only canonical HTTPS production or one-level Pages preview ori
 test("JSON body parser rejects unsupported media types before opening the body stream", () => {
   const parser = section("async function readJson(request)", "function generateRefCode()");
   assert.match(parser, /Content-Type/);
-  assert.match(parser, /contentType !== "application\\/json"/);
+  assert.ok(parser.includes('contentType !== "application/json"'));
   assert.match(parser, /new HttpError\\(415,/);
   assert.ok(parser.indexOf("contentType !==") < parser.indexOf("request.body?.getReader()"));
 });
