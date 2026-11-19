@@ -5171,6 +5171,13 @@ async function handleRequest(request, env, json) {
     );
 
     const id = Number(reconcileMatch[1]);
+
+    // Historical DEMO withdrawals (IDs 1 and 2) were never real DOGE payouts.
+    // Keep them immutable: they must not be reconciled as real provider payments.
+    if (id === 1 || id === 2) {
+      throw new HttpError(409, "This is a historical DEMO withdrawal, not a real DOGE payment.");
+    }
+
     const body = await readJson(request);
     const resolution = body.resolution;
 
