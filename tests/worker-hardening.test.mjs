@@ -23,19 +23,22 @@ test("API accepts only canonical HTTPS production or one-level Pages preview ori
   assert.match(origin, /url\.port === ""/);
 });
 
-test("JSON body parser rejects unsupported media types before reading the body", () => {
+test("JSON body parser rejects unsupported media types before opening the body stream", () => {
   const parser = section("async function readJson(request)", "function generateRefCode()");
   assert.match(parser, /Content-Type/);
-  assert.match(parser, /contentType !== "application\/json"/);
-  assert.match(parser, /new HttpError\(415,/);
-  assert.ok(parser.indexOf("contentType !==") < parser.indexOf("request.text()"));
+  assert.match(parser, /contentType !== "application\\/json"/);
+  assert.match(parser, /new HttpError\\(415,/);
+  assert.ok(parser.indexOf("contentType !==") < parser.indexOf("request.body?.getReader()"));
 });
 
-test("JSON body parser enforces the byte limit even when Content-Length is absent", () => {
+test("JSON body parser enforces the byte limit while streaming even without Content-Length", () => {
   const parser = section("async function readJson(request)", "function generateRefCode()");
   assert.match(parser, /MAX_REQUEST_BODY_BYTES/);
-  assert.match(parser, /new TextEncoder\(\)\.encode\(raw\)\.length/);
-  assert.match(parser, /new HttpError\(413,/);
+  assert.match(parser, /request\\.body\\?\\.getReader\\(\\)/);
+  assert.match(parser, /totalBytes > MAX_REQUEST_BODY_BYTES/);
+  assert.match(parser, /reader\\.cancel\\(\\)/);
+  assert.match(parser, /new HttpError\\(413,/);
+  assert.doesNotMatch(parser, /request\\.text\\(\\)/);
 });
 
 test("scheduled cleanup owns stale-row cleanup instead of adding random writes to user requests", () => {
