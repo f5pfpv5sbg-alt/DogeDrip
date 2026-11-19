@@ -600,9 +600,9 @@ test("Firebase ID tokens enforce JWT header, strict base64url segments and safe 
   const start = worker.indexOf("async function verifyFirebaseToken");
   const end = worker.indexOf("// By default", start);
   const fn = worker.slice(start, end);
-  assert.match(fn, /parts\.some\(part => !\/\^\[A-Za-z0-9_-\]\+\$\/\.test\(part\)\)/);
-  assert.match(fn, /tokenHeader\.typ !== "JWT"/);
-  assert.match(fn, /A-Za-z0-9_-\]\{1,128\}/);
+  assert.ok(fn.includes("parts.some(part => !/^[A-Za-z0-9_-]+$/.test(part))"));
+  assert.ok(fn.includes('tokenHeader.typ !== "JWT"'));
+  assert.ok(fn.includes("A-Za-z0-9_-]{1,128}"));
 });
 
 test("Firebase ID token claims reject unsafe email fields and invalid not-before timestamps", () => {
