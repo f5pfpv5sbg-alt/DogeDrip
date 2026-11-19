@@ -300,6 +300,7 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   referralValidate: { limit: 30, windowSeconds: 60 },
   referralsRead: { limit: 60, windowSeconds: 60 },
   authSync: { limit: 10, windowSeconds: 60 },
+  accountRead: { limit: 120, windowSeconds: 60 },
   activityHeartbeat: { limit: 5, windowSeconds: 60 },
   claim: { limit: 20, windowSeconds: 60 },
   wheelRead: { limit: 120, windowSeconds: 60 },
@@ -2548,6 +2549,7 @@ async function handleRequest(request, env, json) {
   // USER PROFILE
   if (path === "/api/profile" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "profile_read", RATE_LIMIT_POLICIES.accountRead);
     const profile = await env.DB.prepare(`
       SELECT username, created_at, email_verified_at, plan, ref_code, referred_by
       FROM users WHERE uid = ?
@@ -2996,6 +2998,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/claims" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "claims_read", RATE_LIMIT_POLICIES.accountRead);
 
     const result = await env.DB.prepare(`
       SELECT
@@ -3034,6 +3037,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/streak" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "streak_read", RATE_LIMIT_POLICIES.accountRead);
 
     return json({
       success: true,
@@ -3060,6 +3064,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/balance" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "balance_read", RATE_LIMIT_POLICIES.accountRead);
     const plan = await getUserPlan(env, user.sub);
     const account = await getAccount(env, user.sub, plan);
 
@@ -3264,6 +3269,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/withdrawals" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "withdrawals_read", RATE_LIMIT_POLICIES.accountRead);
 
     const result = await env.DB.prepare(`
       SELECT
@@ -4100,6 +4106,7 @@ async function handleRequest(request, env, json) {
 
   if (path === "/api/ads" && method === "GET") {
     const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ads_read", RATE_LIMIT_POLICIES.accountRead);
     const result = await env.DB.prepare(`
       SELECT id, business_name, contact_email, website_url, banner_image_url,
              placement, duration_days, notes, status, quoted_price_eur,
@@ -4161,7 +4168,8 @@ async function handleRequest(request, env, json) {
   }
 
   if (path === "/api/ads/placements" && method === "GET") {
-    await authenticate(request);
+    const user = await authenticate(request);
+    await enforceRateLimit(env, `uid:${user.sub}`, "ad_placements_read", RATE_LIMIT_POLICIES.accountRead);
     const result = await env.DB.prepare(`
       SELECT id, business_name, website_url, banner_image_url, placement
       FROM advertising_requests
