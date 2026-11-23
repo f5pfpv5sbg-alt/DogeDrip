@@ -1,13 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 
 const migration = await readFile(
-  new URL("../migrations/0008_owner_payout_ledger.sql", import.meta.url),
+  new URL("../migrations/0012_owner_payout_ledger.sql", import.meta.url),
   "utf8"
 );
 
-test("owner payout migration follows the existing 0007 PTC migration", () => {
+test("owner payout migration follows all existing migrations without a numbering collision", async () => {
+  const files = await readdir(new URL("../migrations/", import.meta.url));
+  assert.ok(files.includes("0008_operating_expenses.sql"));
+  assert.ok(files.includes("0011_unique_ptc_campaign_payment_reference.sql"));
+  assert.ok(files.includes("0012_owner_payout_ledger.sql"));
+  assert.equal(files.filter(file => /^0008_owner_payout_ledger\\.sql$/.test(file)).length, 0);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS owner_profit_ledger/);
 });
 
