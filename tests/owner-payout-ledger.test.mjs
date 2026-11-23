@@ -117,6 +117,8 @@ test("owner payout history is read-only and never returns a raw destination addr
   assert.match(route, /next_before_id/);
   assert.doesNotMatch(route, /wallet_address|destination_address|INSERT INTO|UPDATE\s+owner_payouts/i);
 });
+
+test("owner endpoints fail closed with a controlled service error when migration is missing", () => {
   assert.match(worker, /Owner payout history is not initialized yet/);
   assert.match(worker, /Owner finance tables are unavailable/);
   assert.match(worker, /Owner ledger table is unavailable/);
