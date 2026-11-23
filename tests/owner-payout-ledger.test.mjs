@@ -67,3 +67,27 @@ test("owner finance route exposes totals only and never exposes wallet or provid
   assert.match(route, /verified_net_profit_koinu/);
   assert.doesNotMatch(route, /wallet_address|FAUCETPAY_API_KEY|BINANCE_API_KEY/i);
 });
+
+
+test("owner ledger history is owner-only, read-only, and paginated with bounded limits", () => {
+  const start = worker.indexOf('path === "/api/owner/ledger"');
+  const end = worker.indexOf('path === "/api/owner/payouts"', start);
+  assert.ok(start >= 0 && end > start);
+  const route = worker.slice(start, end);
+  assert.match(route, /await requireOwner\(user, env\)/);
+  assert.match(route, /limit > 100/);
+  assert.match(route, /before_id/);
+  assert.match(route, /ORDER BY id DESC/);
+  assert.doesNotMatch(route, /INSERT INTO|UPDATE\s+owner_profit_ledger|DELETE FROM/i);
+});
+
+test("owner payout history is read-only and never returns a raw destination address", () => {
+  const start = worker.indexOf('path === "/api/owner/payouts"');
+  const end = worker.indexOf("// ADMIN: DAILY STATS", start);
+  assert.ok(start >= 0 && end > start);
+  const route = worker.slice(start, end);
+  assert.match(route, /await requireOwner\(user, env\)/);
+  assert.match(route, /destination_last4/);
+  assert.match(route, /limit > 100/);
+  assert.doesNotMatch(route, /wallet_address|destination_address|INSERT INTO|UPDATE\s+owner_payouts/i);
+});
