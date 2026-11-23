@@ -32,3 +32,38 @@ test("owner payout history cannot store raw wallet addresses and restricts provi
   assert.match(migration, /provider_payout_id TEXT UNIQUE/);
   assert.match(migration, /request_id TEXT NOT NULL UNIQUE/);
 });
+
+
+const worker = await readFile(
+  new URL("../worker.js", import.meta.url),
+  "utf8"
+);
+
+test("owner finance endpoint is fail-closed and checks the dedicated owner UID", () => {
+  assert.match(worker, /path === "\/api\/owner\/finance" && method === "GET"/);
+  assert.match(worker, /typeof env\.OWNER_UID !== "string"/);
+  assert.match(worker, /user\.sub !== env\.OWNER_UID\.trim\(\)/);
+  assert.match(worker, /Owner access denied/);
+});
+
+test("owner finance endpoint keeps user withdrawal liabilities separate", () => {
+  const routeStart = worker.indexOf('path === "/api/owner/finance"');
+  const routeEnd = worker.indexOf("// ADMIN: DAILY STATS", routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart);
+  const route = worker.slice(routeStart, routeEnd);
+  assert.match(route, /FROM withdrawals/);
+  assert.match(route, /user_withdrawal_liabilities_koinu/);
+  assert.match(route, /user_funds_available_for_owner_payout: false/);
+  assert.match(route, /owner_payouts_enabled: false/);
+  assert.doesNotMatch(route, /UPDATE\s+(users|withdrawals)/i);
+});
+
+test("owner finance route exposes totals only and never exposes wallet or provider secrets", () => {
+  const routeStart = worker.indexOf('path === "/api/owner/finance"');
+  const routeEnd = worker.indexOf("// ADMIN: DAILY STATS", routeStart);
+  const route = worker.slice(routeStart, routeEnd);
+  assert.match(route, /verified_revenue_koinu/);
+  assert.match(route, /verified_expenses_koinu/);
+  assert.match(route, /verified_net_profit_koinu/);
+  assert.doesNotMatch(route, /wallet_address|FAUCETPAY_API_KEY|BINANCE_API_KEY/i);
+});
