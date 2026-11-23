@@ -5193,27 +5193,47 @@ async function handleRequest(request, env, json) {
     );
 
     const rawLimit = url.searchParams.get("limit");
+    const rawBeforeId = url.searchParams.get("before_id");
     const limit = rawLimit === null ? 50 : Number(rawLimit);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    const beforeId = rawBeforeId === null ? null : Number(rawBeforeId);
+    if (
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId < 1))
+    ) {
       throw new HttpError(400, "Invalid pagination parameters");
     }
 
     let result;
     try {
-      result = await env.DB.prepare(`
-        SELECT id, request_id, provider, destination_last4, amount_koinu,
-               status, provider_payout_id, payout_error, requested_by,
-               processed_at, created_at, updated_at
-        FROM owner_payouts
-        ORDER BY id DESC
-        LIMIT ?
-      `).bind(limit).all();
+      result = beforeId === null
+        ? await env.DB.prepare(`
+            SELECT id, request_id, provider, destination_last4, amount_koinu,
+                   status, provider_payout_id, payout_error, requested_by,
+                   processed_at, created_at, updated_at
+            FROM owner_payouts
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(limit).all()
+        : await env.DB.prepare(`
+            SELECT id, request_id, provider, destination_last4, amount_koinu,
+                   status, provider_payout_id, payout_error, requested_by,
+                   processed_at, created_at, updated_at
+            FROM owner_payouts
+            WHERE id < ?
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(beforeId, limit).all();
     } catch (error) {
       console.error("Owner payout table is unavailable:", error);
       throw new HttpError(503, "Owner payout history is not initialized yet");
     }
 
-    return json({ success: true, payouts: result.results || [] });
+    const payouts = result.results || [];
+    return json({
+      success: true,
+      payouts,
+      next_before_id: payouts.length === limit ? payouts[payouts.length - 1].id : null
+    });
   }
 
   // ADMIN: DAILY STATS
