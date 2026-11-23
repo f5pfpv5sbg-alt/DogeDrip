@@ -5072,8 +5072,10 @@ async function handleRequest(request, env, json) {
     const availableReserve = Number(reserve?.available_koinu || 0);
     const lockedReserve = Number(reserve?.locked_koinu || 0);
     const userLiabilities = Number(liabilities?.user_withdrawal_liabilities_koinu || 0);
+    const unverifiedEntries = Number(ledger?.unverified_entries_koinu || 0);
+    const ledgerEntries = Number(ledger?.ledger_entries || 0);
 
-    if (![revenue, expenses, netProfit, availableReserve, lockedReserve, userLiabilities].every(Number.isSafeInteger)) {
+    if (![revenue, expenses, netProfit, availableReserve, lockedReserve, userLiabilities, unverifiedEntries, ledgerEntries].every(Number.isSafeInteger)) {
       throw new HttpError(500, "Owner financial totals are invalid");
     }
 
@@ -5084,8 +5086,8 @@ async function handleRequest(request, env, json) {
         verified_revenue_koinu: revenue,
         verified_expenses_koinu: expenses,
         verified_net_profit_koinu: netProfit,
-        unverified_entries_koinu: Number(ledger?.unverified_entries_koinu || 0),
-        ledger_entries: Number(ledger?.ledger_entries || 0)
+        unverified_entries_koinu: unverifiedEntries,
+        ledger_entries: ledgerEntries
       },
       reserve: {
         available_koinu: availableReserve,
