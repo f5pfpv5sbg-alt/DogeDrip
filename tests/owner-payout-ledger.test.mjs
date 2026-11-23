@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const migration = await readFile(
-  new URL("../migrations/0007_owner_payout_ledger.sql", import.meta.url),
+  new URL("../migrations/0008_owner_payout_ledger.sql", import.meta.url),
   "utf8"
 );
+
+test("owner payout migration follows the existing 0007 PTC migration", () => {
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS owner_profit_ledger/);
+});
 
 test("owner payout reserve is isolated, empty, and disabled by default", () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS owner_payout_reserve/);
