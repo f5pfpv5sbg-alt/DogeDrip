@@ -92,3 +92,18 @@ test("owner payout history is read-only and never returns a raw destination addr
   assert.match(route, /limit > 100/);
   assert.doesNotMatch(route, /wallet_address|destination_address|INSERT INTO|UPDATE\s+owner_payouts/i);
 });
+
+
+test("owner endpoints fail closed with a controlled service error when migration is missing", () => {
+  assert.match(worker, /Owner accounting is not initialized yet/);
+  assert.match(worker, /Owner payout history is not initialized yet/);
+  assert.match(worker, /Owner finance tables are unavailable/);
+  assert.match(worker, /Owner ledger table is unavailable/);
+  assert.match(worker, /Owner payout table is unavailable/);
+});
+
+test("owner finance totals validate every returned integer before serialization", () => {
+  assert.match(worker, /unverifiedEntries = Number\(ledger\?\.unverified_entries_koinu/);
+  assert.match(worker, /ledgerEntries = Number\(ledger\?\.ledger_entries/);
+  assert.match(worker, /userLiabilities, unverifiedEntries, ledgerEntries\]\.every\(Number\.isSafeInteger\)/);
+});
