@@ -5041,13 +5041,14 @@ async function handleRequest(request, env, json) {
     try {
       financeRows = await Promise.all([
         env.DB.prepare(`
-          SELECT
-            COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_revenue_koinu,
-            COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_expenses_koinu,
-            COALESCE(SUM(CASE WHEN verified = 0 THEN amount_koinu ELSE 0 END), 0) AS unverified_entries_koinu,
+          SELECT currency,
+            COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_minor ELSE 0 END), 0) AS verified_revenue_minor,
+            COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_minor ELSE 0 END), 0) AS verified_expenses_minor,
+            COALESCE(SUM(CASE WHEN verified = 0 THEN amount_minor ELSE 0 END), 0) AS unverified_entries_minor,
             COUNT(*) AS ledger_entries
           FROM owner_profit_ledger
-        `).first(),
+          GROUP BY currency
+        `).all(),
         env.DB.prepare(`
           SELECT available_koinu, locked_koinu, payouts_enabled
           FROM owner_payout_reserve
@@ -5064,37 +5065,58 @@ async function handleRequest(request, env, json) {
       throw new HttpError(503, "Owner accounting is not initialized yet");
     }
 
-    const [ledger, reserve, liabilities] = financeRows;
+    const [currencyRows, reserve, liabilities] = financeRows;
+    const currencyTotals = Object.create(null);
+    let totalLedgerEntries = 0;
+    for (const row of currencyRows.results || []) {
+      const currency = String(row.currency || "");
+      if (!["DOGE", "EUR", "USDT"].includes(currency)) {
+        throw new HttpError(500, "Owner ledger contains an unsupported currency");
+      }
+      const revenue = Number(row.verified_revenue_minor || 0);
+      const expenses = Number(row.verified_expenses_minor || 0);
+      const unverified = Number(row.unverified_entries_minor || 0);
+      const entries = Number(row.ledger_entries || 0);
+      const net = revenue - expenses;
+      if (![revenue, expenses, unverified, entries, net].every(Number.isSafeInteger)) {
+        throw new HttpError(500, "Owner financial totals are invalid");
+      }
+      currencyTotals[currency] = {
+        verified_revenue_minor: revenue,
+        verified_expenses_minor: expenses,
+        verified_net_profit_minor: net,
+        unverified_entries_minor: unverified,
+        ledger_entries: entries
+      };
+      totalLedgerEntries += entries;
+    }
 
-    const revenue = Number(ledger?.verified_revenue_koinu || 0);
-    const expenses = Number(ledger?.verified_expenses_koinu || 0);
-    const netProfit = revenue - expenses;
     const availableReserve = Number(reserve?.available_koinu || 0);
     const lockedReserve = Number(reserve?.locked_koinu || 0);
     const userLiabilities = Number(liabilities?.user_withdrawal_liabilities_koinu || 0);
-    const unverifiedEntries = Number(ledger?.unverified_entries_koinu || 0);
-    const ledgerEntries = Number(ledger?.ledger_entries || 0);
-
-    if (![revenue, expenses, netProfit, availableReserve, lockedReserve, userLiabilities, unverifiedEntries, ledgerEntries].every(Number.isSafeInteger)) {
+    if (![availableReserve, lockedReserve, userLiabilities, totalLedgerEntries].every(Number.isSafeInteger)) {
       throw new HttpError(500, "Owner financial totals are invalid");
     }
 
     return json({
       success: true,
-      currency: "DOGE",
       accounting: {
-        verified_revenue_koinu: revenue,
-        verified_expenses_koinu: expenses,
-        verified_net_profit_koinu: netProfit,
-        unverified_entries_koinu: unverifiedEntries,
-        ledger_entries: ledgerEntries
+        currencies: currencyTotals,
+        ledger_entries: totalLedgerEntries,
+        conversion_applied: false
       },
-      reserve: {
+      owner_payout_reserve: {
+        currency: "DOGE",
+        unit: "koinu",
         available_koinu: availableReserve,
         locked_koinu: lockedReserve,
         payouts_enabled: Number(reserve?.payouts_enabled) === 1
       },
-      user_withdrawal_liabilities_koinu: userLiabilities,
+      user_withdrawal_liabilities: {
+        currency: "DOGE",
+        unit: "koinu",
+        amount_koinu: userLiabilities
+      },
       payout_safety: {
         owner_payouts_enabled: false,
         external_funding_verified: false,
