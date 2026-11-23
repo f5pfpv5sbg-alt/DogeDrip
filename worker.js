@@ -5037,26 +5037,34 @@ async function handleRequest(request, env, json) {
       RATE_LIMIT_POLICIES.ownerRead
     );
 
-    const [ledger, reserve, liabilities] = await Promise.all([
-      env.DB.prepare(`
-        SELECT
-          COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_revenue_koinu,
-          COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_expenses_koinu,
-          COALESCE(SUM(CASE WHEN verified = 0 THEN amount_koinu ELSE 0 END), 0) AS unverified_entries_koinu,
-          COUNT(*) AS ledger_entries
-        FROM owner_profit_ledger
-      `).first(),
-      env.DB.prepare(`
-        SELECT available_koinu, locked_koinu, payouts_enabled
-        FROM owner_payout_reserve
-        WHERE id = 1
-      `).first(),
-      env.DB.prepare(`
-        SELECT COALESCE(SUM(amount_koinu), 0) AS user_withdrawal_liabilities_koinu
-        FROM withdrawals
-        WHERE status IN ('pending', 'processing')
-      `).first()
-    ]);
+    let financeRows;
+    try {
+      financeRows = await Promise.all([
+        env.DB.prepare(`
+          SELECT
+            COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_revenue_koinu,
+            COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_expenses_koinu,
+            COALESCE(SUM(CASE WHEN verified = 0 THEN amount_koinu ELSE 0 END), 0) AS unverified_entries_koinu,
+            COUNT(*) AS ledger_entries
+          FROM owner_profit_ledger
+        `).first(),
+        env.DB.prepare(`
+          SELECT available_koinu, locked_koinu, payouts_enabled
+          FROM owner_payout_reserve
+          WHERE id = 1
+        `).first(),
+        env.DB.prepare(`
+          SELECT COALESCE(SUM(amount_koinu), 0) AS user_withdrawal_liabilities_koinu
+          FROM withdrawals
+          WHERE status IN ('pending', 'processing')
+        `).first()
+      ]);
+    } catch (error) {
+      console.error("Owner finance tables are unavailable:", error);
+      throw new HttpError(503, "Owner accounting is not initialized yet");
+    }
+
+    const [ledger, reserve, liabilities] = financeRows;
 
     const revenue = Number(ledger?.verified_revenue_koinu || 0);
     const expenses = Number(ledger?.verified_expenses_koinu || 0);
@@ -5116,22 +5124,28 @@ async function handleRequest(request, env, json) {
       throw new HttpError(400, "Invalid pagination parameters");
     }
 
-    const result = beforeId === null
-      ? await env.DB.prepare(`
-          SELECT id, source_type, source_id, entry_type, amount_koinu,
-                 verified, note, created_at, verified_at
-          FROM owner_profit_ledger
-          ORDER BY id DESC
-          LIMIT ?
-        `).bind(limit).all()
-      : await env.DB.prepare(`
-          SELECT id, source_type, source_id, entry_type, amount_koinu,
-                 verified, note, created_at, verified_at
-          FROM owner_profit_ledger
-          WHERE id < ?
-          ORDER BY id DESC
-          LIMIT ?
-        `).bind(beforeId, limit).all();
+    let result;
+    try {
+      result = beforeId === null
+        ? await env.DB.prepare(`
+            SELECT id, source_type, source_id, entry_type, amount_koinu,
+                   verified, note, created_at, verified_at
+            FROM owner_profit_ledger
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(limit).all()
+        : await env.DB.prepare(`
+            SELECT id, source_type, source_id, entry_type, amount_koinu,
+                   verified, note, created_at, verified_at
+            FROM owner_profit_ledger
+            WHERE id < ?
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(beforeId, limit).all();
+    } catch (error) {
+      console.error("Owner ledger table is unavailable:", error);
+      throw new HttpError(503, "Owner accounting is not initialized yet");
+    }
 
     const entries = result.results || [];
     return json({
@@ -5158,14 +5172,20 @@ async function handleRequest(request, env, json) {
       throw new HttpError(400, "Invalid pagination parameters");
     }
 
-    const result = await env.DB.prepare(`
-      SELECT id, request_id, provider, destination_last4, amount_koinu,
-             status, provider_payout_id, payout_error, requested_by,
-             processed_at, created_at, updated_at
-      FROM owner_payouts
-      ORDER BY id DESC
-      LIMIT ?
-    `).bind(limit).all();
+    let result;
+    try {
+      result = await env.DB.prepare(`
+        SELECT id, request_id, provider, destination_last4, amount_koinu,
+               status, provider_payout_id, payout_error, requested_by,
+               processed_at, created_at, updated_at
+        FROM owner_payouts
+        ORDER BY id DESC
+        LIMIT ?
+      `).bind(limit).all();
+    } catch (error) {
+      console.error("Owner payout table is unavailable:", error);
+      throw new HttpError(503, "Owner payout history is not initialized yet");
+    }
 
     return json({ success: true, payouts: result.results || [] });
   }
