@@ -27,7 +27,11 @@ test("owner profit ledger stores currencies separately in their smallest units",
   assert.match(migration, /verified INTEGER NOT NULL DEFAULT 0 CHECK \(verified IN \(0, 1\)\)/);
   assert.match(migration, /UNIQUE \(source_type, source_id\)/);
   assert.doesNotMatch(migration, /ptc_revenue/);
-  assert.doesNotMatch(migration, /amount_koinu INTEGER NOT NULL CHECK \(amount_koinu > 0\)/);
+  const ledgerTable = migration.slice(
+    migration.indexOf("CREATE TABLE IF NOT EXISTS owner_profit_ledger"),
+    migration.indexOf("CREATE INDEX IF NOT EXISTS idx_owner_profit_ledger_verified_created")
+  );
+  assert.doesNotMatch(ledgerTable, /amount_koinu/);
 });
 
 test("owner payout history cannot store raw wallet addresses and restricts providers and states", () => {
