@@ -357,6 +357,14 @@ async function requireAdmin(user, env) {
   return account;
 }
 
+async function requireOwner(user, env) {
+  const ownerUid = typeof env.OWNER_UID === "string" ? env.OWNER_UID.trim() : "";
+  if (!ownerUid || user.sub !== ownerUid) {
+    throw new HttpError(403, "Owner access denied");
+  }
+  return { uid: ownerUid };
+}
+
 const RATE_LIMIT_POLICIES = Object.freeze({
   registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
@@ -5020,13 +5028,7 @@ async function handleRequest(request, env, json) {
   // Fails closed unless OWNER_UID is configured as a Worker secret/variable.
   if (path === "/api/owner/finance" && method === "GET") {
     const user = await authenticate(request);
-    if (
-      typeof env.OWNER_UID !== "string" ||
-      !env.OWNER_UID.trim() ||
-      user.sub !== env.OWNER_UID.trim()
-    ) {
-      throw new HttpError(403, "Owner access denied");
-    }
+    await requireOwner(user, env);
 
     await enforceRateLimit(
       env,
@@ -5089,6 +5091,83 @@ async function handleRequest(request, env, json) {
         user_funds_available_for_owner_payout: false
       }
     });
+  }
+
+  // OWNER: PAGINATED PROFIT LEDGER HISTORY. No mutation is exposed here.
+  if (path === "/api/owner/ledger" && method === "GET") {
+    const user = await authenticate(request);
+    await requireOwner(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_ledger_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    const rawLimit = url.searchParams.get("limit");
+    const rawBeforeId = url.searchParams.get("before_id");
+    const limit = rawLimit === null ? 50 : Number(rawLimit);
+    const beforeId = rawBeforeId === null ? null : Number(rawBeforeId);
+
+    if (
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId < 1))
+    ) {
+      throw new HttpError(400, "Invalid pagination parameters");
+    }
+
+    const result = beforeId === null
+      ? await env.DB.prepare(`
+          SELECT id, source_type, source_id, entry_type, amount_koinu,
+                 verified, note, created_at, verified_at
+          FROM owner_profit_ledger
+          ORDER BY id DESC
+          LIMIT ?
+        `).bind(limit).all()
+      : await env.DB.prepare(`
+          SELECT id, source_type, source_id, entry_type, amount_koinu,
+                 verified, note, created_at, verified_at
+          FROM owner_profit_ledger
+          WHERE id < ?
+          ORDER BY id DESC
+          LIMIT ?
+        `).bind(beforeId, limit).all();
+
+    const entries = result.results || [];
+    return json({
+      success: true,
+      entries,
+      next_before_id: entries.length === limit ? entries[entries.length - 1].id : null
+    });
+  }
+
+  // OWNER: PAYOUT HISTORY ONLY. There is deliberately no payout-creation route.
+  if (path === "/api/owner/payouts" && method === "GET") {
+    const user = await authenticate(request);
+    await requireOwner(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_payout_history_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? 50 : Number(rawLimit);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new HttpError(400, "Invalid pagination parameters");
+    }
+
+    const result = await env.DB.prepare(`
+      SELECT id, request_id, provider, destination_last4, amount_koinu,
+             status, provider_payout_id, payout_error, requested_by,
+             processed_at, created_at, updated_at
+      FROM owner_payouts
+      ORDER BY id DESC
+      LIMIT ?
+    `).bind(limit).all();
+
+    return json({ success: true, payouts: result.results || [] });
   }
 
   // ADMIN: DAILY STATS
