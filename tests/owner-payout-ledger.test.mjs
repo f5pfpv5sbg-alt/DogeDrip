@@ -41,8 +41,9 @@ const worker = await readFile(
 
 test("owner finance endpoint is fail-closed and checks the dedicated owner UID", () => {
   assert.match(worker, /path === "\/api\/owner\/finance" && method === "GET"/);
-  assert.match(worker, /typeof env\.OWNER_UID !== "string"/);
-  assert.match(worker, /user\.sub !== env\.OWNER_UID\.trim\(\)/);
+  assert.match(worker, /function requireOwner\(user, env\)/);
+  assert.match(worker, /typeof env\.OWNER_UID === "string"/);
+  assert.match(worker, /user\.sub !== ownerUid/);
   assert.match(worker, /Owner access denied/);
 });
 
