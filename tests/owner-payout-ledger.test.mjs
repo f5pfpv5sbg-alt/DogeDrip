@@ -26,6 +26,7 @@ test("owner profit ledger stores currencies separately in their smallest units",
   assert.match(migration, /Different currencies are never added together or implicitly converted/);
   assert.match(migration, /verified INTEGER NOT NULL DEFAULT 0 CHECK \(verified IN \(0, 1\)\)/);
   assert.match(migration, /UNIQUE \(source_type, source_id\)/);
+  assert.doesNotMatch(migration, /ptc_revenue/);
   assert.doesNotMatch(migration, /amount_koinu INTEGER NOT NULL CHECK \(amount_koinu > 0\)/);
 });
 
@@ -71,6 +72,7 @@ test("owner finance reports each currency independently and never converts impli
   assert.match(route, /GROUP BY currency/);
   assert.match(route, /currencyTotals\[currency\]/);
   assert.match(route, /conversion_applied: false/);
+  assert.match(route, /currency === "DOGE" \? "koinu" : currency === "EUR" \? "cents" : "micro-USDT"/);
   assert.match(route, /owner_payout_reserve:[\s\S]*currency: "DOGE"/);
   assert.match(route, /user_withdrawal_liabilities:[\s\S]*currency: "DOGE"/);
   assert.doesNotMatch(route, /exchange_rate|convertCurrency|wallet_address|FAUCETPAY_API_KEY|BINANCE_API_KEY/i);
