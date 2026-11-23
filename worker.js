@@ -381,7 +381,8 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   ptcRead: { limit: 60, windowSeconds: 60 },
   ptcStart: { limit: 10, windowSeconds: 60 },
   ptcComplete: { limit: 10, windowSeconds: 60 },
-  adminPtc: { limit: 30, windowSeconds: 60 }
+  adminPtc: { limit: 30, windowSeconds: 60 },
+  ownerRead: { limit: 30, windowSeconds: 60 }
 });
 
 async function enforceRateLimit(env, identity, route, policy) {
@@ -5011,6 +5012,81 @@ async function handleRequest(request, env, json) {
         referral_available_koinu: Number(referralReserve?.available_koinu || 0),
         referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1,
         external_funding_verified: false
+      }
+    });
+  }
+
+  // OWNER-ONLY FINANCIAL DASHBOARD.
+  // Fails closed unless OWNER_UID is configured as a Worker secret/variable.
+  if (path === "/api/owner/finance" && method === "GET") {
+    const user = await authenticate(request);
+    if (
+      typeof env.OWNER_UID !== "string" ||
+      !env.OWNER_UID.trim() ||
+      user.sub !== env.OWNER_UID.trim()
+    ) {
+      throw new HttpError(403, "Owner access denied");
+    }
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_finance_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    const [ledger, reserve, liabilities] = await Promise.all([
+      env.DB.prepare(`
+        SELECT
+          COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_revenue_koinu,
+          COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_koinu ELSE 0 END), 0) AS verified_expenses_koinu,
+          COALESCE(SUM(CASE WHEN verified = 0 THEN amount_koinu ELSE 0 END), 0) AS unverified_entries_koinu,
+          COUNT(*) AS ledger_entries
+        FROM owner_profit_ledger
+      `).first(),
+      env.DB.prepare(`
+        SELECT available_koinu, locked_koinu, payouts_enabled
+        FROM owner_payout_reserve
+        WHERE id = 1
+      `).first(),
+      env.DB.prepare(`
+        SELECT COALESCE(SUM(amount_koinu), 0) AS user_withdrawal_liabilities_koinu
+        FROM withdrawals
+        WHERE status IN ('pending', 'processing')
+      `).first()
+    ]);
+
+    const revenue = Number(ledger?.verified_revenue_koinu || 0);
+    const expenses = Number(ledger?.verified_expenses_koinu || 0);
+    const netProfit = revenue - expenses;
+    const availableReserve = Number(reserve?.available_koinu || 0);
+    const lockedReserve = Number(reserve?.locked_koinu || 0);
+    const userLiabilities = Number(liabilities?.user_withdrawal_liabilities_koinu || 0);
+
+    if (![revenue, expenses, netProfit, availableReserve, lockedReserve, userLiabilities].every(Number.isSafeInteger)) {
+      throw new HttpError(500, "Owner financial totals are invalid");
+    }
+
+    return json({
+      success: true,
+      currency: "DOGE",
+      accounting: {
+        verified_revenue_koinu: revenue,
+        verified_expenses_koinu: expenses,
+        verified_net_profit_koinu: netProfit,
+        unverified_entries_koinu: Number(ledger?.unverified_entries_koinu || 0),
+        ledger_entries: Number(ledger?.ledger_entries || 0)
+      },
+      reserve: {
+        available_koinu: availableReserve,
+        locked_koinu: lockedReserve,
+        payouts_enabled: Number(reserve?.payouts_enabled) === 1
+      },
+      user_withdrawal_liabilities_koinu: userLiabilities,
+      payout_safety: {
+        owner_payouts_enabled: false,
+        external_funding_verified: false,
+        user_funds_available_for_owner_payout: false
       }
     });
   }
