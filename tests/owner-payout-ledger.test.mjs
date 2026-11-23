@@ -113,7 +113,7 @@ test("owner payout history is read-only and never returns a raw destination addr
   assert.match(route, /limit > 100/);
   assert.match(route, /rawBeforeId/);
   assert.match(route, /beforeId !== null/);
-  assert.match(route, /WHERE id < \\?/);
+  assert.match(route, /WHERE id < \?/);
   assert.match(route, /next_before_id/);
   assert.doesNotMatch(route, /wallet_address|destination_address|INSERT INTO|UPDATE\s+owner_payouts/i);
 });
