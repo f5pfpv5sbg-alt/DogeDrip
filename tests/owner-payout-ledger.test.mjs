@@ -20,12 +20,13 @@ test("owner payout reserve is isolated, empty, and disabled by default", () => {
   assert.doesNotMatch(migration, /REFERENCES (users|withdrawals)/i);
 });
 
-test("owner profit ledger accepts only positive, explicitly verified revenue or expense entries", () => {
-  assert.match(migration, /entry_type TEXT NOT NULL CHECK \(entry_type IN \('revenue', 'expense'\)\)/);
-  assert.match(migration, /amount_koinu INTEGER NOT NULL CHECK \(amount_koinu > 0\)/);
+test("owner profit ledger stores currencies separately in their smallest units", () => {
+  assert.match(migration, /currency TEXT NOT NULL CHECK \(currency IN \('DOGE', 'EUR', 'USDT'\)\)/);
+  assert.match(migration, /amount_minor INTEGER NOT NULL CHECK \(amount_minor > 0\)/);
+  assert.match(migration, /Different currencies are never added together or implicitly converted/);
   assert.match(migration, /verified INTEGER NOT NULL DEFAULT 0 CHECK \(verified IN \(0, 1\)\)/);
   assert.match(migration, /UNIQUE \(source_type, source_id\)/);
-  assert.match(migration, /source_type IN \('ad_revenue', 'subscription_revenue', 'ptc_revenue', 'sponsored_revenue', 'operating_expense', 'manual_adjustment'\)/);
+  assert.doesNotMatch(migration, /amount_koinu INTEGER NOT NULL CHECK \(amount_koinu > 0\)/);
 });
 
 test("owner payout history cannot store raw wallet addresses and restricts providers and states", () => {
@@ -63,14 +64,16 @@ test("owner finance endpoint keeps user withdrawal liabilities separate", () => 
   assert.doesNotMatch(route, /UPDATE\s+(users|withdrawals)/i);
 });
 
-test("owner finance route exposes totals only and never exposes wallet or provider secrets", () => {
+test("owner finance reports each currency independently and never converts implicitly", () => {
   const routeStart = worker.indexOf('path === "/api/owner/finance"');
-  const routeEnd = worker.indexOf("// ADMIN: DAILY STATS", routeStart);
+  const routeEnd = worker.indexOf("// OWNER: PAGINATED PROFIT LEDGER HISTORY", routeStart);
   const route = worker.slice(routeStart, routeEnd);
-  assert.match(route, /verified_revenue_koinu/);
-  assert.match(route, /verified_expenses_koinu/);
-  assert.match(route, /verified_net_profit_koinu/);
-  assert.doesNotMatch(route, /wallet_address|FAUCETPAY_API_KEY|BINANCE_API_KEY/i);
+  assert.match(route, /GROUP BY currency/);
+  assert.match(route, /currencyTotals\[currency\]/);
+  assert.match(route, /conversion_applied: false/);
+  assert.match(route, /owner_payout_reserve:[\s\S]*currency: "DOGE"/);
+  assert.match(route, /user_withdrawal_liabilities:[\s\S]*currency: "DOGE"/);
+  assert.doesNotMatch(route, /exchange_rate|convertCurrency|wallet_address|FAUCETPAY_API_KEY|BINANCE_API_KEY/i);
 });
 
 
