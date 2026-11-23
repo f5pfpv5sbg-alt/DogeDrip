@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   source_type TEXT NOT NULL CHECK (
     source_type IN ('ad_revenue', 'subscription_revenue', 'sponsored_revenue', 'operating_expense', 'manual_adjustment')
   ),
-  source_id TEXT NOT NULL,
+  source_id TEXT NOT NULL CHECK (length(trim(source_id)) BETWEEN 1 AND 160),
   entry_type TEXT NOT NULL CHECK (entry_type IN ('revenue', 'expense')),
   -- amount_minor is stored in the smallest unit for currency:
   -- DOGE = koinu (1 DOGE = 100,000,000), EUR = cents, USDT = micro-USDT.
@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   currency TEXT NOT NULL CHECK (currency IN ('DOGE', 'EUR', 'USDT')),
   amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
   verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
-  note TEXT,
+  note TEXT CHECK (note IS NULL OR length(note) <= 240),
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   verified_at TEXT,
+  CHECK (verified = 0 OR verified_at IS NOT NULL),
   CHECK (
     source_type = 'manual_adjustment' OR
     (source_type = 'operating_expense' AND entry_type = 'expense') OR
@@ -51,8 +52,8 @@ CREATE TABLE IF NOT EXISTS owner_payouts (
     status IN ('pending', 'processing', 'payment_unknown', 'paid', 'failed', 'cancelled')
   ),
   provider_payout_id TEXT UNIQUE,
-  payout_error TEXT,
-  requested_by TEXT NOT NULL,
+  payout_error TEXT CHECK (payout_error IS NULL OR length(payout_error) <= 240),
+  requested_by TEXT NOT NULL CHECK (length(trim(requested_by)) BETWEEN 1 AND 128),
   processed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
