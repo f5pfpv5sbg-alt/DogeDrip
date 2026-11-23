@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   note TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   verified_at TEXT,
+  CHECK (
+    source_type = 'manual_adjustment' OR
+    (source_type = 'operating_expense' AND entry_type = 'expense') OR
+    (source_type IN ('ad_revenue', 'subscription_revenue', 'ptc_revenue', 'sponsored_revenue') AND entry_type = 'revenue')
+  ),
   UNIQUE (source_type, source_id)
 );
 
