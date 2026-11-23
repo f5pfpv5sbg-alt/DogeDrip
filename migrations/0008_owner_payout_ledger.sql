@@ -5,7 +5,7 @@
 CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_type TEXT NOT NULL CHECK (
-    source_type IN ('ad_revenue', 'subscription_revenue', 'ptc_revenue', 'sponsored_revenue', 'operating_expense', 'manual_adjustment')
+    source_type IN ('ad_revenue', 'subscription_revenue', 'sponsored_revenue', 'operating_expense', 'manual_adjustment')
   ),
   source_id TEXT NOT NULL,
   entry_type TEXT NOT NULL CHECK (entry_type IN ('revenue', 'expense')),
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   CHECK (
     source_type = 'manual_adjustment' OR
     (source_type = 'operating_expense' AND entry_type = 'expense') OR
-    (source_type IN ('ad_revenue', 'subscription_revenue', 'ptc_revenue', 'sponsored_revenue') AND entry_type = 'revenue')
+    (source_type IN ('ad_revenue', 'subscription_revenue', 'sponsored_revenue') AND entry_type = 'revenue')
   ),
   UNIQUE (source_type, source_id)
 );
