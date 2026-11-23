@@ -9,7 +9,11 @@ CREATE TABLE IF NOT EXISTS owner_profit_ledger (
   ),
   source_id TEXT NOT NULL,
   entry_type TEXT NOT NULL CHECK (entry_type IN ('revenue', 'expense')),
-  amount_koinu INTEGER NOT NULL CHECK (amount_koinu > 0),
+  -- amount_minor is stored in the smallest unit for currency:
+  -- DOGE = koinu (1 DOGE = 100,000,000), EUR = cents, USDT = micro-USDT.
+  -- Different currencies are never added together or implicitly converted.
+  currency TEXT NOT NULL CHECK (currency IN ('DOGE', 'EUR', 'USDT')),
+  amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
   verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
   note TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
