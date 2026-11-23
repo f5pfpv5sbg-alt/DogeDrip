@@ -109,8 +109,9 @@ test("owner endpoints fail closed with a controlled service error when migration
   assert.match(worker, /Owner payout table is unavailable/);
 });
 
-test("owner finance totals validate every returned integer before serialization", () => {
-  assert.match(worker, /unverifiedEntries = Number\(ledger\?\.unverified_entries_koinu/);
-  assert.match(worker, /ledgerEntries = Number\(ledger\?\.ledger_entries/);
-  assert.match(worker, /userLiabilities, unverifiedEntries, ledgerEntries\]\.every\(Number\.isSafeInteger\)/);
+test("owner finance validates currency totals and DOGE reserves as safe integers", () => {
+  assert.match(worker, /verified_revenue_minor/);
+  assert.match(worker, /verified_expenses_minor/);
+  assert.match(worker, /unverified_entries_minor/);
+  assert.match(worker, /availableReserve, lockedReserve, userLiabilities, totalLedgerEntries\]\.every\(Number\.isSafeInteger\)/);
 });
