@@ -5081,7 +5081,9 @@ async function handleRequest(request, env, json) {
       if (![revenue, expenses, unverified, entries, net].every(Number.isSafeInteger)) {
         throw new HttpError(500, "Owner financial totals are invalid");
       }
+      const unit = currency === "DOGE" ? "koinu" : currency === "EUR" ? "cents" : "micro-USDT";
       currencyTotals[currency] = {
+        unit,
         verified_revenue_minor: revenue,
         verified_expenses_minor: expenses,
         verified_net_profit_minor: net,
