@@ -5152,14 +5152,14 @@ async function handleRequest(request, env, json) {
     try {
       result = beforeId === null
         ? await env.DB.prepare(`
-            SELECT id, source_type, source_id, entry_type, amount_koinu,
+            SELECT id, source_type, source_id, entry_type, currency, amount_minor,
                    verified, note, created_at, verified_at
             FROM owner_profit_ledger
             ORDER BY id DESC
             LIMIT ?
           `).bind(limit).all()
         : await env.DB.prepare(`
-            SELECT id, source_type, source_id, entry_type, amount_koinu,
+            SELECT id, source_type, source_id, entry_type, currency, amount_minor,
                    verified, note, created_at, verified_at
             FROM owner_profit_ledger
             WHERE id < ?
