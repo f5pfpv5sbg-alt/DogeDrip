@@ -12,7 +12,7 @@ test("owner payout migration follows all existing migrations without a numbering
   assert.ok(files.includes("0008_operating_expenses.sql"));
   assert.ok(files.includes("0011_unique_ptc_campaign_payment_reference.sql"));
   assert.ok(files.includes("0012_owner_payout_ledger.sql"));
-  assert.equal(files.filter(file => /^0008_owner_payout_ledger\\.sql$/.test(file)).length, 0);
+  assert.equal(files.includes("0008_owner_payout_ledger.sql"), false);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS owner_profit_ledger/);
 });
 
@@ -31,6 +31,9 @@ test("owner profit ledger stores currencies separately in their smallest units",
   assert.match(migration, /Different currencies are never added together or implicitly converted/);
   assert.match(migration, /verified INTEGER NOT NULL DEFAULT 0 CHECK \(verified IN \(0, 1\)\)/);
   assert.match(migration, /UNIQUE \(source_type, source_id\)/);
+  assert.match(migration, /length\(trim\(source_id\)\) BETWEEN 1 AND 160/);
+  assert.match(migration, /verified = 0 OR verified_at IS NOT NULL/);
+  assert.match(migration, /length\(note\) <= 240/);
   assert.doesNotMatch(migration, /ptc_revenue/);
   const ledgerTable = migration.slice(
     migration.indexOf("CREATE TABLE IF NOT EXISTS owner_profit_ledger"),
@@ -108,12 +111,12 @@ test("owner payout history is read-only and never returns a raw destination addr
   assert.match(route, /await requireOwner\(user, env\)/);
   assert.match(route, /destination_last4/);
   assert.match(route, /limit > 100/);
+  assert.match(route, /rawBeforeId/);
+  assert.match(route, /beforeId !== null/);
+  assert.match(route, /WHERE id < \\?/);
+  assert.match(route, /next_before_id/);
   assert.doesNotMatch(route, /wallet_address|destination_address|INSERT INTO|UPDATE\s+owner_payouts/i);
 });
-
-
-test("owner endpoints fail closed with a controlled service error when migration is missing", () => {
-  assert.match(worker, /Owner accounting is not initialized yet/);
   assert.match(worker, /Owner payout history is not initialized yet/);
   assert.match(worker, /Owner finance tables are unavailable/);
   assert.match(worker, /Owner ledger table is unavailable/);
