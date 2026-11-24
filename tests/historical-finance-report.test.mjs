@@ -46,5 +46,10 @@ test("PTC funding and current user liabilities are separated from revenue and pr
   assert.ok(route.includes("ptc_reserve_pending_koinu"));
   assert.ok(route.includes("profit_status: \"not_calculated_incomplete_revenue_and_cost_reconciliation\""));
   assert.ok(route.includes("status IN ('pending', 'processing', 'payment_unknown')"));
+  assert.ok(route.includes("id NOT IN (1, 2)"));
+  assert.ok(route.includes("(status = 'approved' AND faucetpay_payout_id IS NULL)"));
+  assert.ok(route.includes("status = 'paid'"));
+  assert.ok(route.includes("trim(faucetpay_payout_id) = ''"));
+  assert.ok(route.includes("outstanding_withdrawals_koinu"));
   assert.ok(route.includes("faucetpay_payout_id IS NULL"));
 });

@@ -4472,7 +4472,19 @@ async function handleRequest(request, env, json) {
         SELECT COALESCE(SUM(amount_koinu), 0) AS total_koinu, COUNT(*) AS withdrawals_count
         FROM withdrawals
         WHERE status IN ('pending', 'processing', 'payment_unknown')
-           OR (status = 'approved' AND faucetpay_payout_id IS NULL)
+           OR (
+             id NOT IN (1, 2)
+             AND (
+               (status = 'approved' AND faucetpay_payout_id IS NULL)
+               OR (
+                 status = 'paid'
+                 AND (
+                   faucetpay_payout_id IS NULL
+                   OR trim(faucetpay_payout_id) = ''
+                 )
+               )
+             )
+           )
       `).first(),
       env.DB.prepare(`
         SELECT available_koinu, locked_koinu, pending_koinu
@@ -4508,6 +4520,9 @@ async function handleRequest(request, env, json) {
       current_liabilities_snapshot: {
         user_balances_koinu: Number(userLiabilities?.total_koinu || 0),
         users_count: Number(userLiabilities?.users_count || 0),
+        outstanding_withdrawals_koinu: Number(pendingWithdrawals?.total_koinu || 0),
+        outstanding_withdrawals_count: Number(pendingWithdrawals?.withdrawals_count || 0),
+        // Backward-compatible aliases for older dashboard clients.
         pending_withdrawals_koinu: Number(pendingWithdrawals?.total_koinu || 0),
         pending_withdrawals_count: Number(pendingWithdrawals?.withdrawals_count || 0),
         ptc_reserve_available_koinu: Number(ptcReserveSnapshot?.available_koinu || 0),

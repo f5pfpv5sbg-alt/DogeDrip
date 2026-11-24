@@ -6089,7 +6089,7 @@ export default function App() {
                     <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-3 space-y-1">
                       <p className="text-xs font-bold text-yellow-200">Profit is not calculated</p>
                       <p className="text-xs text-slate-400">{financeReport.partial_net_warning}</p>
-                      <p className="text-xs text-slate-400">Current user balances: {formatDoge(financeReport.current_liabilities_snapshot.user_balances_koinu)} DOGE · Pending withdrawals: {formatDoge(financeReport.current_liabilities_snapshot.pending_withdrawals_koinu)} DOGE</p>
+                      <p className="text-xs text-slate-400">Current user balances: {formatDoge(financeReport.current_liabilities_snapshot.user_balances_koinu)} DOGE · Outstanding withdrawals: {formatDoge(financeReport.current_liabilities_snapshot.outstanding_withdrawals_koinu ?? financeReport.current_liabilities_snapshot.pending_withdrawals_koinu)} DOGE</p>
                       <p className="text-xs text-slate-400">PTC reserve: {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_available_koinu)} available · {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_locked_koinu)} locked · {formatDoge(financeReport.current_liabilities_snapshot.ptc_reserve_pending_koinu)} pending</p>
                     </div>
                   </div>}
