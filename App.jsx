@@ -4564,6 +4564,27 @@ export default function App() {
                 )}
               </div>
 
+              <section className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-black uppercase tracking-wider text-slate-300">PTC Partners</h3>
+                    <p className="text-xs text-slate-500 mt-1">Choose a PTC wall. Partner integrations are being prepared.</p>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-widest font-black text-slate-500">Coming soon</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {['Lightning Miner', 'MoneyRain', 'BitcoTasks', 'AdsLab'].map(partner => (
+                    <div key={partner} className="rounded-xl border border-slate-800 bg-black p-4 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-white">{partner}</p>
+                        <p className="text-[10px] uppercase tracking-wider text-slate-500 mt-1">PTC partner</p>
+                      </div>
+                      <span className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-[10px] uppercase tracking-wider font-black text-slate-400">Coming soon</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatTile label="Pending PTC Rewards" value={(ptcPendingReward / KOINU).toFixed(8) + ' DOGE'} />
                 <StatTile label="Settled PTC Rewards" value={(ptcSettledReward / KOINU).toFixed(8) + ' DOGE'} sub={`${ptcSettledViews} views credited to balance`} />
