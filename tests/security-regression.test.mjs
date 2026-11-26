@@ -380,6 +380,19 @@ test("daily streak rewards are deducted from the enabled faucet reserve before b
   assert.match(app, /Bonus Paused/);
 });
 
+test("Faucet claims are disabled in the UI unless the server confirms a funded reserve", () => {
+  const start = worker.indexOf('if (path === "/api/balance" && method === "GET")');
+  const end = worker.indexOf("// CREATE WITHDRAWAL", start);
+  assert.ok(start >= 0 && end > start, "balance route must exist");
+  const route = worker.slice(start, end);
+  assert.match(route, /FROM faucet_reserve/);
+  assert.match(route, /payouts_enabled/);
+  assert.match(route, /claim_enabled: claimEnabled/);
+  assert.match(app, /claimEnabled: data\.claim_enabled === true/);
+  assert.match(app, /planInfo\?\.claimEnabled === true/);
+  assert.match(app, /Faucet claims are paused until the DOGE reserve is funded and enabled/);
+});
+
 test("Faucet dashboard avoids duplicate reward, wallet balance, and daily claim counters", () => {
   const faucetStart = app.indexOf("{activeTab === 'faucet' && (");
   const wheelStart = app.indexOf("{activeTab === 'wheel' && (", faucetStart);
