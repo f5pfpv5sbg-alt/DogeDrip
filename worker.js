@@ -40,22 +40,7 @@ const ALLOWED_ORIGINS = ["https://dogedrip.pages.dev"];
 
 function isAllowedOrigin(origin) {
   if (!origin) return true;
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-
-  try {
-    const url = new URL(origin);
-    return (
-      url.origin === origin &&
-      !url.username &&
-      !url.password &&
-      url.protocol === "https:" &&
-      url.hostname.endsWith(".dogedrip.pages.dev") &&
-      url.hostname.split(".").length === 4 &&
-      url.port === ""
-    );
-  } catch {
-    return false;
-  }
+  return ALLOWED_ORIGINS.includes(origin);
 }
 
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
