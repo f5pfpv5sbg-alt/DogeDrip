@@ -12,15 +12,12 @@ function section(startMarker, endMarker) {
   return worker.slice(start, end);
 }
 
-test("API accepts only canonical HTTPS production or one-level Pages preview origins", () => {
+test("API CORS allows only the production Pages origin", () => {
   const origin = section("function isAllowedOrigin(origin)", "const REF_ALPHABET");
-  assert.match(origin, /url\.origin === origin/);
-  assert.match(origin, /!url\.username/);
-  assert.match(origin, /!url\.password/);
-  assert.match(origin, /url\.protocol === "https:"/);
-  assert.match(origin, /url\.hostname\.endsWith\("\.dogedrip\.pages\.dev"\)/);
-  assert.match(origin, /url\.hostname\.split\("\."\)\.length === 4/);
-  assert.match(origin, /url\.port === ""/);
+  assert.match(origin, /if \\(!origin\\) return true/);
+  assert.match(origin, /return ALLOWED_ORIGINS\\.includes\\(origin\\)/);
+  assert.doesNotMatch(origin, /url\\.hostname/);
+  assert.doesNotMatch(origin, /dogedrip\\.pages\\.dev"\\)\\s*\\|\\|/);
 });
 
 test("JSON body parser rejects unsupported media types before opening the body stream", () => {
