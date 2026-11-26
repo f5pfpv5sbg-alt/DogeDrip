@@ -371,6 +371,7 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   streakCheckin: { limit: 3, windowSeconds: 60 },
   withdrawalCreate: { limit: 3, windowSeconds: 3600 },
   subscriptionCreate: { limit: 5, windowSeconds: 3600 },
+  subscriptionCallback: { limit: 60, windowSeconds: 60 },
   adCreate: { limit: 3, windowSeconds: 86400 },
   adPaymentReference: { limit: 5, windowSeconds: 86400 },
   ptcAdvertiserCreate: { limit: 3, windowSeconds: 86400 },
@@ -2278,7 +2279,7 @@ async function verifyTurnstileToken(token, request, env, expectedAction = 'signu
     throw new HttpError(503, "Security verification is temporarily unavailable.");
   }
 
-  const allowedHostnames = new Set(["dogedrip.pages.dev", "localhost", "127.0.0.1"]);
+  const allowedHostnames = new Set(["dogedrip.pages.dev"]);
   if (
     !response.ok ||
     result?.success !== true ||
@@ -2332,11 +2333,62 @@ async function ensureSubscriptionForPaidOrder(env, order, transactionId) {
   return Boolean(recovered);
 }
 
+async function readLimitedText(request, maxBytes) {
+  const contentLengthHeader = request.headers.get("Content-Length");
+  if (contentLengthHeader !== null) {
+    if (!/^\d+$/.test(contentLengthHeader)) {
+      throw new HttpError(400, "Invalid Content-Length");
+    }
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
+      throw new HttpError(413, "Request body too large");
+    }
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) throw new HttpError(400, "Invalid callback payload");
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        try { await reader.cancel(); } catch {}
+        throw new HttpError(413, "Request body too large");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "Invalid callback payload");
+  }
+
+  if (totalBytes === 0) throw new HttpError(400, "Invalid callback payload");
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new HttpError(400, "Invalid callback payload");
+  }
+}
+
 async function handleSubscriptionCallback(request, env) {
-  const length = Number(request.headers.get("Content-Length") || 0);
-  if (length > 8192) throw new HttpError(413, "Callback payload too large");
-  const raw = await request.text();
-  if (!raw || new TextEncoder().encode(raw).length > 8192) throw new HttpError(400, "Invalid callback payload");
+  const clientIp = getTrustedClientIp(request);
+  if (!clientIp) throw new HttpError(503, "Payment callback security is temporarily unavailable");
+  await enforceRateLimit(
+    env,
+    `ip:${clientIp}`,
+    "subscription_callback",
+    RATE_LIMIT_POLICIES.subscriptionCallback
+  );
+  const raw = await readLimitedText(request, 8192);
 
   const form = new URLSearchParams(raw);
   const token = form.get("token");
@@ -2470,6 +2522,56 @@ async function handleRequest(request, env, json) {
       "SELECT uid FROM users WHERE uid = ? AND email_verified = 1"
     ).bind(user.sub).first();
     if (!account) throw new HttpError(403, "Verified account required");
+
+    const activeSubscription = await env.DB.prepare(`
+      SELECT plan, expiration_date
+      FROM subscriptions
+      WHERE firebase_uid = ?
+        AND status = 'active'
+        AND datetime(expiration_date) > datetime('now')
+      ORDER BY datetime(expiration_date) DESC
+      LIMIT 1
+    `).bind(user.sub).first();
+    if (activeSubscription) {
+      throw new HttpError(409, "You already have an active subscription. Renewals and upgrades are not available yet.");
+    }
+
+    const pendingOrder = await env.DB.prepare(`
+      SELECT id, plan, merchant_amount, merchant_currency, expires_at
+      FROM subscription_orders
+      WHERE firebase_uid = ?
+        AND provider = 'faucetpay'
+        AND status = 'pending'
+        AND datetime(expires_at) > datetime('now')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).bind(user.sub).first();
+    if (pendingOrder) {
+      if (pendingOrder.plan !== plan) {
+        throw new HttpError(409, "You already have a pending checkout for another plan. Complete it or wait for it to expire.");
+      }
+      const site = "https://dogedrip.pages.dev";
+      return json({
+        success: true,
+        order_id: pendingOrder.id,
+        expires_at: pendingOrder.expires_at,
+        checkout: {
+          action: "https://faucetpay.io/merchant/webscr",
+          method: "POST",
+          fields: {
+            merchant_username: env.FAUCETPAY_MERCHANT_USERNAME.trim(),
+            item_description: "DogeDrip " + plan + " monthly subscription",
+            amount1: String(pendingOrder.merchant_amount),
+            currency1: pendingOrder.merchant_currency,
+            currency2: pendingOrder.merchant_currency,
+            custom: pendingOrder.id,
+            callback_url: "https://dogedrip-api.f5pfpv5sbg.workers.dev/api/payments/faucetpay/callback",
+            success_url: site + "/?subscription=success&order=" + encodeURIComponent(pendingOrder.id),
+            cancel_url: site + "/?subscription=cancelled&order=" + encodeURIComponent(pendingOrder.id)
+          }
+        }
+      });
+    }
 
     const orderId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
@@ -5633,6 +5735,18 @@ export default {
         env.DB.prepare(`
           DELETE FROM user_daily_activity
           WHERE utc_date < date('now', '-90 days')
+        `).run(),
+        env.DB.prepare(`
+          UPDATE ptc_views
+          SET status = 'expired'
+          WHERE status = 'started'
+            AND started_at < datetime('now', '-2 days')
+        `).run(),
+        env.DB.prepare(`
+          UPDATE subscription_orders
+          SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+          WHERE status = 'pending'
+            AND datetime(expires_at) <= datetime('now')
         `).run()
       ]);
 
