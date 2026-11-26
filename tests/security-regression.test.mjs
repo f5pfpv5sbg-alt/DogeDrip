@@ -754,3 +754,10 @@ test("API CORS only allows the production site origin", () => {
   assert.match(worker, /function isAllowedOrigin\(origin\) \{\s*if \(!origin\) return true;\s*return ALLOWED_ORIGINS\.includes\(origin\);\s*\}/);
   assert.doesNotMatch(worker, /hostname\.endsWith\("\.dogedrip\.pages\.dev"\)/);
 });
+
+
+test("PTC dashboard labels completed but unsettled views accurately", async () => {
+  const app = await readFile(new URL("../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /label="Awaiting Settlement" value=\{String\(ptcCompletedViews\)\}/);
+  assert.doesNotMatch(app, /label="Pending Views" value=\{String\(ptcCompletedViews\)\}/);
+});
