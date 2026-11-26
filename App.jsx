@@ -990,6 +990,10 @@ export default function App() {
       patch.dailyRemaining = Number(data.daily_claims_remaining);
     }
 
+    if (typeof data.claim_enabled === 'boolean') {
+      patch.claimEnabled = data.claim_enabled;
+    }
+
     if (Object.keys(patch).length > 0) {
       setPlanInfo(prev => ({ ...(prev || {}), ...patch }));
     }
@@ -3655,6 +3659,7 @@ export default function App() {
   const canClaim =
     apiReady &&
     rulesReady &&
+    planInfo?.claimEnabled === true &&
     !isClaiming &&
     cooldownLeft <= 0 &&
     !dailyLimitReached;
@@ -3665,11 +3670,13 @@ export default function App() {
       ? 'Connecting...'
       : !rulesReady
         ? 'Loading claim rules...'
-        : dailyLimitReached
-          ? 'Daily Limit Reached'
-          : cooldownLeft > 0
-            ? `Available in ${cooldownLeft}s`
-            : `Claim ${formatClaimAmount(claimAmount)} DOGE`;
+        : planInfo?.claimEnabled !== true
+          ? 'Faucet Paused'
+          : dailyLimitReached
+            ? 'Daily Limit Reached'
+            : cooldownLeft > 0
+              ? `Available in ${cooldownLeft}s`
+              : `Claim ${formatClaimAmount(claimAmount)} DOGE`;
 
   const wheelReady =
     !wheelBackendMissing && wheelPrizes.length >= 2 && wheelSpins !== null;
@@ -4071,6 +4078,12 @@ export default function App() {
                     Could not load your claim information: {accountError}.
                     Claiming is disabled until it loads. Switch tabs or reload to retry.
                   </span>
+                </div>
+              )}
+
+              {accountLoaded && planInfo?.claimEnabled === false && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
+                  Faucet claims are paused until the DOGE reserve is funded and enabled.
                 </div>
               )}
 
