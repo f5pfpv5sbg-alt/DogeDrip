@@ -1046,7 +1046,8 @@ export default function App() {
       nextDay: isNum(data.next_day) ? Number(data.next_day) : 0,
       lastCheckinDate: data.last_checkin_date || null,
       checkedInToday: data.checked_in_today === true,
-      canCheckin: data.can_checkin === true,
+      rewardsEnabled: data.rewards_enabled === true,
+      canCheckin: data.can_checkin === true && data.rewards_enabled === true,
       nextRewardKoinu: isNum(data.next_reward_koinu)
         ? Number(data.next_reward_koinu)
         : 0,
@@ -3734,7 +3735,9 @@ export default function App() {
         ? (streakLoading ? 'Loading streak...' : 'Streak Unavailable')
         : streakCheckedToday
           ? 'Already Checked In Today'
-          : `Check In (+${formatDoge(streakInfo.nextRewardKoinu)} DOGE)`;
+          : !streakInfo.rewardsEnabled
+            ? 'Bonus Paused'
+            : `Check In (+${formatDoge(streakInfo.nextRewardKoinu)} DOGE)`;
 
   return (
     <div className="min-h-screen bg-transparent text-white flex flex-col font-sans">
@@ -4116,6 +4119,9 @@ export default function App() {
                 </div>
                 {streakError && (
                   <p className="text-xs text-red-400">{streakError}</p>
+                )}
+                {streakInfo && !streakInfo.rewardsEnabled && !streakCheckedToday && (
+                  <p className="text-xs text-red-400">Daily streak rewards are paused until the DOGE reserve is funded and enabled.</p>
                 )}
                 {streakCheckedToday && (
                   <p className="text-xs text-emerald-400 font-bold">
