@@ -2387,7 +2387,7 @@ export default function App() {
     }
 
     const confirmed = window.confirm(
-      `Buy ${pack.spins} spin${Number(pack.spins) === 1 ? '' : 's'} for ${formatDoge(pack.price_koinu)} DEMO DOGE?`
+      `Buy ${pack.spins} spin${Number(pack.spins) === 1 ? '' : 's'} for ${formatDoge(pack.price_koinu)} DOGE from your internal balance?`
     );
 
     if (!confirmed) return;
@@ -2528,7 +2528,7 @@ export default function App() {
 
     if (!Number.isFinite(amount) || amount < minWithdrawal) {
       setWithdrawMsg(
-        `Minimum withdrawal is ${minWithdrawal.toFixed(1)} DEMO DOGE.`
+        `Minimum withdrawal is ${minWithdrawal.toFixed(1)} DOGE.`
       );
       return;
     }
@@ -3327,9 +3327,9 @@ export default function App() {
           <div className="mb-4 p-3 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-xs rounded-xl flex items-start space-x-2">
             <Info className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
-              Authentication is powered by Firebase. Faucet claims,
-              balances and withdrawals use a simulated DEMO ledger.
-              No real DOGE payments are sent.
+              Authentication is powered by Firebase. Rewards and balances are recorded
+              in DogeDrip's internal ledger. Real DOGE payouts are currently
+              disabled until funding and payment verification are complete.
             </span>
           </div>
 
@@ -5396,12 +5396,12 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Wallet & Withdrawals (DEMO)
+                  Wallet & Withdrawals
                 </h2>
                 <p className="text-sm text-slate-400">
-                  Minimum withdrawal is {minWithdrawal.toFixed(1)} DEMO DOGE. Withdrawals are
-                  recorded as requests in the internal DEMO ledger. No real payments or blockchain
-                  transactions are sent.
+                  Minimum withdrawal is {minWithdrawal.toFixed(1)} DOGE. Withdrawals are recorded
+                  in DogeDrip's internal ledger. Real DOGE payouts remain disabled until funding
+                  and payment verification are complete.
                 </p>
               </div>
 
