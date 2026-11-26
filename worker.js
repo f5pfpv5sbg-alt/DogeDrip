@@ -870,6 +870,13 @@ async function handleStreakCheckin(env, uid) {
     };
   }
 
+  if (!current.rewards_enabled) {
+    throw new HttpError(
+      503,
+      "Daily streak rewards are paused until the DOGE reserve is funded and enabled."
+    );
+  }
+
   const idempotencyKey = `daily_streak:${uid}:${today}`;
 
   const rewardSql = `
