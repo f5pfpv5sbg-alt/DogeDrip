@@ -14,9 +14,9 @@ function section(startMarker, endMarker) {
 
 test("API CORS allows only the production Pages origin", () => {
   const origin = section("function isAllowedOrigin(origin)", "const REF_ALPHABET");
-  assert.match(origin, /if \\(!origin\\) return true/);
-  assert.match(origin, /return ALLOWED_ORIGINS\\.includes\\(origin\\)/);
-  assert.doesNotMatch(origin, /url\\.hostname/);
+  assert.ok(origin.includes("if (!origin) return true;"));
+  assert.ok(origin.includes("return ALLOWED_ORIGINS.includes(origin);"));
+  assert.ok(!origin.includes("url.hostname"));
 });
 
 test("JSON body parser rejects unsupported media types before opening the body stream", () => {
