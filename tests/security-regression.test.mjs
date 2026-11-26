@@ -357,6 +357,29 @@ test("Daily streak reward is manual and never triggered by a regular Faucet clai
   assert.match(app, /Regular Faucet Claims do not collect this bonus/);
 });
 
+test("daily streak rewards are deducted from the enabled faucet reserve before balance credit", () => {
+  const infoStart = worker.indexOf("async function getStreakInfo");
+  const handlerStart = worker.indexOf("async function handleStreakCheckin");
+  const handlerEnd = worker.indexOf("function getRequestId", handlerStart);
+  assert.ok(infoStart >= 0 && handlerStart > infoStart && handlerEnd > handlerStart);
+
+  const info = worker.slice(infoStart, handlerStart);
+  const handler = worker.slice(handlerStart, handlerEnd);
+  assert.match(info, /faucet_reserve_available_koinu/);
+  assert.match(info, /faucet_payouts_enabled/);
+  assert.match(info, /can_checkin: !checkedInToday && rewardsEnabled/);
+  assert.match(handler, /if \(!current\.rewards_enabled\)/);
+  assert.match(handler, /Daily streak rewards are paused until the DOGE reserve is funded and enabled/);
+  assert.match(handler, /UPDATE faucet_reserve[\s\S]*available_koinu = available_koinu -/);
+  assert.match(handler, /payouts_enabled = 1[\s\S]*available_koinu >=/);
+  assert.ok(
+    handler.indexOf("UPDATE faucet_reserve") < handler.indexOf("UPDATE users"),
+    "the reserve must be debited before the user balance is credited"
+  );
+  assert.match(app, /rewardsEnabled: data\.rewards_enabled === true/);
+  assert.match(app, /Bonus Paused/);
+});
+
 test("Faucet dashboard avoids duplicate reward, wallet balance, and daily claim counters", () => {
   const faucetStart = app.indexOf("{activeTab === 'faucet' && (");
   const wheelStart = app.indexOf("{activeTab === 'wheel' && (", faucetStart);
