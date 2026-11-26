@@ -808,7 +808,9 @@ async function getStreakInfo(env, uid) {
       u.balance_koinu,
       s.current_day,
       s.last_checkin_date,
-      s.total_rewards_koinu
+      s.total_rewards_koinu,
+      (SELECT available_koinu FROM faucet_reserve WHERE id = 1) AS faucet_reserve_available_koinu,
+      (SELECT payouts_enabled FROM faucet_reserve WHERE id = 1) AS faucet_payouts_enabled
     FROM users u
     LEFT JOIN daily_streaks s ON s.uid = u.uid
     WHERE u.uid = ?
@@ -832,15 +834,21 @@ async function getStreakInfo(env, uid) {
       ? (activeDay >= 7 ? 1 : activeDay + 1)
       : 1;
 
+  const nextRewardKoinu = checkedInToday
+    ? 0
+    : Number(STREAK_REWARDS[nextDay] || 0);
+  const rewardsEnabled =
+    Number(row.faucet_payouts_enabled) === 1 &&
+    Number(row.faucet_reserve_available_koinu) >= nextRewardKoinu;
+
   return {
     current_day: activeDay,
     next_day: checkedInToday ? 0 : nextDay,
     last_checkin_date: lastDate,
     checked_in_today: checkedInToday,
-    can_checkin: !checkedInToday,
-    next_reward_koinu: checkedInToday
-      ? 0
-      : STREAK_REWARDS[nextDay],
+    rewards_enabled: rewardsEnabled,
+    can_checkin: !checkedInToday && rewardsEnabled,
+    next_reward_koinu: nextRewardKoinu,
     total_rewards_koinu: Number(row.total_rewards_koinu || 0),
     balance_koinu: Number(row.balance_koinu)
   };
@@ -901,6 +909,27 @@ async function handleStreakCheckin(env, uid) {
       WHERE daily_streaks.last_checkin_date IS NULL
          OR daily_streaks.last_checkin_date < excluded.last_checkin_date
     `).bind(uid, today, yesterday),
+
+    env.DB.prepare(`
+      UPDATE faucet_reserve
+      SET
+        available_koinu = available_koinu - (
+          SELECT ${rewardSql}
+          FROM daily_streaks
+          WHERE uid = ?
+            AND last_checkin_date = ?
+        ),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = 1
+        AND payouts_enabled = 1
+        AND available_koinu >= (
+          SELECT ${rewardSql}
+          FROM daily_streaks
+          WHERE uid = ?
+            AND last_checkin_date = ?
+        )
+        AND changes() = 1
+    `).bind(uid, today, uid, today),
 
     env.DB.prepare(`
       UPDATE users
