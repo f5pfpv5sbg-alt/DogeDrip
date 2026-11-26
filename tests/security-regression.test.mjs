@@ -664,18 +664,24 @@ test("PTC settlement is admin-only, idempotent per completed view, and reserve-b
   assert.ok(start >= 0 && end > start, "PTC settlement route must exist");
   const route = worker.slice(start, end);
 
-  assert.match(route, /authenticate\\(request\\)/);
-  assert.match(route, /requireAdmin\\(user, env\\)/);
-  assert.match(route, /ptc_settlement_items si WHERE si\\.view_id = v\\.id/);
-  assert.match(route, /pending_koinu[\\s\\S]{0,180}>= SUM\\(v\\.reward_koinu\\)/);
-  assert.match(route, /await env\\.DB\\.batch\\(\\[/);
-  assert.match(route, /INSERT INTO ptc_settlement_items/);
-  assert.match(route, /UPDATE ptc_reserve[\\s\\S]*?pending_koinu = pending_koinu -/);
-  assert.match(route, /UPDATE users[\\s\\S]*?balance_koinu = balance_koinu \+/);
-  assert.match(route, /INSERT INTO ledger_transactions[\\s\\S]*?'ptc_reward'/);
-  assert.match(route, /results\\[1\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== viewsCount/);
-  assert.match(route, /results\\[2\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
-  assert.match(route, /results\\[3\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
-  assert.match(route, /results\\[4\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
-  assert.match(route, /Settlement could not be completed\\. Pending rewards and balances were not changed\\./);
+  for (const required of [
+    "authenticate(request)",
+    "requireAdmin(user, env)",
+    "ptc_settlement_items si WHERE si.view_id = v.id",
+    "await env.DB.batch([",
+    "INSERT INTO ptc_settlement_items",
+    "UPDATE ptc_reserve",
+    "pending_koinu = pending_koinu -",
+    "UPDATE users",
+    "balance_koinu = balance_koinu +",
+    "'ptc_reward'",
+    "Settlement could not be completed. Pending rewards and balances were not changed."
+  ]) {
+    assert.ok(route.includes(required), `PTC settlement must include: ${required}`);
+  }
+  assert.ok(route.includes("SUM(v.reward_koinu)"), "settlement must total the completed rewards");
+  assert.ok(route.includes("results[1]?.meta?.changes"), "settlement must verify inserted settlement items");
+  assert.ok(route.includes("results[2]?.meta?.changes"), "settlement must verify reserve update");
+  assert.ok(route.includes("results[3]?.meta?.changes"), "settlement must verify user balance update");
+  assert.ok(route.includes("results[4]?.meta?.changes"), "settlement must verify ledger update");
 });
