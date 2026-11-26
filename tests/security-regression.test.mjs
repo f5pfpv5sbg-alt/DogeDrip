@@ -698,3 +698,52 @@ test("PTC settlement is admin-only, idempotent per completed view, and reserve-b
   assert.ok(route.includes("results[3]?.meta?.changes"), "settlement must verify user balance update");
   assert.ok(route.includes("results[4]?.meta?.changes"), "settlement must verify ledger update");
 });
+
+
+test("production Turnstile validation rejects localhost hostnames", () => {
+  assert.match(worker, /const allowedHostnames = new Set\(\["dogedrip\.pages\.dev"\]\)/);
+  assert.doesNotMatch(worker, /allowedHostnames = new Set\(\[[^\]]*localhost/);
+});
+
+test("FaucetPay subscription callbacks are rate-limited by trusted Cloudflare client IP", () => {
+  const start = worker.indexOf("async function handleSubscriptionCallback");
+  const end = worker.indexOf("const form = new URLSearchParams(raw)", start);
+  const callback = worker.slice(start, end);
+  assert.match(callback, /getTrustedClientIp\(request\)/);
+  assert.match(callback, /subscription_callback/);
+  assert.match(callback, /RATE_LIMIT_POLICIES\.subscriptionCallback/);
+});
+
+test("FaucetPay callback bodies are streamed and capped before full allocation", () => {
+  const start = worker.indexOf("async function readLimitedText");
+  const end = worker.indexOf("async function handleSubscriptionCallback", start);
+  const reader = worker.slice(start, end);
+  assert.match(reader, /request\.body\?\.getReader\(\)/);
+  assert.match(reader, /totalBytes > maxBytes/);
+  assert.match(reader, /await reader\.cancel\(\)/);
+  assert.doesNotMatch(reader, /request\.text\(\)/);
+  const callbackStart = worker.indexOf("async function handleSubscriptionCallback");
+  const callbackEnd = worker.indexOf("const form = new URLSearchParams(raw)", callbackStart);
+  assert.match(worker.slice(callbackStart, callbackEnd), /readLimitedText\(request, 8192\)/);
+});
+
+test("subscription checkout prevents overlapping active subscriptions and duplicate pending orders", () => {
+  const start = worker.indexOf('if (path === "/api/subscriptions/checkout" && method === "POST")');
+  const end = worker.indexOf("// HEALTH CHECK", start);
+  const route = worker.slice(start, end);
+  assert.match(route, /status = 'active'[\s\S]{0,180}datetime\(expiration_date\) > datetime\('now'\)/);
+  assert.match(route, /activeSubscription/);
+  assert.match(route, /status = 'pending'[\s\S]{0,180}datetime\(expires_at\) > datetime\('now'\)/);
+  assert.match(route, /pendingOrder/);
+  assert.match(route, /pendingOrder\.plan !== plan/);
+  assert.match(route, /order_id: pendingOrder\.id/);
+});
+
+test("scheduled maintenance expires abandoned PTC views and expired subscription orders", () => {
+  const start = worker.indexOf("async scheduled(controller, env, ctx)");
+  const end = worker.indexOf("async fetch(request, env)", start);
+  const scheduled = worker.slice(start, end);
+  assert.match(scheduled, /UPDATE ptc_views[\s\S]{0,160}status = 'expired'[\s\S]{0,180}status = 'started'/);
+  assert.match(scheduled, /started_at < datetime\('now', '-2 days'\)/);
+  assert.match(scheduled, /UPDATE subscription_orders[\s\S]{0,180}status = 'expired'[\s\S]{0,180}status = 'pending'/);
+});
