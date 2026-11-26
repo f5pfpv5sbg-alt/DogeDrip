@@ -4607,7 +4607,7 @@ export default function App() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <StatTile label="Pending PTC Rewards" value={(ptcPendingReward / KOINU).toFixed(8) + ' DOGE'} />
                 <StatTile label="Settled PTC Rewards" value={(ptcSettledReward / KOINU).toFixed(8) + ' DOGE'} sub={`${ptcSettledViews} views credited to balance`} />
-                <StatTile label="Pending Views" value={String(ptcCompletedViews)} />
+                <StatTile label="Awaiting Settlement" value={String(ptcCompletedViews)} />
                 <StatTile label="Completed Views" value={String(ptcCompletedViews + ptcSettledViews)} />
               </div>
 
