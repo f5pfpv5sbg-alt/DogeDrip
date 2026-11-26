@@ -761,3 +761,11 @@ test("PTC dashboard labels completed but unsettled views accurately", async () =
   assert.match(app, /label="Awaiting Settlement" value=\{String\(ptcCompletedViews\)\}/);
   assert.doesNotMatch(app, /label="Pending Views" value=\{String\(ptcCompletedViews\)\}/);
 });
+
+
+test("published Terms describe the live internal ledger and disabled automatic payouts", async () => {
+  const terms = await readFile(new URL("../public/terms.html", import.meta.url), "utf8");
+  assert.match(terms, /Balances are internal DOGE-denominated platform records/);
+  assert.match(terms, /Automatic FaucetPay payouts are currently disabled/);
+  assert.doesNotMatch(terms, /current DEMO environment|current demo ledger/i);
+});
