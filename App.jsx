@@ -3319,7 +3319,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-xs text-[#F4A6C1] font-mono mt-1">
-                FIREBASE AUTH + SECURE DEMO
+                FIREBASE AUTH + SECURE LEDGER
               </p>
             </div>
           </div>
@@ -3847,7 +3847,7 @@ export default function App() {
               </div>
 
               <span className="hidden sm:inline-block px-2 py-0.5 bg-[#F4A6C1]/10 border border-[#F4A6C1]/20 text-[#F4A6C1] text-[10px] font-mono rounded-md uppercase">
-                SECURE DEMO TESTNET
+                SECURE DOGE REWARDS
               </span>
             </div>
           </div>
@@ -4048,11 +4048,11 @@ export default function App() {
             <div className="bg-black border border-slate-800 rounded-2xl p-6 md:p-8 space-y-6">
               <div>
                 <h2 className="text-xl font-black text-white mb-1 font-['Space_Grotesk',sans-serif]">
-                  Crypto Faucet Claim (DEMO)
+                  Crypto Faucet Claim
                 </h2>
                 <p className="text-sm text-slate-400">
                   {rulesReady
-                    ? `${planName ? `Your ${planName} plan earns` : 'You earn'} a simulated testnet reward of ${formatClaimAmount(claimAmount)} DOGE per claim${
+                    ? `${planName ? `Your ${planName} plan earns` : 'You earn'} a DOGE reward of ${formatClaimAmount(claimAmount)} DOGE per claim${
                         cooldownSeconds === 0
                           ? ' with no cooldown.'
                           : ` every ${cooldownSeconds} seconds.`
@@ -4763,7 +4763,7 @@ export default function App() {
                 <StatTile
                   label="Balance"
                   value={demoBalance.toFixed(6)}
-                  sub="DOGE (demo)"
+                  sub="DOGE (internal ledger)"
                 />
               </div>
 
@@ -4846,7 +4846,7 @@ export default function App() {
                           +{formatDoge(wheelResult.prize.amount_koinu)} DOGE
                         </div>
                         <p className="text-xs text-slate-400 mt-1">
-                          Added to your DEMO balance.
+                          Added to your internal DOGE balance.
                         </p>
                       </>
                     ) : (
@@ -4885,7 +4885,7 @@ export default function App() {
                     Buy Spins
                   </h3>
                   <span className="text-xs text-[#F4A6C1] font-mono">
-                    Paid from DEMO balance
+                    Paid from internal balance
                   </span>
                 </div>
 
@@ -5038,7 +5038,7 @@ export default function App() {
               <PinkDivider />
 
               <p className="text-[11px] text-slate-500 text-center">
-                DEMO ledger only. No real DOGE is paid out. Prizes, odds, spin
+                Internal ledger only. No real DOGE payout is currently available. Prizes, odds, spin
                 counts and prices are controlled by the server.
               </p>
             </div>
@@ -5430,7 +5430,7 @@ export default function App() {
                 <div className="bg-black border border-slate-800 rounded-2xl p-6 flex flex-col justify-between">
                   <div>
                     <span className="text-xs uppercase tracking-wider text-slate-500 font-mono font-bold">
-                      Available Demo Balance
+                      Internal Ledger Balance
                     </span>
                     <div className="text-3xl font-black font-mono text-white mt-2">
                       {demoBalance.toFixed(6)} DOGE
@@ -5438,7 +5438,7 @@ export default function App() {
                   </div>
 
                   <div className="mt-6 pt-6 border-t border-slate-800 text-xs text-slate-400 flex justify-between font-bold">
-                    <span>Minimum Testnet Payout:</span>
+                    <span>Minimum Withdrawal:</span>
                     <span className="text-white font-mono font-black">
                       {minWithdrawal.toFixed(1)} DOGE
                     </span>
@@ -5450,7 +5450,7 @@ export default function App() {
                   className="bg-black border border-slate-800 rounded-2xl p-6 space-y-4"
                 >
                   <h3 className="text-sm font-black uppercase tracking-wider text-slate-300 font-['Space_Grotesk',sans-serif]">
-                    Request Simulated Payout
+                    Request Withdrawal
                   </h3>
 
                   <div>
@@ -6217,7 +6217,7 @@ export default function App() {
                 </div>
 
                 <p className="text-[11px] text-slate-500">
-                  DEMO ledger, UTC day. Income = DOGE users spent on Lucky Wheel spins.
+                  Internal ledger, UTC day. Income = DOGE users spent on Lucky Wheel spins.
                   Paid out = faucet claims + Lucky Wheel prizes + Daily Check-in rewards.
                   Pending withdrawals and user balances are what the platform owes users.
                   Subscriptions are not included yet.
@@ -6248,7 +6248,7 @@ export default function App() {
                     Environment
                   </span>
                   <div className="text-2xl font-black font-mono text-emerald-400 mt-1">
-                    D1 DEMO
+                    D1 LEDGER
                   </div>
                 </div>
               </div>
