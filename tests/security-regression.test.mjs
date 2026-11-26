@@ -773,6 +773,6 @@ test("published Terms describe the live internal ledger and disabled automatic p
 
 test("sitemap modification dates reflect the current home and Terms pages", async () => {
   const sitemap = await readFile(new URL("../public/sitemap.xml", import.meta.url), "utf8");
-  assert.match(sitemap, /<loc>https:\/\/dogedrip\.pages\.dev<\/loc>\s*<lastmod>2026-11-26<\/lastmod>/);
-  assert.match(sitemap, /<loc>https:\/\/dogedrip\.pages\.dev\/terms\.html<\/loc>\s*<lastmod>2026-11-26<\/lastmod>/);
+  assert.ok(sitemap.includes("<loc>https://dogedrip.pages.dev/</loc>\\n    <lastmod>2026-11-26</lastmod>"));
+  assert.ok(sitemap.includes("<loc>https://dogedrip.pages.dev/terms.html</loc>\\n    <lastmod>2026-11-26</lastmod>"));
 });
