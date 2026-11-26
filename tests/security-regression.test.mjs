@@ -388,7 +388,7 @@ test("Faucet claims are disabled in the UI unless the server confirms a funded r
   assert.match(route, /FROM faucet_reserve/);
   assert.match(route, /payouts_enabled/);
   assert.match(route, /claim_enabled: claimEnabled/);
-  assert.match(app, /claimEnabled: data\.claim_enabled === true/);
+  assert.match(app, /if \(typeof data\.claim_enabled === 'boolean'\) \{\s*patch\.claimEnabled = data\.claim_enabled;/);
   assert.match(app, /planInfo\?\.claimEnabled === true/);
   assert.match(app, /Faucet claims are paused until the DOGE reserve is funded and enabled/);
 });
