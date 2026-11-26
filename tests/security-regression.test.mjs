@@ -634,3 +634,25 @@ test("JSON request parsing rejects malformed lengths and invalid UTF-8", () => {
   assert.match(fn, /TextDecoder\("utf-8", \{ fatal: true \}\)/);
   assert.match(fn, /totalBytes === 0/);
 });
+
+test("PTC settlement is admin-only, idempotent per completed view, and reserve-backed", () => {
+  const start = worker.indexOf('if (path === "/api/admin/ptc/settle" && method === "POST")');
+  const end = worker.indexOf('if (path === "/api/admin/ptc/fund" && method === "POST")', start);
+  assert.ok(start >= 0 && end > start, "PTC settlement route must exist");
+  const route = worker.slice(start, end);
+
+  assert.match(route, /authenticate\\(request\\)/);
+  assert.match(route, /requireAdmin\\(user, env\\)/);
+  assert.match(route, /ptc_settlement_items si WHERE si\\.view_id = v\\.id/);
+  assert.match(route, /pending_koinu[\\s\\S]{0,180}>= SUM\\(v\\.reward_koinu\\)/);
+  assert.match(route, /await env\\.DB\\.batch\\(\\[/);
+  assert.match(route, /INSERT INTO ptc_settlement_items/);
+  assert.match(route, /UPDATE ptc_reserve[\\s\\S]*?pending_koinu = pending_koinu -/);
+  assert.match(route, /UPDATE users[\\s\\S]*?balance_koinu = balance_koinu \+/);
+  assert.match(route, /INSERT INTO ledger_transactions[\\s\\S]*?'ptc_reward'/);
+  assert.match(route, /results\\[1\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== viewsCount/);
+  assert.match(route, /results\\[2\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
+  assert.match(route, /results\\[3\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
+  assert.match(route, /results\\[4\\]\\?\\.meta\\?\\.changes \\|\\| 0\\) !== 1/);
+  assert.match(route, /Settlement could not be completed\\. Pending rewards and balances were not changed\\./);
+});
