@@ -775,5 +775,5 @@ test("sitemap modification dates reflect the current home and Terms pages", asyn
   const sitemap = await readFile(new URL("../public/sitemap.xml", import.meta.url), "utf8");
   assert.ok(sitemap.includes("<loc>https://dogedrip.pages.dev/</loc>"));
   assert.ok(sitemap.includes("<loc>https://dogedrip.pages.dev/terms.html</loc>"));
-  assert.equal((sitemap.match(/<lastmod>2026-11-26<\\/lastmod>/g) || []).length, 2);
+  assert.equal((sitemap.match(/<lastmod>2026-11-26<\/lastmod>/g) || []).length, 2);
 });
