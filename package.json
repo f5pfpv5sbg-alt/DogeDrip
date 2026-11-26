@@ -10,7 +10,7 @@
     "test:security": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "firebase": "^10.8.0",
+    "firebase": "^13.4.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
