@@ -3859,7 +3859,7 @@ export default function App() {
                 {demoBalance.toFixed(6)} DOGE
               </span>
               <span className="text-[10px] font-mono bg-[#F4A6C1]/10 text-[#F4A6C1] px-1.5 py-0.5 rounded border border-[#F4A6C1]/20">
-                DEMO
+                LEDGER
               </span>
             </div>
 
@@ -5490,7 +5490,7 @@ export default function App() {
                   >
                     {isWithdrawing
                       ? 'Submitting...'
-                      : 'Submit Simulated Withdrawal'}
+                      : 'Submit Withdrawal Request'}
                   </button>
 
                   {withdrawMsg && (
