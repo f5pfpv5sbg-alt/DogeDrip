@@ -747,3 +747,10 @@ test("scheduled maintenance expires abandoned PTC views and expired subscription
   assert.match(scheduled, /started_at < datetime\('now', '-2 days'\)/);
   assert.match(scheduled, /UPDATE subscription_orders[\s\S]{0,180}status = 'expired'[\s\S]{0,180}status = 'pending'/);
 });
+
+
+test("API CORS only allows the production site origin", () => {
+  assert.match(worker, /const ALLOWED_ORIGINS = \["https:\/\/dogedrip\.pages\.dev"\]/);
+  assert.match(worker, /function isAllowedOrigin\(origin\) \{\s*if \(!origin\) return true;\s*return ALLOWED_ORIGINS\.includes\(origin\);\s*\}/);
+  assert.doesNotMatch(worker, /hostname\.endsWith\("\.dogedrip\.pages\.dev"\)/);
+});
