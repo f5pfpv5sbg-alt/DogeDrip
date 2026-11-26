@@ -734,6 +734,7 @@ async function syncUser(env, user, referredByCode, requestedUsername) {
           email = excluded.email,
           username = COALESCE(users.username, excluded.username),
           ref_code = COALESCE(users.ref_code, excluded.ref_code),
+          referred_by = COALESCE(users.referred_by, excluded.referred_by),
           email_verified = excluded.email_verified,
           email_verified_at = CASE
             WHEN excluded.email_verified = 1
