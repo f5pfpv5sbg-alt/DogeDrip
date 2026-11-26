@@ -3208,9 +3208,18 @@ async function handleRequest(request, env, json) {
     }
 
     const dailyUsed = Number(account.daily_claims_used || 0);
+    const faucetReserve = await env.DB.prepare(`
+      SELECT available_koinu, payouts_enabled
+      FROM faucet_reserve
+      WHERE id = 1
+    `).first();
+    const claimEnabled =
+      Number(faucetReserve?.payouts_enabled) === 1 &&
+      Number(faucetReserve?.available_koinu) >= plan.amount_koinu;
 
     return json({
       success: true,
+      claim_enabled: claimEnabled,
       balance_koinu: Number(account.balance_koinu),
       last_claim_at: account.last_claim_at,
       cooldown_remaining: Number(account.cooldown_remaining),
