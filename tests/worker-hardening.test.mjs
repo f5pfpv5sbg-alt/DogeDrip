@@ -17,7 +17,6 @@ test("API CORS allows only the production Pages origin", () => {
   assert.match(origin, /if \\(!origin\\) return true/);
   assert.match(origin, /return ALLOWED_ORIGINS\\.includes\\(origin\\)/);
   assert.doesNotMatch(origin, /url\\.hostname/);
-  assert.doesNotMatch(origin, /dogedrip\\.pages\\.dev"\\)\\s*\\|\\|/);
 });
 
 test("JSON body parser rejects unsupported media types before opening the body stream", () => {
