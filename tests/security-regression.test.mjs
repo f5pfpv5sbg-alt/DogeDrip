@@ -769,3 +769,10 @@ test("published Terms describe the live internal ledger and disabled automatic p
   assert.match(terms, /Automatic FaucetPay payouts are currently disabled/);
   assert.doesNotMatch(terms, /current DEMO environment|current demo ledger/i);
 });
+
+
+test("sitemap modification dates reflect the current home and Terms pages", async () => {
+  const sitemap = await readFile(new URL("../public/sitemap.xml", import.meta.url), "utf8");
+  assert.match(sitemap, /<loc>https:\/\/dogedrip\.pages\.dev<\/loc>\s*<lastmod>2026-11-26<\/lastmod>/);
+  assert.match(sitemap, /<loc>https:\/\/dogedrip\.pages\.dev\/terms\.html<\/loc>\s*<lastmod>2026-11-26<\/lastmod>/);
+});
