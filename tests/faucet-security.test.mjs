@@ -86,3 +86,10 @@ test("Turnstile validation checks success, expected action and allowed hostname"
   assert.match(verifier, /result\?\.action !== expectedAction/);
   assert.match(verifier, /allowedHostnames\.has\(result\?\.hostname\)/);
 });
+
+test("D1 is the single authoritative user profile store", () => {
+  assert.doesNotMatch(app, /firebase\/firestore|getFirestore|dbStore|setDoc\(|getDoc\(/);
+  assert.match(app, /fallbackProfile\.username = syncData\.username/);
+  assert.match(app, /apiRequest\('\/api\/profile'/);
+  assert.match(app, /apiRequest\('\/api\/profile',\s*\{\s*method: 'PUT'/);
+});
