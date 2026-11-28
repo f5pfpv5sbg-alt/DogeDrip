@@ -1166,6 +1166,7 @@ export default function App() {
         if (!isMounted || eventId !== authEventRef.current) return;
 
         pendingReferralRef.current = null;
+        pendingUsernameRef.current = '';
         try {
           window.localStorage.removeItem('dogedrip_referral_attribution');
         } catch {
@@ -1804,7 +1805,6 @@ export default function App() {
         createdAt: Date.now()
       };
 
-      pendingUsernameRef.current = '';
       setUserProfile(localProfile);
       setAuthSuccess('Account created successfully!');
       setActiveTab('faucet');
