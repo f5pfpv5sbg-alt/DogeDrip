@@ -342,6 +342,14 @@ async function requireAdmin(user, env) {
   return account;
 }
 
+async function requireOwner(user, env) {
+  const ownerUid = typeof env.OWNER_UID === "string" ? env.OWNER_UID.trim() : "";
+  if (!ownerUid || user.sub !== ownerUid) {
+    throw new HttpError(403, "Owner access denied");
+  }
+  return { uid: ownerUid };
+}
+
 const RATE_LIMIT_POLICIES = Object.freeze({
   registration: { limit: 5, windowSeconds: 3600 },
   referralValidate: { limit: 30, windowSeconds: 60 },
@@ -367,7 +375,8 @@ const RATE_LIMIT_POLICIES = Object.freeze({
   ptcRead: { limit: 60, windowSeconds: 60 },
   ptcStart: { limit: 10, windowSeconds: 60 },
   ptcComplete: { limit: 10, windowSeconds: 60 },
-  adminPtc: { limit: 30, windowSeconds: 60 }
+  adminPtc: { limit: 30, windowSeconds: 60 },
+  ownerRead: { limit: 30, windowSeconds: 60 }
 });
 
 async function enforceRateLimit(env, identity, route, policy) {
@@ -5160,6 +5169,218 @@ async function handleRequest(request, env, json) {
         referral_payouts_enabled: Number(referralReserve?.payouts_enabled) === 1,
         external_funding_verified: false
       }
+    });
+  }
+
+  // OWNER-ONLY FINANCIAL DASHBOARD.
+  // Fails closed unless OWNER_UID is configured as a Worker secret/variable.
+  if (path === "/api/owner/finance" && method === "GET") {
+    const user = await authenticate(request);
+    await requireOwner(user, env);
+
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_finance_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    let financeRows;
+    try {
+      financeRows = await Promise.all([
+        env.DB.prepare(`
+          SELECT currency,
+            COALESCE(SUM(CASE WHEN entry_type = 'revenue' AND verified = 1 THEN amount_minor ELSE 0 END), 0) AS verified_revenue_minor,
+            COALESCE(SUM(CASE WHEN entry_type = 'expense' AND verified = 1 THEN amount_minor ELSE 0 END), 0) AS verified_expenses_minor,
+            COALESCE(SUM(CASE WHEN verified = 0 THEN amount_minor ELSE 0 END), 0) AS unverified_entries_minor,
+            COUNT(*) AS ledger_entries
+          FROM owner_profit_ledger
+          GROUP BY currency
+        `).all(),
+        env.DB.prepare(`
+          SELECT available_koinu, locked_koinu, payouts_enabled
+          FROM owner_payout_reserve
+          WHERE id = 1
+        `).first(),
+        env.DB.prepare(`
+          SELECT COALESCE(SUM(amount_koinu), 0) AS user_withdrawal_liabilities_koinu
+          FROM withdrawals
+          WHERE status IN ('pending', 'processing')
+        `).first()
+      ]);
+    } catch (error) {
+      console.error("Owner finance tables are unavailable:", error);
+      throw new HttpError(503, "Owner accounting is not initialized yet");
+    }
+
+    const [currencyRows, reserve, liabilities] = financeRows;
+    const currencyTotals = Object.create(null);
+    let totalLedgerEntries = 0;
+    for (const row of currencyRows.results || []) {
+      const currency = String(row.currency || "");
+      if (!["DOGE", "EUR", "USDT"].includes(currency)) {
+        throw new HttpError(500, "Owner ledger contains an unsupported currency");
+      }
+      const revenue = Number(row.verified_revenue_minor || 0);
+      const expenses = Number(row.verified_expenses_minor || 0);
+      const unverified = Number(row.unverified_entries_minor || 0);
+      const entries = Number(row.ledger_entries || 0);
+      const net = revenue - expenses;
+      if (![revenue, expenses, unverified, entries, net].every(Number.isSafeInteger)) {
+        throw new HttpError(500, "Owner financial totals are invalid");
+      }
+      const unit = currency === "DOGE" ? "koinu" : currency === "EUR" ? "cents" : "micro-USDT";
+      currencyTotals[currency] = {
+        unit,
+        verified_revenue_minor: revenue,
+        verified_expenses_minor: expenses,
+        verified_net_profit_minor: net,
+        unverified_entries_minor: unverified,
+        ledger_entries: entries
+      };
+      totalLedgerEntries += entries;
+    }
+
+    const availableReserve = Number(reserve?.available_koinu || 0);
+    const lockedReserve = Number(reserve?.locked_koinu || 0);
+    const userLiabilities = Number(liabilities?.user_withdrawal_liabilities_koinu || 0);
+    if (![availableReserve, lockedReserve, userLiabilities, totalLedgerEntries].every(Number.isSafeInteger)) {
+      throw new HttpError(500, "Owner financial totals are invalid");
+    }
+
+    return json({
+      success: true,
+      accounting: {
+        currencies: currencyTotals,
+        ledger_entries: totalLedgerEntries,
+        conversion_applied: false
+      },
+      owner_payout_reserve: {
+        currency: "DOGE",
+        unit: "koinu",
+        available_koinu: availableReserve,
+        locked_koinu: lockedReserve,
+        payouts_enabled: Number(reserve?.payouts_enabled) === 1
+      },
+      user_withdrawal_liabilities: {
+        currency: "DOGE",
+        unit: "koinu",
+        amount_koinu: userLiabilities
+      },
+      payout_safety: {
+        owner_payouts_enabled: false,
+        external_funding_verified: false,
+        user_funds_available_for_owner_payout: false
+      }
+    });
+  }
+
+  // OWNER: PAGINATED PROFIT LEDGER HISTORY. No mutation is exposed here.
+  if (path === "/api/owner/ledger" && method === "GET") {
+    const user = await authenticate(request);
+    await requireOwner(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_ledger_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    const rawLimit = url.searchParams.get("limit");
+    const rawBeforeId = url.searchParams.get("before_id");
+    const limit = rawLimit === null ? 50 : Number(rawLimit);
+    const beforeId = rawBeforeId === null ? null : Number(rawBeforeId);
+
+    if (
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId < 1))
+    ) {
+      throw new HttpError(400, "Invalid pagination parameters");
+    }
+
+    let result;
+    try {
+      result = beforeId === null
+        ? await env.DB.prepare(`
+            SELECT id, source_type, source_id, entry_type, currency, amount_minor,
+                   verified, note, created_at, verified_at
+            FROM owner_profit_ledger
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(limit).all()
+        : await env.DB.prepare(`
+            SELECT id, source_type, source_id, entry_type, currency, amount_minor,
+                   verified, note, created_at, verified_at
+            FROM owner_profit_ledger
+            WHERE id < ?
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(beforeId, limit).all();
+    } catch (error) {
+      console.error("Owner ledger table is unavailable:", error);
+      throw new HttpError(503, "Owner accounting is not initialized yet");
+    }
+
+    const entries = result.results || [];
+    return json({
+      success: true,
+      entries,
+      next_before_id: entries.length === limit ? entries[entries.length - 1].id : null
+    });
+  }
+
+  // OWNER: PAYOUT HISTORY ONLY. There is deliberately no payout-creation route.
+  if (path === "/api/owner/payouts" && method === "GET") {
+    const user = await authenticate(request);
+    await requireOwner(user, env);
+    await enforceRateLimit(
+      env,
+      `uid:${user.sub}`,
+      "owner_payout_history_read",
+      RATE_LIMIT_POLICIES.ownerRead
+    );
+
+    const rawLimit = url.searchParams.get("limit");
+    const rawBeforeId = url.searchParams.get("before_id");
+    const limit = rawLimit === null ? 50 : Number(rawLimit);
+    const beforeId = rawBeforeId === null ? null : Number(rawBeforeId);
+    if (
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+      (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId < 1))
+    ) {
+      throw new HttpError(400, "Invalid pagination parameters");
+    }
+
+    let result;
+    try {
+      result = beforeId === null
+        ? await env.DB.prepare(`
+            SELECT id, request_id, provider, destination_last4, amount_koinu,
+                   status, provider_payout_id, payout_error, requested_by,
+                   processed_at, created_at, updated_at
+            FROM owner_payouts
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(limit).all()
+        : await env.DB.prepare(`
+            SELECT id, request_id, provider, destination_last4, amount_koinu,
+                   status, provider_payout_id, payout_error, requested_by,
+                   processed_at, created_at, updated_at
+            FROM owner_payouts
+            WHERE id < ?
+            ORDER BY id DESC
+            LIMIT ?
+          `).bind(beforeId, limit).all();
+    } catch (error) {
+      console.error("Owner payout table is unavailable:", error);
+      throw new HttpError(503, "Owner payout history is not initialized yet");
+    }
+
+    const payouts = result.results || [];
+    return json({
+      success: true,
+      payouts,
+      next_before_id: payouts.length === limit ? payouts[payouts.length - 1].id : null
     });
   }
 
