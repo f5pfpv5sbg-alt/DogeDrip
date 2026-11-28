@@ -93,3 +93,12 @@ test("D1 is the single authoritative user profile store", () => {
   assert.match(app, /apiRequest\('\/api\/profile'/);
   assert.match(app, /apiRequest\('\/api\/profile',\s*\{\s*method: 'PUT'/);
 });
+
+test("registration username remains available until D1 auth sync completes", () => {
+  const syncStart = app.indexOf("const syncResponse = await fetch(`${API_URL}/api/auth/sync`");
+  const syncSuccess = app.indexOf("pendingUsernameRef.current = '';", syncStart);
+  const registrationReset = app.indexOf("pendingUsernameRef.current = '';", app.indexOf("const handleRegister"));
+  assert.ok(syncStart >= 0, "auth listener must call the D1 sync endpoint");
+  assert.ok(syncSuccess > syncStart, "pending username must clear only after successful D1 sync");
+  assert.equal(registrationReset, -1, "registration must not clear username before auth sync");
+});
