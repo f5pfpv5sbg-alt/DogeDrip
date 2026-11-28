@@ -38,12 +38,6 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification
 } from 'firebase/auth';
-import {
-  getFirestore,
-  doc,
-  getDoc,
-  setDoc
-} from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAF5l0YvOk4Wk2NrqoL1BXj6szJtS65q-k",
@@ -65,7 +59,6 @@ const firebaseApp = !getApps().length
   : getApps()[0];
 
 const auth = getAuth(firebaseApp);
-const dbStore = getFirestore(firebaseApp);
 
 const API_URL = "https://dogedrip-api.f5pfpv5sbg.workers.dev";
 const TURNSTILE_SITE_KEY = "0x4AAAAAAF-3dKe3-VPYCryx";
@@ -1173,13 +1166,17 @@ export default function App() {
         if (!isMounted || eventId !== authEventRef.current) return;
 
         pendingReferralRef.current = null;
+        pendingUsernameRef.current = '';
         try {
           window.localStorage.removeItem('dogedrip_referral_attribution');
         } catch {
           // Storage may be unavailable.
         }
         setRefCode(syncData.ref_code || '');
-        if (syncData.username) setProfileUsernameInput(syncData.username);
+        if (syncData.username) {
+          fallbackProfile.username = syncData.username;
+          setProfileUsernameInput(syncData.username);
+        }
 
         if (syncData.plan) {
           setPlanInfo(prev => ({
@@ -1198,33 +1195,11 @@ export default function App() {
         setApiError(`Database connection failed: ${error.message}`);
       }
 
-      try {
-        const docRef = doc(dbStore, 'users', user.uid);
-        const docSnap = await getDoc(docRef);
+      if (!isMounted || eventId !== authEventRef.current) return;
 
-        if (!isMounted || eventId !== authEventRef.current) return;
-
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          const mergedProfile = {
-            ...fallbackProfile,
-            ...data,
-            username: data.username || fallbackProfile.username
-          };
-          setUserProfile(mergedProfile);
-          setProfileUsernameInput(mergedProfile.username);
-        } else {
-          setUserProfile(fallbackProfile);
-          setProfileUsernameInput(fallbackProfile.username);
-        }
-      } catch (error) {
-        console.warn('Firestore unavailable:', error.message);
-
-        if (!isMounted || eventId !== authEventRef.current) return;
-
-        setUserProfile(fallbackProfile);
-        setProfileUsernameInput(fallbackProfile.username);
-      }
+      // D1 is the authoritative profile store; never overwrite it with stale client-side data.
+      setUserProfile(fallbackProfile);
+      setProfileUsernameInput(fallbackProfile.username);
 
       if (isMounted && eventId === authEventRef.current) {
         setAuthLoading(false);
@@ -1830,13 +1805,6 @@ export default function App() {
         createdAt: Date.now()
       };
 
-      try {
-        await setDoc(doc(dbStore, 'users', uid), localProfile);
-      } catch (error) {
-        console.warn('Firestore profile write unavailable:', error.message);
-      }
-
-      pendingUsernameRef.current = '';
       setUserProfile(localProfile);
       setAuthSuccess('Account created successfully!');
       setActiveTab('faucet');
@@ -1943,11 +1911,6 @@ export default function App() {
       const savedUsername = data.profile?.username || username;
       setProfileUsernameInput(savedUsername);
       setUserProfile(prev => ({ ...(prev || {}), username: savedUsername }));
-      try {
-        await setDoc(doc(dbStore, 'users', firebaseUser.uid), { username: savedUsername }, { merge: true });
-      } catch (firestoreError) {
-        console.warn('Firestore profile mirror could not be updated:', firestoreError.message);
-      }
     } catch (error) {
       setProfileError(error.message || 'Could not update your profile.');
     } finally {
